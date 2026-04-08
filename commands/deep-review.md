@@ -84,6 +84,13 @@ diff에서 제외: 바이너리, vendor/, node_modules/, *.min.js, *.generated.*
 - 플래그 없이 `.deep-review/contracts/`에 active contract가 있으면: 자동으로 전체 contract 검증
 - contract 디렉토리가 없거나 파일이 없으면: 이 단계 건너뜀
 
+**Contract 유효성 검증:**
+- `status: archived` contract는 자동 로드에서 제외
+- `--contract SLICE-NNN`으로 archived contract를 명시적으로 지정한 경우: "SLICE-{NNN}은 archived 상태입니다. 리뷰를 계속할까요?" 확인
+- YAML 파싱 오류 (문법 오류, 필수 필드 누락): 해당 contract 건너뜀 + 경고 메시지 출력
+- 필수 필드: `slice`, `title`, `criteria` (하나라도 없으면 무효)
+- `criteria`가 비어있으면: contract 검증 건너뜀 (Stage 3만 실행)
+
 ### 4. 리뷰 실행 (Stage 3: Deep Review)
 
 **Claude Opus 서브에이전트 (항상 실행):**
