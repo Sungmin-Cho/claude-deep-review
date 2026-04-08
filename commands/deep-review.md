@@ -44,6 +44,10 @@ bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/detect-environment.sh
 
 결과를 key=value 형식으로 파싱하여 환경 상태를 파악합니다.
 
+**shallow clone (is_shallow=true) 감지 시:**
+- "shallow clone에서는 review base가 부정확할 수 있습니다. `git fetch --unshallow`를 권장합니다." 안내
+- HEAD~1 fallback으로 진행
+
 ### 2. 변경사항 수집 (Stage 1: Collect)
 
 환경에 따라 diff를 수집합니다:
