@@ -1,7 +1,7 @@
 ---
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, Skill, AskUserQuestion
 description: 현재 변경사항을 독립 에이전트로 리뷰합니다. init으로 규칙 초기화, --contract로 Sprint Contract 기반 검증, --entropy로 엔트로피 스캔.
-argument-hint: "[init] [--contract] [--entropy]"
+argument-hint: "[init] [--contract [SLICE-NNN]] [--entropy]"
 ---
 
 # /deep-review — Independent Code Review
@@ -78,9 +78,11 @@ diff에서 제외: 바이너리, vendor/, node_modules/, *.min.js, *.generated.*
 
 ### 3. Contract 로드 (Stage 2: Contract Check)
 
-`--contract` 플래그가 있거나, `.deep-review/contracts/` 에 파일이 있으면:
-- 가장 최근 contract 파일을 로드
-- 특정 슬라이스 지정 시 해당 contract만 로드
+`--contract` 플래그 처리:
+- `--contract SLICE-{NNN}` (슬라이스 지정): `.deep-review/contracts/SLICE-{NNN}.yaml`만 로드
+- `--contract` (슬라이스 미지정): `.deep-review/contracts/` 내 모든 `status: active` contract 로드하여 전체 검증
+- 플래그 없이 `.deep-review/contracts/`에 active contract가 있으면: 자동으로 전체 contract 검증
+- contract 디렉토리가 없거나 파일이 없으면: 이 단계 건너뜀
 
 ### 4. 리뷰 실행 (Stage 3: Deep Review)
 
