@@ -1,0 +1,10 @@
+{
+  "name": "deep-review",
+  "version": "1.0.0",
+  "description": "Independent Evaluator for AI coding agents — cross-model code review with Codex integration",
+  "author": {
+    "name": "Sungmin-Cho"
+  },
+  "license": "MIT",
+  "keywords": ["code-review", "evaluator", "harness-engineering", "quality"]
+}
