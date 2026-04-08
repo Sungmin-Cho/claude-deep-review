@@ -57,7 +57,14 @@ Excluded from diff: binaries, `vendor/`, `node_modules/`, `*.min.js`, `*.generat
 
 ### Stage 2: Contract Check
 
-If `.deep-review/contracts/` contains files (or `--contract` flag is set), the most recent contract is loaded. Each criterion is verified against the actual code changes.
+`--contract` flag behavior:
+- `--contract SLICE-NNN`: Load only `.deep-review/contracts/SLICE-NNN.yaml` (must be `status: active`)
+- `--contract`: Load all `status: active` contracts in `.deep-review/contracts/`
+- No flag: If active contracts exist in `.deep-review/contracts/`, they are loaded automatically
+- `status: archived` contracts are excluded from auto-loading; if explicitly specified, a warning is shown
+- YAML parse errors: skip the contract and emit a warning
+
+Each criterion is verified against the actual code changes.
 
 ### Stage 3: Deep Review
 
@@ -162,7 +169,7 @@ criteria:
 `verification: manual` — Skipped automatically, flagged as "requires manual confirmation."
 `verification: mixed` — Auto-verifiable parts are checked; the rest are skipped.
 
-Run `/deep-review --contract` to trigger contract verification. If contracts exist in `.deep-review/contracts/`, they are automatically loaded without the flag.
+Run `/deep-review --contract SLICE-NNN` to verify a specific slice, or `/deep-review --contract` to verify all active contracts. If active contracts exist in `.deep-review/contracts/`, they are automatically loaded without the flag. Archived contracts are excluded from auto-loading.
 
 ## Configuration
 

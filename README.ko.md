@@ -57,7 +57,14 @@ diff 제외 대상: 바이너리, `vendor/`, `node_modules/`, `*.min.js`, `*.gen
 
 ### Stage 2: Contract Check (계약 검증)
 
-`.deep-review/contracts/`에 파일이 있거나 `--contract` 플래그가 설정된 경우, 가장 최근 contract를 로드합니다. 각 기준(criteria)을 실제 코드 변경사항에 대해 검증합니다.
+`--contract` 플래그 처리:
+- `--contract SLICE-NNN`: `.deep-review/contracts/SLICE-NNN.yaml`만 로드 (`status: active` 확인)
+- `--contract`: `.deep-review/contracts/` 내 모든 `status: active` contract 로드하여 전체 검증
+- 플래그 없음: `.deep-review/contracts/`에 active contract가 있으면 자동으로 전체 contract 검증
+- `status: archived` contract는 자동 로드에서 제외; 명시적으로 지정 시 경고 표시
+- YAML 파싱 오류: 해당 contract 건너뜀 + 경고 메시지 출력
+
+각 기준(criteria)을 실제 코드 변경사항에 대해 검증합니다.
 
 ### Stage 3: Deep Review (심층 리뷰)
 
@@ -160,7 +167,7 @@ criteria:
 `verification: manual` — 자동으로 스킵되며, "수동 확인 필요"로 표시됩니다.
 `verification: mixed` — 자동 검증 가능한 부분만 검사하고 나머지는 스킵합니다.
 
-Contract 검증을 실행하려면 `/deep-review --contract`를 사용합니다. `.deep-review/contracts/`에 contract가 있으면 플래그 없이도 자동으로 로드됩니다.
+특정 슬라이스를 검증하려면 `/deep-review --contract SLICE-NNN`을, 모든 active contract를 검증하려면 `/deep-review --contract`를 사용합니다. `.deep-review/contracts/`에 active contract가 있으면 플래그 없이도 자동으로 로드됩니다. Archived contract는 자동 로드에서 제외됩니다.
 
 ## 설정
 
