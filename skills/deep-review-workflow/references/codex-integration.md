@@ -51,7 +51,8 @@ contract criteria가 있으면:
 Codex 사용 불가 시:
 1. **1회만** 사용자에게 알림: "Codex 플러그인이 설치되어 있으면 교차 모델 검증이 가능합니다."
 2. Claude Opus 서브에이전트 단독 리뷰로 진행
-3. 알림은 세션당 1회 — `.deep-review/config.yaml`의 `codex_notified` 플래그로 관리
+3. 알림은 리포지터리당 1회 — `.deep-review/config.yaml`의 `codex_notified` 플래그로 관리
+   - Codex를 설치한 후 다시 알림을 받으려면 config.yaml에서 codex_notified를 false로 변경하세요.
 
 ## 합성 (Synthesis)
 
