@@ -27,6 +27,10 @@ config.yaml이 없으면 기본값으로 생성:
 ```yaml
 review_model: opus
 codex_notified: false
+last_review: null
+app_qa:
+  last_command: null
+  last_url: null
 ```
 rules.yaml은 생성하지 않음 (없으면 범용 기본 관점으로 리뷰).
 
