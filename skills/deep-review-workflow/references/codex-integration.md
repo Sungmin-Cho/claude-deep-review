@@ -10,6 +10,13 @@ Codex 플러그인 설치 여부:
 - Codex 커맨드를 사용하기 전 에이전트가 직접 확인해야 함
 - codex:setup 상태를 체크하거나, 첫 실행 시 실패하면 fallback
 
+## Preflight
+
+Codex 3-way 리뷰 진입 전 반드시 확인:
+1. codex_installed=true (환경 감지 스크립트 결과)
+2. 첫 번째 Codex 호출 시 실패하면 즉시 fallback — silent degradation 금지
+3. 리포트에 각 리뷰어의 실행 상태를 명시 (성공/실패/미수행)
+
 ## 3-way 병렬 리뷰
 
 Codex가 사용 가능할 때 3개 리뷰를 **동시 실행**:

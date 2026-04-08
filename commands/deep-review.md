@@ -82,6 +82,11 @@ Agent tool로 `code-reviewer` 에이전트를 spawn합니다:
 - `model: "opus"` (config.yaml의 review_model로 오버라이드 가능)
 - prompt에 포함: diff 내용, rules.yaml (있으면), contract (있으면)
 
+**Codex preflight (codex_installed=true일 때):**
+1. codex:review를 시도하기 전에 Codex가 실제로 동작하는지 확인
+2. 실패 시 (인증 오류, 타임아웃 등): Codex 결과를 "미수행"으로 표시하고 Claude Opus 단독으로 fallback
+3. 합성 시 미수행 리뷰어는 제외 (3-way가 아닌 실제 수행된 리뷰어 수 기준)
+
 **Codex 교차 검증 (git + Codex 사용 가능 시):**
 
 병렬로 실행:
