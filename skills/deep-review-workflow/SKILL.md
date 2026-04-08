@@ -37,10 +37,13 @@ user-invocable: false
 
 ### Stage 2: Contract Check (계약 검증)
 
-1. `.deep-review/contracts/` 디렉토리 확인
-2. contract 파일이 있으면 로드
-3. `--contract` 플래그가 있거나, deep-work 연동 시 자동 실행
-4. 없으면 이 단계 건너뜀
+`--contract` 플래그 처리:
+- `--contract SLICE-{NNN}` (슬라이스 지정): `.deep-review/contracts/SLICE-{NNN}.yaml`만 로드 (status: active 확인)
+- `--contract` (슬라이스 미지정): `.deep-review/contracts/` 내 모든 `status: active` contract 로드
+- 플래그 없이 `.deep-review/contracts/`에 active contract가 있으면: 자동으로 전체 contract 검증
+- contract 디렉토리가 없거나 active 파일이 없으면: 이 단계 건너뜀
+- `status: archived` contract는 자동 로드에서 제외. 명시적 SLICE-NNN 지정 시에도 archived이면 경고 표시.
+- YAML 파싱 오류 시: 해당 contract 건너뜀 + 경고 "Contract {파일명} 파싱 실패 — 건너뜀"
 
 ### Stage 3: Deep Review (교차 검증)
 
