@@ -47,6 +47,13 @@ else
   echo "change_state=untracked-only"
 fi
 
+# untracked 파일이 존재하면 항상 보고 (primary state와 무관하게 리뷰 대상에 포함)
+if [ "$untracked" -gt 0 ]; then
+  echo "has_untracked=true"
+else
+  echo "has_untracked=false"
+fi
+
 # === 4. review base 결정 (안전한 fallback 체인) ===
 review_base=""
 review_base_method=""

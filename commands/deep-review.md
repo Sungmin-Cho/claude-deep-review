@@ -63,6 +63,9 @@ bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/detect-environment.sh
 **git + untracked-only:**
 - `git ls-files --others --exclude-standard`로 파일 목록 수집 후 내용 읽기
 
+**모든 git 상태에서 untracked > 0이면:**
+- `git ls-files --others --exclude-standard`로 추가 파일을 리뷰 대상에 포함
+
 diff에서 제외: 바이너리, vendor/, node_modules/, *.min.js, *.generated.*, *.lock
 
 ### 3. Contract 로드 (Stage 2: Contract Check)

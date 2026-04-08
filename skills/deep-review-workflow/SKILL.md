@@ -31,7 +31,9 @@ user-invocable: false
    - `change_state=unstaged` → `git diff`
    - `change_state=mixed` → `git diff HEAD` (staged + unstaged 모두)
    - `change_state=untracked-only` → `git ls-files --others --exclude-standard`로 파일 목록 수집
-3. diff에서 제외: 바이너리, vendor/, node_modules/, *.min.js, *.generated.*
+3. **모든 git 상태에서 untracked > 0이면:**
+   - `git ls-files --others --exclude-standard`로 추가 파일을 리뷰 대상에 포함 (primary state의 diff와 union)
+4. diff에서 제외: 바이너리, vendor/, node_modules/, *.min.js, *.generated.*
 
 ### Stage 2: Contract Check (계약 검증)
 
