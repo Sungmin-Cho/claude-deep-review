@@ -65,3 +65,11 @@ contract가 제공되면 각 criteria에 대해:
 
 `report-format.md`의 구조를 따라 마크다운으로 출력합니다.
 Verdict는 반드시 APPROVE, REQUEST_CHANGES, CONCERN 중 하나입니다.
+
+## Fitness Function 인지
+
+`.deep-review/fitness.json`이 prompt에 포함된 경우:
+- 이 규칙들은 계산적(computational)으로 검증 가능한 아키텍처 제약입니다
+- 리뷰 시 규칙 위반 여부보다는 **규칙의 의도에 부합하는 설계인지**를 평가하세요
+- 예: `no-direct-env-access` 규칙이 있다면, 새 코드가 config 모듈을 우회하지 않는지 확인
+- fitness.json에 없는 아키텍처 관점도 자유롭게 지적하세요 (rules.yaml 영역)

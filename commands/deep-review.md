@@ -93,11 +93,25 @@ diff에서 제외: 바이너리, vendor/, node_modules/, *.min.js, *.generated.*
 
 ### 4. 리뷰 실행 (Stage 3: Deep Review)
 
+**fitness.json 주입 (있으면):**
+- `.deep-review/fitness.json` 파일 확인 → `JSON.parse`로 로드
+- 있으면: code-reviewer 에이전트 prompt에 추가:
+  "다음은 프로젝트의 계산적 아키텍처 규칙(fitness.json)입니다. 이 규칙들은 deep-work에서 자동 검증되지만, 리뷰 시 규칙의 의도를 기준으로 설계 방향성을 평가하세요."
+- 없으면: skip (에러 아님)
+
+**Receipt health_report 주입 (있으면):**
+- Receipt 발견 계약:
+  1. `.deep-work/sessions/` 디렉토리에서 가장 최근 세션의 receipt.json 탐색
+  2. receipt의 `health_report.scan_commit`과 현재 `git rev-parse HEAD` 비교
+  3. 일치 → health_report를 code-reviewer prompt에 추가
+  4. 불일치 → "stale health report — skip" 경고 + 주입하지 않음
+  5. receipt 없음 → skip (에러 아님)
+
 **Claude Opus 서브에이전트 (항상 실행):**
 
 Agent tool로 `code-reviewer` 에이전트를 spawn합니다:
 - `model: "opus"` (config.yaml의 review_model로 오버라이드 가능)
-- prompt에 포함: diff 내용, rules.yaml (있으면), contract (있으면)
+- prompt에 포함: diff 내용, rules.yaml (있으면), fitness.json (있으면), health_report (있으면), contract (있으면)
 
 **Codex preflight (codex_installed=true일 때):**
 1. codex:review를 시도하기 전에 Codex가 실제로 동작하는지 확인
@@ -234,13 +248,19 @@ entropy:
   validate_at_boundaries: true
 ```
 
-### 7. .gitignore 업데이트
+### 7. Fitness.json 안내
+
+"아키텍처 규칙을 계산적으로 강제하려면 deep-work의 fitness.json을 사용하세요.
+ /deep-work 세션 Phase 1에서 자동으로 fitness.json 생성을 제안합니다.
+ rules.yaml은 LLM이 판단하는 inferential 규칙, fitness.json은 코드가 검증하는 computational 규칙입니다."
+
+### 8. .gitignore 업데이트
 
 `.deep-review/reports/`를 .gitignore에 추가할지 사용자에게 확인:
 - 리포트는 보통 커밋할 필요 없음 (일시적)
 - config.yaml과 rules.yaml은 커밋 권장
 
-### 8. 완료 메시지
+### 9. 완료 메시지
 
 "deep-review 초기화 완료. `/deep-review`로 리뷰를 시작하세요."
 
