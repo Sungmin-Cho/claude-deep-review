@@ -21,6 +21,17 @@ Deep Review spawns a **separate Opus subagent** with no knowledge of the origina
 
 When [Codex](https://github.com/openai/codex) is installed, the review escalates to **3-way parallel verification**: Claude Opus + codex:review + codex:adversarial-review. Findings are synthesized by confidence level.
 
+### Role in Harness Engineering
+
+deep-review is the **independent evaluator** in the [Deep Suite](https://github.com/Sungmin-Cho/claude-deep-suite) ecosystem, implementing the Generator-Evaluator separation from the [Harness Engineering](https://martinfowler.com/articles/harness-engineering.html) framework.
+
+In the 2×2 matrix:
+
+- **Inferential Sensor**: Independent Opus subagent review with zero Generator context — the primary quality gate for semantic issues that computational sensors cannot catch
+- **3-Way Cross-Model Verification**: Opus + Codex standard + Codex adversarial — exceeds the framework's "LLM-as-judge" concept
+- **Fitness-Aware Review**: Consumes `fitness.json` rules and `health_report` from [deep-work](https://github.com/Sungmin-Cho/claude-deep-work) for architecture-intent-aware evaluation
+- **Sprint Contract Verification**: Structured success criteria checking
+
 ## Key Commands
 
 | Command | Description |
