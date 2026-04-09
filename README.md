@@ -173,9 +173,9 @@ Run `/deep-review --contract SLICE-NNN` to verify a specific slice, or `/deep-re
 
 ## Configuration
 
-### `.deep-review/rules.yaml`
+### `.deep-review/rules.yaml` (Inferential)
 
-Project-specific review rules, generated interactively by `/deep-review init`:
+Project-specific review rules, generated interactively by `/deep-review init`. These are **inferential** rules — the LLM reads and applies them during review:
 
 ```yaml
 architecture:
@@ -195,6 +195,35 @@ entropy:
 ```
 
 If `rules.yaml` does not exist, Deep Review uses generic best-practice criteria.
+
+### `.deep-review/fitness.json` (Computational)
+
+Architecture fitness rules that are **computationally verified** by the deep-work Health Engine. When present, Deep Review injects these rules into the review agent's prompt for architecture-intent-aware review.
+
+```json
+{
+  "version": 1,
+  "rules": [
+    { "id": "no-circular-deps", "type": "dependency", "check": "circular", "severity": "required" },
+    { "id": "max-file-lines", "type": "file-metric", "check": "line-count", "max": 500, "severity": "advisory" }
+  ]
+}
+```
+
+- **Created by**: deep-work Phase 1 Research (auto-generated with user approval)
+- **Verified by**: deep-work Health Engine (code, not LLM)
+- **Consumed by**: Deep Review Stage 3 (architecture intent context for LLM review)
+- Rule types: `dependency`, `file-metric`, `forbidden-pattern`, `structure`
+- If not present, review proceeds normally with `rules.yaml` only
+
+### Receipt Health Report Integration
+
+When deep-work's session receipt contains a `health_report` field, Deep Review uses it as additional context:
+
+- **Discovery**: Searches `.deep-work/sessions/` for the most recent receipt
+- **Staleness check**: Compares `health_report.scan_commit` against current `git rev-parse HEAD`
+- **If fresh**: Drift issues and fitness violations are added to the review context
+- **If stale or missing**: Skipped silently (not an error)
 
 ### `.deep-review/config.yaml`
 

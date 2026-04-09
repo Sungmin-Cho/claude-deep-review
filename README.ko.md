@@ -171,9 +171,9 @@ criteria:
 
 ## 설정
 
-### `.deep-review/rules.yaml`
+### `.deep-review/rules.yaml` (Inferential)
 
-`/deep-review init`이 대화형으로 생성하는 프로젝트별 리뷰 규칙:
+`/deep-review init`이 대화형으로 생성하는 프로젝트별 리뷰 규칙. **Inferential** — LLM이 읽고 판단:
 
 ```yaml
 architecture:
@@ -193,6 +193,23 @@ entropy:
 ```
 
 `rules.yaml`이 없으면 Deep Review는 범용 모범 사례 기준을 사용합니다.
+
+### `.deep-review/fitness.json` (Computational)
+
+deep-work Health Engine이 **계산적으로 검증**하는 아키텍처 규칙. 존재 시 리뷰 에이전트 프롬프트에 주입하여 아키텍처 의도 기반 리뷰를 수행합니다.
+
+- **생성**: deep-work Phase 1 Research에서 자동 생성 제안 (유저 승인 필요)
+- **검증**: deep-work Health Engine (코드, LLM 아님)
+- **소비**: Deep Review Stage 3 (아키텍처 의도 컨텍스트로 LLM 리뷰)
+- 규칙 타입: `dependency`, `file-metric`, `forbidden-pattern`, `structure`
+- 미존재 시 rules.yaml만으로 정상 리뷰 진행
+
+### Receipt Health Report 연동
+
+deep-work 세션 receipt에 `health_report` 필드가 있으면 리뷰 컨텍스트로 활용:
+- `.deep-work/sessions/`에서 최신 receipt 탐색
+- `scan_commit`과 현재 HEAD 비교하여 stale 여부 판정
+- 신선한 경우 드리프트/fitness 결과를 리뷰 컨텍스트에 추가
 
 ### `.deep-review/config.yaml`
 
