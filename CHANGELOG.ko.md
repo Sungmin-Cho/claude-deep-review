@@ -1,0 +1,37 @@
+# 변경 기록
+
+[English](./CHANGELOG.md) | **한국어**
+
+## [1.1.0] - 2026-04-09
+
+### 추가
+- **fitness.json 통합** — Stage 3는 이제 `.deep-review/fitness.json`(있는 경우)을 로드하고 컴퓨테이션 아키텍처 규칙을 code-reviewer 에이전트 프롬프트에 주입하여 아키텍처 의도 인식 리뷰 수행
+- **Receipt health_report 통합** — Stage 3는 최신 deep-work 세션 receipt를 발견하고 `scan_commit`의 오래됨 여부를 확인하며 drift/fitness 컨텍스트를 리뷰에 주입
+- **Code-reviewer의 Fitness Function 인식** — 새로운 "Fitness Function 인식" 섹션은 리뷰어가 규칙 위반만 아니라 설계 의도 정렬을 평가하도록 가이드
+- **init 모드의 fitness.json 가이던스** — `/deep-review init`은 이제 추론 규칙(rules.yaml)과 컴퓨테이션 규칙(fitness.json)의 차이를 설명하고 사용자를 deep-work Phase 1으로 자동 생성을 위해 안내
+
+## [1.0.0] - 2026-04-08
+
+### 추가
+- Mode 1: Code Review — 독립 Opus 서브에이전트 리뷰
+- Codex 교차 검증 (codex:review + codex:adversarial-review)
+- Sprint Contract 소비 및 검증
+- 엔트로피 탐지
+- 환경 자동 감지 (git/non-git, Codex 유무)
+- `/deep-review init` — 프로젝트별 규칙 초기화
+
+### 변경
+- `--contract`는 이제 slice 특정 contract 로딩을 위해 `SLICE-NNN` 지원
+- Contract 로딩: `status: active`인 모든 contracts을 자동 로드, 아카이브된 contracts는 제외
+- 리뷰 기준을 command, SKILL.md, README에 걸쳐 정렬
+
+### 수정
+- change_state에 관계없이 항상 untracked 파일을 리뷰에 포함
+- Codex 통합 합성 규칙과 command verdict 로직 정렬 (2/3 → CONCERN)
+- 무음 성능 저하를 방지하기 위한 Codex preflight 체크 추가
+- codex_notified를 repo 영구적으로 명확화 (session-scoped 아님)
+- 에이전트 파일 참조에 전체 경로 추가
+- 자동 생성된 config.yaml을 전체 schema와 정렬
+- SKILL.md의 중복 단계 번호 수정, exclusions에 *.lock 추가
+- Shallow clone 처리 및 사용자 가이던스 추가
+- Archived contract 필터 및 malformed YAML 오류 처리 추가

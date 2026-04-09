@@ -1,5 +1,7 @@
 # Changelog
 
+**English** | [한국어](./CHANGELOG.ko.md)
+
 ## [1.1.0] - 2026-04-09
 
 ### Added
