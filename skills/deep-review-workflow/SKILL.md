@@ -49,16 +49,22 @@ user-invocable: false
 
 환경에 따라 리뷰어 구성이 달라짐:
 
+**공통: 유저 고지 + 백그라운드 실행**
+모든 Case에서 리뷰어 spawn 직전 고지 메시지를 출력하고, 모든 리뷰어를 백그라운드에서 실행한다.
+- Case A/B: "Opus 리뷰를 백그라운드에서 실행합니다. 완료되면 결과를 알려드리겠습니다."
+- Case C: "3개 리뷰어(Opus, Codex review, Codex adversarial)를 백그라운드에서 실행합니다. 완료되면 결과를 합성하여 알려드리겠습니다."
+코드 경로 단일화를 위해 단독 리뷰어(Case A/B)에서도 백그라운드로 실행한다.
+
 **Case A: non-git 또는 커밋 0건**
-→ Claude Opus 서브에이전트 단독 리뷰
+→ Claude Opus 서브에이전트 단독 리뷰 (run_in_background: true)
 
 **Case B: git + 커밋 있음 + Codex 미설치**
-→ Claude Opus 서브에이전트 단독 리뷰
+→ Claude Opus 서브에이전트 단독 리뷰 (run_in_background: true)
 → 세션 내 최초 1회 Codex 설치 안내
 
 **Case C: git + 커밋 있음 + Codex 설치+인증**
-→ 3-way 병렬 실행:
-  1. Agent(code-reviewer, model: opus) — 독립 리뷰
+→ 3-way 병렬 백그라운드 실행:
+  1. Agent(code-reviewer, model: opus, run_in_background: true) — 독립 리뷰
   2. Skill(codex:review --background --base {base}) — 코드 리뷰
   3. Skill(codex:adversarial-review --background --base {base} "{focus}") — 적대적 리뷰
 
@@ -69,7 +75,9 @@ user-invocable: false
 
 ### Stage 4: Verdict (판정)
 
-1. 모든 리뷰 결과 수집
+1. 모든 백그라운드 리뷰어의 완료 알림 수신 후 결과 수집
+   - 완료 알림은 Claude Code 런타임이 자동 전달 (polling 불필요)
+   - 리뷰어 실패 시 "미수행" 표시, 성공한 리뷰어만으로 합성
 2. 교차 검증 합성 (`codex-integration.md` 참조)
 3. Verdict 결정: APPROVE / REQUEST_CHANGES / CONCERN
 4. 리포트 생성: `.deep-review/reports/{날짜}-review.md`
