@@ -2,6 +2,13 @@
 
 **English** | [한국어](./CHANGELOG.ko.md)
 
+## [1.1.1] - 2026-04-11
+
+### Changed
+- **Stage 3 background execution** — All reviewers (Opus subagent, codex:review, codex:adversarial-review) now run in the background with `run_in_background: true`
+- **User notification before review** — Displays reviewer composition before spawning: Opus-only (Case A/B) or 3-way (Case C)
+- **Stage 4 collection mechanism** — Results collected via background completion notifications; partial success handled by N-way synthesis based on actually completed reviewers
+
 ## [1.1.0] - 2026-04-09
 
 ### Added

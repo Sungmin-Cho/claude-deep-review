@@ -48,7 +48,7 @@ Deep Review는 매 실행 시 4단계 파이프라인을 수행합니다:
 ```
 Stage 1: Collect      — 환경 감지, diff 수집
 Stage 2: Contract     — Sprint Contract가 있으면 로드
-Stage 3: Deep Review  — Opus 서브에이전트 생성 (Codex 가능 시 추가)
+Stage 3: Deep Review  — Opus 서브에이전트 백그라운드 생성 (Codex 가능 시 추가)
 Stage 4: Verdict      — 결과 합성, APPROVE / CONCERN / REQUEST_CHANGES 판정
 ```
 
@@ -79,7 +79,7 @@ diff 제외 대상: 바이너리, `vendor/`, `node_modules/`, `*.min.js`, `*.gen
 
 ### Stage 3: Deep Review (심층 리뷰)
 
-독립적인 `code-reviewer` 에이전트가 Agent 도구를 통해 `model: opus`로 생성됩니다. 에이전트는 diff, rules, contract만 받습니다 — 원본 세션 컨텍스트는 절대 받지 않습니다.
+독립적인 `code-reviewer` 에이전트가 Agent 도구를 통해 `model: opus`, `run_in_background: true`로 생성됩니다. spawn 전 실행되는 리뷰어 구성(Opus 단독 또는 3-way)을 유저에게 고지합니다. 에이전트는 diff, rules, contract만 받습니다 — 원본 세션 컨텍스트는 절대 받지 않습니다.
 
 에이전트는 5가지 관점을 평가합니다:
 

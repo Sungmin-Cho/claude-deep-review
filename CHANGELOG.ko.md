@@ -2,6 +2,13 @@
 
 [English](./CHANGELOG.md) | **한국어**
 
+## [1.1.1] - 2026-04-11
+
+### 변경
+- **Stage 3 백그라운드 실행** — 모든 리뷰어(Opus 서브에이전트, codex:review, codex:adversarial-review)를 `run_in_background: true`로 백그라운드에서 실행
+- **리뷰 전 유저 고지** — 리뷰어 구성을 spawn 전 표시: Opus 단독(Case A/B) 또는 3-way(Case C)
+- **Stage 4 결과 수집 방식** — 백그라운드 완료 알림으로 결과 수집; 부분 성공 시 실제 완료된 리뷰어 수 기준 N-way 합성
+
 ## [1.1.0] - 2026-04-09
 
 ### 추가

@@ -48,7 +48,7 @@ Deep Review runs a 4-stage pipeline on every invocation:
 ```
 Stage 1: Collect      — Detect environment, gather diff
 Stage 2: Contract     — Load Sprint Contract if present
-Stage 3: Deep Review  — Spawn Opus subagent (+ Codex if available)
+Stage 3: Deep Review  — Spawn Opus subagent in background (+ Codex if available)
 Stage 4: Verdict      — Synthesize findings, emit APPROVE / CONCERN / REQUEST_CHANGES
 ```
 
@@ -79,7 +79,7 @@ Each criterion is verified against the actual code changes.
 
 ### Stage 3: Deep Review
 
-An independent `code-reviewer` agent is spawned via the Agent tool with `model: opus`. It receives only the diff, rules, and contract — never the originating session context.
+An independent `code-reviewer` agent is spawned via the Agent tool with `model: opus` and `run_in_background: true`. Before spawning, the user is notified which reviewers will run (Opus-only or 3-way). It receives only the diff, rules, and contract — never the originating session context.
 
 The agent evaluates 5 criteria:
 
