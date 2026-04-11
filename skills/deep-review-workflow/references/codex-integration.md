@@ -19,9 +19,9 @@ Codex 3-way 리뷰 진입 전 반드시 확인:
 
 ## 3-way 병렬 리뷰
 
-Codex가 사용 가능할 때 3개 리뷰를 **동시 실행**:
+Codex가 사용 가능할 때 3개 리뷰를 **백그라운드에서 동시 실행**:
 
-1. **Claude Opus 서브에이전트** (Agent tool, model: opus)
+1. **Claude Opus 서브에이전트** (Agent tool, model: opus, run_in_background: true)
    - 독립 컨텍스트에서 5가지 관점 리뷰
    - 항상 실행됨
 
