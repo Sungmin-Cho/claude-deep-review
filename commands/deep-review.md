@@ -107,10 +107,17 @@ diff에서 제외: 바이너리, vendor/, node_modules/, *.min.js, *.generated.*
   4. 불일치 → "stale health report — skip" 경고 + 주입하지 않음
   5. receipt 없음 → skip (에러 아님)
 
+**유저 고지 (리뷰어 spawn 직전):**
+
+리뷰어를 spawn하기 직전, 실행되는 리뷰어 구성에 따라 고지:
+- Opus 단독 (Case A/B): "Opus 리뷰를 백그라운드에서 실행합니다. 완료되면 결과를 알려드리겠습니다."
+- 3-way (Case C): "3개 리뷰어(Opus, Codex review, Codex adversarial)를 백그라운드에서 실행합니다. 완료되면 결과를 합성하여 알려드리겠습니다."
+
 **Claude Opus 서브에이전트 (항상 실행):**
 
-Agent tool로 `code-reviewer` 에이전트를 spawn합니다:
+Agent tool로 `code-reviewer` 에이전트를 백그라운드에서 spawn합니다:
 - `model: "opus"` (config.yaml의 review_model로 오버라이드 가능)
+- `run_in_background: true`
 - prompt에 포함: diff 내용, rules.yaml (있으면), fitness.json (있으면), health_report (있으면), contract (있으면)
 
 **Codex preflight (codex_installed=true일 때):**
@@ -136,7 +143,11 @@ focus_text 생성:
 
 ### 5. 합성 및 판정 (Stage 4: Verdict)
 
-모든 리뷰 결과를 수집한 후:
+모든 백그라운드 리뷰어의 완료 알림이 수신된 후:
+- Agent tool(`run_in_background`)과 Skill tool(`--background`)은 완료 시 자동 알림 반환
+- polling 불필요 — Claude Code 런타임이 완료 알림을 자동 전달
+- Opus background task 실패 시: "미수행"으로 표시, 실행된 리뷰어만으로 합성
+- 부분 성공 시: 성공한 리뷰어 수 기준으로 합성 (3-way가 아닌 실제 수행된 N-way)
 
 1. 교차 검증 합성 (Codex 결과가 있을 때):
    - 전원 일치 지적 → 🔴 높은 확신
