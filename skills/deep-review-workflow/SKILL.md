@@ -67,13 +67,15 @@ user-invocable: false
 **Case C: git + 커밋 있음 + Codex 플러그인 설치 (codex_plugin=true)**
 → 3-way 병렬 백그라운드 실행:
   1. Agent(code-reviewer, model: opus, run_in_background: true) — 독립 리뷰
-  2. Bash(node "{codex_companion_path}" review --base {base}, run_in_background: true) — 코드 리뷰
-  3. Bash(node "{codex_companion_path}" adversarial-review --base {base} - < /tmp/deep-review-focus.txt, run_in_background: true) — 적대적 리뷰 (focus_text는 stdin, 쉘 인젝션 방지)
+  2. Bash(node "{codex_companion_path}" review {codex_target_flag}, run_in_background: true) — 코드 리뷰
+  3. Bash(node "{codex_companion_path}" adversarial-review {codex_target_flag} - < /tmp/deep-review-focus.txt, run_in_background: true) — 적대적 리뷰 (focus_text는 stdin)
+
+{codex_target_flag}: clean 또는 WIP 커밋 후 → `--base {review_base}`, dirty tree → `--uncommitted`
 
 **커밋되지 않은 상태에서:**
 - 사용자에게 WIP 커밋 제안
-- 수락 → WIP 커밋 후 Case C
-- 거부 → Claude Opus 리뷰 (diff 기반) + 가능하면 Codex도 실행
+- 수락 → WIP 커밋 후 Case C (--base)
+- 거부 → Claude Opus 리뷰 (diff 기반) + Codex도 실행 (--uncommitted로 동일 대상 리뷰)
 
 ### Stage 4: Verdict (판정)
 
