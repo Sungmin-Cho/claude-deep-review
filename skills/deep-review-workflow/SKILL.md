@@ -58,15 +58,17 @@ user-invocable: false
 **Case A: non-git 또는 커밋 0건**
 → Claude Opus 서브에이전트 단독 리뷰 (run_in_background: true)
 
-**Case B: git + 커밋 있음 + Codex 미설치**
+**Case B: git + 커밋 있음 + Codex 플러그인 미설치 (codex_plugin=false)**
 → Claude Opus 서브에이전트 단독 리뷰 (run_in_background: true)
-→ 세션 내 최초 1회 Codex 설치 안내
+→ 세션 내 최초 1회 안내:
+  - codex_cli=false: Codex 플러그인 설치 안내
+  - codex_cli=true: "CLI가 감지되었지만 플러그인이 필요합니다" 안내
 
-**Case C: git + 커밋 있음 + Codex 설치+인증**
+**Case C: git + 커밋 있음 + Codex 플러그인 설치 (codex_plugin=true)**
 → 3-way 병렬 백그라운드 실행:
   1. Agent(code-reviewer, model: opus, run_in_background: true) — 독립 리뷰
-  2. Skill(codex:review --background --base {base}) — 코드 리뷰
-  3. Skill(codex:adversarial-review --background --base {base} "{focus}") — 적대적 리뷰
+  2. Bash(node "{codex_companion_path}" review --base {base}, run_in_background: true) — 코드 리뷰
+  3. Bash(node "{codex_companion_path}" adversarial-review --base {base} "{focus}", run_in_background: true) — 적대적 리뷰
 
 **커밋되지 않은 상태에서:**
 - 사용자에게 WIP 커밋 제안
