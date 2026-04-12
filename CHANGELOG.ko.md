@@ -6,6 +6,9 @@
 
 ### 수정
 - **Codex review 호출 버그** — `Skill(codex:review)` 호출 시 `disable-model-invocation: true`로 인해 `codex:rescue`가 실행되던 문제 수정; `codex-companion.mjs`를 Bash tool로 직접 호출
+- **focus_text 쉘 인젝션** — repo 파일(rules.yaml, contract)에서 생성된 focus_text가 쉘 명령에 직접 삽입되던 문제; stdin 리다이렉트로 전달
+- **플러그인 미설치 시 스크립트 중단** — `set -euo pipefail`에서 Codex 플러그인 경로 미존재 시 스크립트 종료; `|| true` fallback 추가
+- **dirty tree 리뷰 불일치** — Codex가 커밋 히스토리(`--base`)만 리뷰하고 Opus는 dirty diff를 리뷰하던 문제; dirty tree에서 `--uncommitted` 사용
 
 ### 변경
 - **Codex 감지 분리** — `codex_plugin`(Claude Code 플러그인)과 `codex_cli`(독립 CLI) 감지 분리, `codex_companion_path` / `codex_cli_path` 경로 출력
