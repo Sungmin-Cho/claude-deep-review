@@ -6,6 +6,10 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "is_git=false"
   echo "has_commits=false"
   echo "change_state=non-git"
+  echo "codex_plugin=false"
+  echo "codex_companion_path="
+  echo "codex_cli=false"
+  echo "codex_cli_path="
   echo "codex_installed=false"
   exit 0
 fi
