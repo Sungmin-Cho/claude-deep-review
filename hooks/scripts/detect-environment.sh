@@ -22,7 +22,7 @@ if ! git rev-parse HEAD >/dev/null 2>&1; then
   echo "change_state=initial"
   codex_plugin="false"
   codex_companion_path=""
-  CODEX_SCRIPT=$(ls -d "$HOME/.claude/plugins/cache/openai-codex/codex"/*/scripts/codex-companion.mjs 2>/dev/null | sort -V | tail -1)
+  CODEX_SCRIPT=$(ls -d "$HOME/.claude/plugins/cache/openai-codex/codex"/*/scripts/codex-companion.mjs 2>/dev/null | sort -V | tail -1 || true)
   if [ -n "$CODEX_SCRIPT" ] && [ -f "$CODEX_SCRIPT" ]; then
     codex_plugin="true"
     codex_companion_path="$CODEX_SCRIPT"
@@ -123,7 +123,7 @@ codex_plugin="false"
 codex_companion_path=""
 # NOTE: sort -V는 GNU 확장. macOS에서는 Homebrew coreutils 필요할 수 있음.
 # 실패 시 codex_plugin=false fallback.
-CODEX_SCRIPT=$(ls -d "$HOME/.claude/plugins/cache/openai-codex/codex"/*/scripts/codex-companion.mjs 2>/dev/null | sort -V | tail -1)
+CODEX_SCRIPT=$(ls -d "$HOME/.claude/plugins/cache/openai-codex/codex"/*/scripts/codex-companion.mjs 2>/dev/null | sort -V | tail -1 || true)
 if [ -n "$CODEX_SCRIPT" ] && [ -f "$CODEX_SCRIPT" ]; then
   codex_plugin="true"
   codex_companion_path="$CODEX_SCRIPT"
