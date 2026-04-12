@@ -2,6 +2,15 @@
 
 [English](./CHANGELOG.md) | **한국어**
 
+## [1.1.2] - 2026-04-12
+
+### 수정
+- **Codex review 호출 버그** — `Skill(codex:review)` 호출 시 `disable-model-invocation: true`로 인해 `codex:rescue`가 실행되던 문제 수정; `codex-companion.mjs`를 Bash tool로 직접 호출
+
+### 변경
+- **Codex 감지 분리** — `codex_plugin`(Claude Code 플러그인)과 `codex_cli`(독립 CLI) 감지 분리, `codex_companion_path` / `codex_cli_path` 경로 출력
+- **CLI만 설치 시 안내** — Codex CLI만 설치된 경우 맞춤 안내: "CLI가 감지되었지만 플러그인이 필요합니다"
+
 ## [1.1.1] - 2026-04-11
 
 ### 변경

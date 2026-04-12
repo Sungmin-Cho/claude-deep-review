@@ -2,6 +2,15 @@
 
 **English** | [한국어](./CHANGELOG.ko.md)
 
+## [1.1.2] - 2026-04-12
+
+### Fixed
+- **Codex review invocation bug** — `Skill(codex:review)` was routed to `codex:rescue` due to `disable-model-invocation: true`; now calls `codex-companion.mjs` directly via Bash tool
+
+### Changed
+- **Codex detection split** — Separate `codex_plugin` (Claude Code plugin) and `codex_cli` (standalone CLI) detection with `codex_companion_path` / `codex_cli_path` exports
+- **CLI-only guidance** — When only Codex CLI is installed (no plugin), shows targeted install message: "CLI detected but plugin required"
+
 ## [1.1.1] - 2026-04-11
 
 ### Changed
