@@ -68,7 +68,7 @@ user-invocable: false
 → 3-way 병렬 백그라운드 실행:
   1. Agent(code-reviewer, model: opus, run_in_background: true) — 독립 리뷰
   2. Bash(node "{codex_companion_path}" review --base {base}, run_in_background: true) — 코드 리뷰
-  3. Bash(node "{codex_companion_path}" adversarial-review --base {base} "{focus}", run_in_background: true) — 적대적 리뷰
+  3. Bash(node "{codex_companion_path}" adversarial-review --base {base} - < /tmp/deep-review-focus.txt, run_in_background: true) — 적대적 리뷰 (focus_text는 stdin, 쉘 인젝션 방지)
 
 **커밋되지 않은 상태에서:**
 - 사용자에게 WIP 커밋 제안
