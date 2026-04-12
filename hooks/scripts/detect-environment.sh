@@ -16,7 +16,24 @@ echo "is_git=true"
 if ! git rev-parse HEAD >/dev/null 2>&1; then
   echo "has_commits=false"
   echo "change_state=initial"
-  if [ -d "$HOME/.claude/plugins/cache/openai-codex" ]; then
+  codex_plugin="false"
+  codex_companion_path=""
+  CODEX_SCRIPT=$(ls -d "$HOME/.claude/plugins/cache/openai-codex/codex"/*/scripts/codex-companion.mjs 2>/dev/null | sort -V | tail -1)
+  if [ -n "$CODEX_SCRIPT" ] && [ -f "$CODEX_SCRIPT" ]; then
+    codex_plugin="true"
+    codex_companion_path="$CODEX_SCRIPT"
+  fi
+  echo "codex_plugin=$codex_plugin"
+  echo "codex_companion_path=$codex_companion_path"
+  codex_cli="false"
+  codex_cli_path=""
+  if command -v codex >/dev/null 2>&1; then
+    codex_cli="true"
+    codex_cli_path="$(command -v codex)"
+  fi
+  echo "codex_cli=$codex_cli"
+  echo "codex_cli_path=$codex_cli_path"
+  if [ "$codex_plugin" = "true" ] || [ "$codex_cli" = "true" ]; then
     echo "codex_installed=true"
   else
     echo "codex_installed=false"
@@ -95,8 +112,33 @@ else
   echo "is_shallow=false"
 fi
 
-# === 5. Codex 플러그인 감지 (파일 시스템만, 네트워크 호출 없음) ===
-if [ -d "$HOME/.claude/plugins/cache/openai-codex" ]; then
+# === 5. Codex 감지 (파일 시스템만, 네트워크 호출 없음) ===
+
+# 5a. Codex 플러그인 감지 + companion 스크립트 경로
+codex_plugin="false"
+codex_companion_path=""
+# NOTE: sort -V는 GNU 확장. macOS에서는 Homebrew coreutils 필요할 수 있음.
+# 실패 시 codex_plugin=false fallback.
+CODEX_SCRIPT=$(ls -d "$HOME/.claude/plugins/cache/openai-codex/codex"/*/scripts/codex-companion.mjs 2>/dev/null | sort -V | tail -1)
+if [ -n "$CODEX_SCRIPT" ] && [ -f "$CODEX_SCRIPT" ]; then
+  codex_plugin="true"
+  codex_companion_path="$CODEX_SCRIPT"
+fi
+echo "codex_plugin=$codex_plugin"
+echo "codex_companion_path=$codex_companion_path"
+
+# 5b. Codex CLI 감지
+codex_cli="false"
+codex_cli_path=""
+if command -v codex >/dev/null 2>&1; then
+  codex_cli="true"
+  codex_cli_path="$(command -v codex)"
+fi
+echo "codex_cli=$codex_cli"
+echo "codex_cli_path=$codex_cli_path"
+
+# 5c. 하위호환
+if [ "$codex_plugin" = "true" ] || [ "$codex_cli" = "true" ]; then
   echo "codex_installed=true"
 else
   echo "codex_installed=false"
