@@ -14,7 +14,7 @@
 ## Preflight
 
 Codex 3-way 리뷰 진입 전 반드시 확인:
-1. codex_installed=true (환경 감지 스크립트 결과)
+1. codex_plugin=true (환경 감지 스크립트 결과)
 2. 첫 번째 Codex 호출 시 실패하면 즉시 fallback — silent degradation 금지
 3. 리포트에 각 리뷰어의 실행 상태를 명시 (성공/실패/미수행)
 
