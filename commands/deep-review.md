@@ -208,6 +208,8 @@ focus_text 생성:
    - 하나의 LLM 호출로 전체 항목을 일괄 분류 (호출 간 비결정성 방지)
 
 3. 같은 카테고리가 3회 이상 나타나면 "recurring"으로 분류
+   - 같은 카테고리에서 severity가 혼재하면 (critical + warning), 가장 높은 severity를 채택
+   - 예: error-handling이 critical 3회, warning 2회이면 → severity: "critical", occurrences: 5
 
 4. `.deep-review/recurring-findings.json`에 기록:
 
