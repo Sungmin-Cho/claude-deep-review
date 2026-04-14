@@ -184,6 +184,52 @@ focus_text 생성:
 4. REQUEST_CHANGES + Codex 있을 때:
    "수정을 codex:rescue로 위임하시겠습니까?"
 
+### 5.5 Recurring Findings Export
+
+리포트 생성 후 자동 실행. `.deep-review/reports/` 내 리포트가 2개 미만이면 건너뜀.
+
+**Finding Taxonomy (v1.0):**
+
+분류 카테고리:
+- `error-handling` — try-catch 누락, 에러 전파 미흡
+- `naming-convention` — 네이밍 불일치, 스타일 혼용
+- `type-safety` — any 타입, 타입 단언 남용
+- `test-coverage` — 테스트 누락, 경계값 미검증
+- `security` — 인젝션, 인증/인가 미흡
+- `performance` — N+1, 불필요한 재계산
+- `architecture` — 순환 의존, 레이어 침범, SRP 위반
+
+**프로세스:**
+
+1. `.deep-review/reports/` 내 모든 리포트를 읽어 🔴 Critical + 🟡 Warning 항목 수집
+
+2. 각 항목을 taxonomy 카테고리로 LLM 의미 기반 분류:
+   - 항목의 설명과 코드 컨텍스트를 읽고 7개 카테고리 중 가장 적합한 것을 선택
+   - 하나의 LLM 호출로 전체 항목을 일괄 분류 (호출 간 비결정성 방지)
+
+3. 같은 카테고리가 3회 이상 나타나면 "recurring"으로 분류
+
+4. `.deep-review/recurring-findings.json`에 기록:
+
+```json
+{
+  "updated_at": "<ISO 8601>",
+  "taxonomy_version": "1.0",
+  "findings": [
+    {
+      "category": "<taxonomy category>",
+      "severity": "critical|warning",
+      "occurrences": "<count>",
+      "example_files": ["<file:line>"],
+      "description": "<패턴 설명>",
+      "source_reports": ["<report filename>"]
+    }
+  ]
+}
+```
+
+5. 이 파일은 deep-evolve가 소비할 수 있는 표준 인터페이스 (init Stage 3.5에서 읽음).
+
 ### 6. 엔트로피 스캔 (--entropy)
 
 `--entropy` 플래그가 있으면 추가 스캔:
