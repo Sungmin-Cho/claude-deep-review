@@ -244,6 +244,22 @@ app_qa:
 - 네이밍 컨벤션 불일치 탐지
 - 결과는 `.deep-review/entropy-log.jsonl`에 append됩니다
 
+### Recurring Findings Export (v1.2)
+
+리뷰 완료 후 자동으로 반복 발견 패턴을 추출하여 `recurring-findings.json`에 기록한다.
+
+**Taxonomy (7 categories):**
+`error-handling`, `naming-convention`, `type-safety`, `test-coverage`, `security`, `performance`, `architecture`
+
+**동작:**
+- `.deep-review/reports/` 내 리포트 2개 이상 존재 시 실행
+- Critical/Warning 항목을 taxonomy 카테고리로 LLM 의미 기반 분류
+- 같은 카테고리 3회 이상 → "recurring"으로 분류
+- 같은 카테고리에서 severity 혼재 시 가장 높은 severity 채택
+
+**출력:** `.deep-review/recurring-findings.json`
+- deep-evolve가 소비하여 실험 방향 조향 (prepare.py 시나리오 + program.md + strategy.yaml 가중치)
+
 ## 설치
 
 ```bash

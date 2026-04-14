@@ -2,6 +2,11 @@
 
 [English](./CHANGELOG.md) | **한국어**
 
+## [1.2.0] — 2026-04-14
+
+### 추가
+- **Stage 5.5 반복 발견 패턴 내보내기**: taxonomy 기반(7 카테고리) LLM 의미 분류로 반복 발견 패턴을 `recurring-findings.json`에 기록. deep-evolve가 소비하여 실험 방향 조향에 활용.
+
 ## [1.1.2] - 2026-04-12
 
 ### 수정

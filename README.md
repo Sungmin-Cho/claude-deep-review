@@ -258,6 +258,22 @@ Running `/deep-review --entropy` triggers a full-project entropy scan:
 - Naming convention mismatches
 - Results appended to `.deep-review/entropy-log.jsonl`
 
+### Recurring Findings Export (v1.2)
+
+After each review, automatically extracts recurring patterns and records them in `recurring-findings.json`.
+
+**Taxonomy (7 categories):**
+`error-handling`, `naming-convention`, `type-safety`, `test-coverage`, `security`, `performance`, `architecture`
+
+**Behavior:**
+- Runs when 2+ reports exist in `.deep-review/reports/`
+- Classifies Critical/Warning items into taxonomy categories via LLM semantic classification
+- Marks patterns as "recurring" when the same category appears 3+ times
+- When severity is mixed within a category, adopts the highest severity
+
+**Output:** `.deep-review/recurring-findings.json`
+- Consumed by deep-evolve to steer experiment direction (prepare.py scenarios + program.md + strategy.yaml weights)
+
 ## Installation
 
 ```bash
