@@ -2,6 +2,12 @@
 
 **English** | [한국어](./CHANGELOG.ko.md)
 
+## [1.2.0] — 2026-04-14
+
+### Added
+- **Stage 5.5 Recurring Findings Export**: taxonomy 기반(7 카테고리) LLM 의미 분류로 반복 발견 패턴을 `recurring-findings.json`에 기록. deep-evolve가 소비하여 실험 방향 조향에 활용.
+
+
 ## [1.1.2] - 2026-04-12
 
 ### Fixed
