@@ -298,7 +298,7 @@ Cross-model disagreement 처리:
 ### `/deep-review --respond` 추가
 
 ```
-argument-hint: "[init] [--contract [SLICE-NNN]] [--entropy] [--respond [REPORT_PATH]]"
+argument-hint: "[init] [--contract [SLICE-NNN]] [--entropy] [--respond [REPORT_PATH] [--source=pr]]"
 ```
 
 #### `--respond` 동작

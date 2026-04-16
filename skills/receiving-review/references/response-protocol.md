@@ -40,7 +40,23 @@ gh api --paginate repos/{owner}/{repo}/issues/{pr_number}/comments
 - 각 코멘트 → item_id (코멘트 ID), severity (추론), description, source: "PR comment (외부)"
 - 인라인 코멘트(diff_hunk 있음)는 파일:라인 정보 포함
 - 봇 코멘트(`user.type == "Bot"`)는 제외
+- 인증된 사용자 자신의 답글(`user.login` == 현재 사용자)은 제외
 - top-level 리뷰 본문(body가 비어있지 않은 review)은 별도 항목으로 추가
+
+### 비-리뷰 코멘트 필터링
+
+`/issues/{pr}/comments`에는 리뷰 피드백 외에 일반 대화(승인 메시지, 머지 조율 등)도 포함된다. 다음 기준으로 비-리뷰 코멘트를 제외한다:
+- 코멘트 본문이 코드 변경에 대한 기술적 피드백인지 LLM으로 판단
+- "LGTM", "Approved", "Thanks", 머지 관련 메시지 등은 제외
+- 의심스러운 경우 포함 (false negative보다 false positive가 나음)
+
+### 재실행 멱등성 (Idempotency)
+
+`--source=pr` 재실행 시 이전에 처리한 코멘트에 중복 답글을 방지한다:
+1. Response 리포트에 처리된 `comment_id` 목록을 기록
+2. 재실행 시 `.deep-review/responses/` 내 기존 response 리포트를 검색
+3. 이전 리포트에 기록된 `comment_id`는 수집 대상에서 제외
+4. 새로 추가된 코멘트만 항목 목록에 포함
 
 ### Recurring Findings 분류
 

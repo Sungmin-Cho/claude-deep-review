@@ -29,7 +29,7 @@ mkdir -p .deep-review/responses
 
 ### ITEM-1: {제목}
 - **Severity**: {🔴 Critical | 🟡 Warning | ℹ️ Info}
-- **Source**: {Opus + Codex (일치) | Opus only | Codex only | Adversarial only | PR comment}
+- **Source**: {Human | Opus + Codex (일치) | Opus only | Codex only | Adversarial only | PR comment}
 - **Decision**: {ACCEPT | REJECT | DEFER}
 - **Evidence**:
   - files_read: `{파일:라인범위}`

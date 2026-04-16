@@ -263,20 +263,17 @@ focus_text 생성:
 - `--respond --source=pr` → GitHub PR 코멘트를 `gh api`로 수집
 - 리포트가 없으면: "대응할 리뷰 리포트가 없습니다. 먼저 `/deep-review`를 실행하세요."
 
+**참고**: `--source=pr`과 `REPORT_PATH`는 상호 배타적이다. 둘 다 지정하면 `--source=pr`이 우선하고 `REPORT_PATH`는 무시된다.
+
 **리포트 확인 (같은 날 덮어쓰기 방지)**:
 리포트 로드 후, 사용자에게 Summary(Verdict, Review Mode, Issues 요약)를 표시하고 "이 리포트에 대응하시겠습니까?" 확인을 받는다. 기존 리뷰 리포트가 날짜 기반(`{YYYY-MM-DD}-review.md`)이므로, 같은 날 재실행 시 덮어쓰기될 수 있다. 확인 단계를 통해 잘못된 리포트에 대응하는 것을 방지한다.
 
-### 2. Recurring Findings 확인
-
-`.deep-review/recurring-findings.json` 존재 시:
-- 로드된 리포트의 항목들을 taxonomy 7개 카테고리로 LLM 분류
-- 분류된 카테고리가 recurring findings에 3회 이상이면 경고 표시 (SKILL.md 참조)
-
-### 3. receiving-review 스킬 실행
+### 2. receiving-review 스킬 실행
 
 로드된 `receiving-review` 스킬의 Phase 1~6을 실행합니다.
+Recurring findings 분류 및 경고는 스킬 내부 Phase 1(READ)에서 처리됩니다.
 
-### 4. Response 리포트 저장
+### 3. Response 리포트 저장
 
 `.deep-review/responses/` 디렉토리가 없으면 생성:
 ```bash
@@ -285,7 +282,7 @@ mkdir -p .deep-review/responses
 
 Response 리포트를 `.deep-review/responses/{YYYY-MM-DD}-{HHmmss}-response.md`에 저장.
 
-### 5. Re-review 제안
+### 4. Re-review 제안
 
 "대응이 완료되었습니다. `/deep-review`를 재실행하여 변경사항을 검증하시겠습니까?"
 
