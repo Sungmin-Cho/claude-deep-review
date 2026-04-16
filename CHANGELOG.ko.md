@@ -2,6 +2,19 @@
 
 [English](./CHANGELOG.md) | **한국어**
 
+## [1.3.0] — 2026-04-16
+
+### 추가
+- **Stage 5: Receiving Review** — 리뷰 피드백 증거 기반 대응 프로토콜. READ → UNDERSTAND → VERIFY → EVALUATE → RESPOND → IMPLEMENT 6단계 워크플로우로 맹목적 동의를 차단하고 모든 판단에 코드 증거를 첨부.
+- **`/deep-review --respond`** — 대응 모드 진입. 가장 최근 리뷰 리포트를 자동 로드하거나 경로를 직접 지정.
+- **`/deep-review --respond --source=pr`** — GitHub PR 리뷰 코멘트에 `gh api`를 통해 대응. 인라인 코멘트에는 스레드 답글.
+- **`receiving-review` 스킬** — source 신뢰도 매트릭스, 금지 표현 차단, 합리화 탐지로 대응 프로토콜을 가이드.
+- **Response Report** — 수락/반박/보류 결정을 evidence와 함께 구조화하여 `.deep-review/responses/`에 저장.
+- **Recurring Findings 연동** — 대응 항목이 3회 이상 반복된 패턴과 일치하면 자동 경고.
+
+### 변경
+- **Stage 4 Verdict 행동** — `REQUEST_CHANGES` 시 3가지 선택지 제공: (1) 증거 기반 대응 (기본 추천), (2) codex:rescue 위임, (3) 수동 처리. 기존에는 codex:rescue만 제안.
+
 ## [1.2.0] — 2026-04-14
 
 ### 추가
