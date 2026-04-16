@@ -16,6 +16,7 @@ user-invocable: false
 - `references/codex-integration.md` — Codex 교차 검증
 - `references/contract-schema.md` — Sprint Contract 스키마
 - `references/report-format.md` — 리포트 형식
+- `../receiving-review/SKILL.md` — 리뷰 피드백 대응 프로토콜 (Stage 5)
 
 ## 4단계 파이프라인
 
@@ -85,7 +86,11 @@ user-invocable: false
 2. 교차 검증 합성 (`codex-integration.md` 참조)
 3. Verdict 결정: APPROVE / REQUEST_CHANGES / CONCERN
 4. 리포트 생성: `.deep-review/reports/{날짜}-review.md`
-5. REQUEST_CHANGES 시 + Codex 있으면: "codex:rescue로 수정을 위임하시겠습니까?" 제안
+5. REQUEST_CHANGES 시:
+   "대응 방법을 선택하세요:"
+   (1) 증거 기반 대응 시작 (`/deep-review --respond`) ← 기본 추천
+   (2) codex:rescue로 수정 위임 (Codex 설치 시에만 표시)
+   (3) 수동으로 처리
 
 ## config.yaml 스키마
 
