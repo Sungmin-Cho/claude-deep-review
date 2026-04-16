@@ -39,17 +39,20 @@ In the 2×2 matrix:
 | `/deep-review` | Review current changes with an independent Opus subagent |
 | `/deep-review --contract` | Sprint Contract-based structural verification |
 | `/deep-review --entropy` | Entropy scan (duplicates, pattern drift, naming mismatches) |
+| `/deep-review --respond` | Respond to review findings with evidence-based protocol |
+| `/deep-review --respond --source=pr` | Respond to GitHub PR review comments |
 | `/deep-review init` | Initialize per-project review rules interactively |
 
 ## Review Pipeline
 
-Deep Review runs a 4-stage pipeline on every invocation:
+Deep Review runs a 4-stage pipeline on every invocation, with an optional Stage 5 for responding to findings:
 
 ```
 Stage 1: Collect      — Detect environment, gather diff
 Stage 2: Contract     — Load Sprint Contract if present
 Stage 3: Deep Review  — Spawn Opus subagent in background (+ Codex if available)
 Stage 4: Verdict      — Synthesize findings, emit APPROVE / CONCERN / REQUEST_CHANGES
+Stage 5: Respond      — Evidence-based response to findings (via --respond)
 ```
 
 ### Stage 1: Collect
@@ -101,6 +104,45 @@ The agent evaluates 5 criteria:
 | All pass | `APPROVE` |
 
 Report is saved to `.deep-review/reports/{YYYY-MM-DD}-review.md`.
+
+## Receiving Review (Stage 5)
+
+When Stage 4 returns `REQUEST_CHANGES`, Deep Review offers three options:
+
+1. **Evidence-based response** (`/deep-review --respond`) — recommended
+2. **Delegate to codex:rescue** — when Codex is installed
+3. **Handle manually**
+
+### 6-Phase Response Protocol
+
+The `--respond` flag activates a structured response workflow:
+
+| Phase | Action | Output |
+|-------|--------|--------|
+| READ | Read all feedback items without reacting | Item list with severity and source |
+| UNDERSTAND | Restate each requirement technically | Restated requirements (no gratitude expressions) |
+| VERIFY | Cross-check against codebase | Evidence object (files, grep, tests, blame) |
+| EVALUATE | Judge by source trust level | Accept/reject/defer decision per item |
+| RESPOND | Accept with fix or reject with evidence | Code changes or documented rejection |
+| IMPLEMENT | Apply fixes by severity priority | Tested changes, committed by severity group |
+
+### Source Trust Matrix
+
+| Source | Default Trust | Verification Level |
+|--------|--------------|-------------------|
+| Human (user) | High | Implement after understanding, ask only if scope is unclear |
+| deep-review Opus | Medium | Codebase cross-verification required |
+| Codex review | Medium | Codebase cross-verification required |
+| Codex adversarial | Low | Thorough code-evidence verification required |
+| PR comment (external) | Low | 5-point external reviewer checklist applied |
+
+### PR Comment Response (`--source=pr`)
+
+`/deep-review --respond --source=pr` collects GitHub PR comments via `gh api` and applies the same 6-phase protocol. Inline comments receive threaded replies; general comments receive issue-level replies.
+
+### Response Report
+
+Each response session produces a structured report at `.deep-review/responses/{timestamp}-response.md` documenting every accept/reject/defer decision with evidence.
 
 ## Cross-Model Verification
 
