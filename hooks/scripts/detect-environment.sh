@@ -20,6 +20,12 @@ echo "is_git=true"
 
 # semver 기반 최신 codex-companion.mjs 선택 (POSIX 호환, `sort -V` 미지원 환경 대응).
 # awk로 zero-padded 정렬 키를 만들어 일반 `sort`로 처리 → macOS 구버전/BusyBox에서도 안정적.
+#
+# 한계:
+# - pre-release 식별자 처리 안 됨: `1.2.0-rc.1` 과 `1.2.0` 이 같은 정렬 키(000000001.000000002.000000000)
+#   를 가져 `tail -1`이 filesystem-dependent한 순서를 따른다. Codex companion이 pre-release 버전을
+#   실제로 배포하면 명시적 우선순위(정식 > pre-release) 비교를 추가해야 함.
+# - 구버전 BSD awk(macOS 10.14 이하)에서 `+0`이 NaN을 반환할 여지가 있음. 현재 macOS(Darwin 22+)는 OK.
 select_latest_codex_script() {
   ls -d "$HOME/.claude/plugins/cache/openai-codex/codex"/*/scripts/codex-companion.mjs 2>/dev/null \
     | awk -F/ '{

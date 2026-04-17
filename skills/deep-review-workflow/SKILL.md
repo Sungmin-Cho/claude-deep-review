@@ -82,7 +82,7 @@ user-invocable: false
 → 3-way 병렬 백그라운드 실행:
   1. Agent(code-reviewer, model: opus, run_in_background: true) — 독립 리뷰
   2. Bash(node "{codex_companion_path}" review {codex_target_flag}, run_in_background: true) — 코드 리뷰
-  3. Bash(node "{codex_companion_path}" adversarial-review {codex_target_flag} - < "$focus_file", run_in_background: true) — 적대적 리뷰 (focus_text는 stdin; `$focus_file`은 `mktemp -t deep-review-focus.XXXXXX`로 생성한 유니크 경로, `chmod 600` 후 사용, 완료 후 `rm -f` — 고정 경로 `/tmp/deep-review-focus.txt` 사용 금지)
+  3. Bash (run_in_background: true) — adversarial-review를 **단일 Bash 호출 내에 inline**으로 실행한다. mktemp 생성 → here-doc으로 focus_text 주입 → `_timeout 300 node ... adversarial-review ... - < "$focus_file"` 호출 → 종료 후 `rm -f` 정리. 별도 Bash에 `$focus_file`을 넘기면 subshell 경계에서 unset되므로 **반드시 같은 Bash command 문자열 안에서 완결**. 상세 예제는 `commands/deep-review.md` Stage 3 참조. mktemp 경로는 `"${TMPDIR:-/tmp}/deep-review-focus.XXXXXX"` 형식 — 고정 경로 사용 금지.
 
 {codex_target_flag}: clean 또는 WIP 커밋 후 → `--base {review_base}`, dirty tree → `--uncommitted`.
 **untracked-only**는 git diff가 비어 Codex가 대상을 못 본다 — 기본적으로 Codex skip (Opus 단독), 명시 요청 시 `git add -N` intent-to-add 후 `--uncommitted`, 리뷰 완료 후 `git reset HEAD <files>`로 원복 (자세한 절차는 commands/deep-review.md 참조).

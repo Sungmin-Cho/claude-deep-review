@@ -14,9 +14,9 @@
 
 > **"Good catch" 사용 규칙**:
 > - ❌ `"Good catch!"` (단독) — 내용 없는 인사로 취급, 금지.
-> - ❌ `"Good catch, thanks!"` — 감사 표현 포함, 금지.
-> - ✅ `"Good catch — null 체크 누락이 맞습니다. src/foo.ts:45 에서 수정."` — 구체적 이슈 + 수정 위치 포함. 허용.
-> - 핵심은 "캐치한 내용을 기술적으로 재진술"해야 한다는 것. 대시 뒤에 구체 내용이 없으면 금지 표현과 동일.
+> - ❌ `"Good catch, thanks!"` — comma는 **사회적 filler**(감사 표현)를 도입하므로 금지.
+> - ✅ `"Good catch — null 체크 누락이 맞습니다. src/foo.ts:45 에서 수정."` — dash는 **기술적 clause**를 도입하고, 뒤따르는 문장이 "지적의 내용 + 수정 위치"로 구성되어 허용.
+> - **핵심 원칙**: 판정 기준은 dash/comma가 아니라 **뒤따르는 내용이 기술적 clause인지 사회적 filler인지**다. Dash가 쓰였더라도 뒤에 "thanks for catching" 같은 사회적 clause만 있으면 금지 표현과 동일하게 취급한다. 문장 부호는 보조 신호일 뿐 마법 토큰이 아니다.
 | ANY gratitude expression | 대응이 아닌 사교 행위 | 기술적 재진술 또는 코드 변경 |
 | "Let me implement that now" | 검증 전 구현 약속 | VERIFY 단계 먼저 실행 |
 | "I'll fix that right away" | 위와 동일 | VERIFY 단계 먼저 실행 |

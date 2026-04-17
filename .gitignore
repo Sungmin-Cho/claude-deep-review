@@ -8,6 +8,12 @@
 # README/CHANGELOG로 충분합니다. 공개 저장소에 내부 문서를 포함하지 않기 위해
 # 전체를 제외합니다.
 #
+# ⚠️ 정책 확장 시:
+# - 공개하고 싶은 아키텍처 문서(ADR 등)가 생기면 `.deep-review/journeys/` 하위에
+#   두거나, `.gitignore`를 좁혀 `docs/internal/`만 ignore하는 식으로 세분화하세요.
+# - 절대로 `docs/`를 blanket unignore하지는 마세요 — 과거 `docs/` 전체가
+#   tracked되던 시절에 내부 backlog가 실수로 공개된 적이 있어 결정된 정책입니다.
+#
 # 플러그인을 "사용"하는 프로젝트의 .gitignore 권고는 `/deep-review init`이
 # 대화형으로 제안합니다 (commands/deep-review.md 의 init 모드 Step 8 참고).
 

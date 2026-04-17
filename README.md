@@ -142,7 +142,7 @@ The `--respond` flag activates a structured response workflow:
 
 ### Response Report
 
-Each response session produces a structured report at `.deep-review/responses/{timestamp}-response.md` documenting every accept/reject/defer decision with evidence.
+Each response session produces a structured report at `.deep-review/responses/{YYYY-MM-DD}-{HHmmss}-response.md` documenting every accept/reject/defer decision with evidence.
 
 ## Cross-Model Verification
 
@@ -286,7 +286,7 @@ Runtime state, auto-created on first run:
 review_model: opus       # opus | sonnet
 codex_notified: false    # whether the Codex install hint has been shown
 last_review: null        # timestamp of last review (ISO8601)
-app_qa:                  # reserved for future App QA mode (v1.1 placeholder)
+app_qa:                  # reserved for future App QA mode
   last_command: null
   last_url: null
 ```

@@ -15,7 +15,7 @@ Addresses all findings from the ultrareview audit (`.deep-review/reports/2026-04
 - **`config.yaml` updates via `Edit` tool only**: preserves user-modified fields (`review_model`, `app_qa.*`) and unknown keys; `last_review` is now explicitly updated with ISO8601 after each review.
 
 #### 🟡 Warning
-- **POSIX-safe semver sort** in `detect-environment.sh` (replaces `sort -V`); works on older macOS/BusyBox.
+- **POSIX-safe semver sort** in `detect-environment.sh` (replaces `sort -V`); tested on current macOS (Darwin 25), BusyBox awk coverage not yet verified. Pre-release identifiers are not ordered (documented limitation).
 - **Prompt-injection defense** baked into `code-reviewer` system prompt and PR-comment ingestion (structural wrapping, red-flag strings flagged as security issues).
 - **Report filename adds `{HHmmss}` timestamp** — no more same-day overwrites that corrupted recurring-findings counts.
 - **Large-diff strategy** in Stage 3: threshold-based routing, directory-grouped sequential spawn for >1 MB, explicit size cap warnings.
@@ -35,6 +35,30 @@ Addresses all findings from the ultrareview audit (`.deep-review/reports/2026-04
 - "Good catch!" usage rule clarified with concrete examples.
 - Source Trust Matrix is now explicitly single-sourced in `receiving-review/SKILL.md`; other occurrences reference it.
 - WIP undo hint (`git reset --soft HEAD~1`) surfaced in both READMEs.
+
+### Additional fixes (self-review round 2)
+
+Subsequent `/deep-review` on the v1.3.1 patch branch uncovered bugs *introduced* by the first round. Addressed in the same release:
+
+#### 🔴 Critical
+- **`timeout` portable shim**: `timeout 10` / `timeout 300` wrappers silently fail on macOS (no `timeout(1)` binary). `codex-integration.md` now defines a `_timeout` helper that prefers `gtimeout`/`timeout` and falls back to `perl -e 'alarm …'` (bundled with macOS). Avoids always-false preflight that downgraded every cross-model review to 1-way.
+- **`$focus_file` subshell scoping**: the staged `mktemp` → `Write` → `Bash` workflow in v1.3.1 round 1 assumed shell variable persistence across separate `Bash` tool calls — it doesn't. Replaced with a single inline `Bash` command (here-doc + `_timeout 300 node …` + `rm -f`). Option B (literal path capture) documented as a longer alternative. `trap EXIT` caveat spelled out.
+
+#### 🟡 Warning
+- **`python3 yaml.safe_load` ImportError guard**: stock macOS python3 has no PyYAML. Contract loader now returns `{"ok": false, "error": "pyyaml-missing", "fallback": "llm-parse"}` instead of a hard failure, and caller is instructed to treat that signal as "LLM fallback" rather than "contract broken".
+- **`mktemp "${TMPDIR:-/tmp}/…"`**: replaces fragile `mktemp -t PREFIX`, which has different semantics on BSD vs GNU.
+- **WIP sensitive-file warning** is now state-neutral (staged/unstaged/untracked all warned identically).
+- **`failed-postings.json` rolling ledger** defines cross-session aggregation for the 3-strike PR-comment retry rule.
+- **`--qa` Argument Dispatch branch** added so the "future release" message actually fires instead of falling through to review mode.
+- **`argument-hint` expresses mutual exclusion** between `REPORT_PATH` and `--source=pr`.
+- **EN README dropped `(v1.1 placeholder)`** (KO had already been updated).
+- **EN/KO README filename placeholders** changed from `{timestamp}` to `{YYYY-MM-DD}-{HHmmss}` for consistency.
+- **`.gitignore` policy comment** warns against blanket unignoring `docs/`; suggests `.deep-review/journeys/` or `docs/internal/` for internal-but-tracked docs.
+
+#### ℹ️ Info
+- **Injection severity unified**: PR-comment injection attempts are now flagged as `security` / 🔴 `SECURITY_ESCALATION` (matching the `code-reviewer` agent), not `DEFER`.
+- **`detect-environment.sh` semver limitations documented**: pre-release identifiers are not ordered; older BSD awk `+0` caveat noted.
+- **`forbidden-patterns.md` "Good catch" rationale rephrased**: technical clause vs. social filler, punctuation is not magic.
 
 ## [1.3.0] — 2026-04-16
 
