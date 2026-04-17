@@ -56,6 +56,19 @@ user-invocable: false
 - Case C: "3개 리뷰어(Opus, Codex review, Codex adversarial)를 백그라운드에서 실행합니다. 완료되면 결과를 합성하여 알려드리겠습니다."
 코드 경로 단일화를 위해 단독 리뷰어(Case A/B)에서도 백그라운드로 실행한다.
 
+**대용량 diff 처리 (Agent prompt 크기 관리)**
+리뷰어 spawn 전 diff 크기를 측정하고 임계치를 넘으면 전략을 조정한다:
+1. 측정: `Bash({ command: "git diff {base}..HEAD | wc -c" })`로 바이트 수 확인
+2. 임계치:
+   - `< 200 KB` → 전체 diff를 agent prompt에 포함 (기본 경로)
+   - `200 KB ~ 1 MB` → 파일 목록을 경로·변경라인 요약만 포함하고, agent가 필요한 파일을 `Read`로 직접 읽도록 지시 (이미 Read tool 보유)
+   - `> 1 MB` → 자동 분할 방식으로 전환:
+     a. `rules.yaml`의 `architecture.layers` 또는 디렉토리 트리에서 1차 그룹핑
+     b. 그룹별로 code-reviewer agent를 순차 spawn (병렬 시 총합 프롬프트 압박)
+     c. 최종 합성은 그룹별 리포트를 모아 상위에서 merge
+3. `*.min.js`, `*.lock`, `*.generated.*`, `vendor/`, `node_modules/` 외에도 300 KB를 초과하는 단일 파일은 기본 exclusion 후보로 표시하고 사용자에게 포함 여부 확인.
+4. Agent 호출이 size·token 오류로 실패하면 Stage 4의 "부분 성공" 경로로 처리하고 원인을 리포트에 기록. 무한 재시도 금지 (1회 재시도만 허용).
+
 **Case A: non-git 또는 커밋 0건**
 → Claude Opus 서브에이전트 단독 리뷰 (run_in_background: true)
 
@@ -71,7 +84,8 @@ user-invocable: false
   2. Bash(node "{codex_companion_path}" review {codex_target_flag}, run_in_background: true) — 코드 리뷰
   3. Bash(node "{codex_companion_path}" adversarial-review {codex_target_flag} - < "$focus_file", run_in_background: true) — 적대적 리뷰 (focus_text는 stdin; `$focus_file`은 `mktemp -t deep-review-focus.XXXXXX`로 생성한 유니크 경로, `chmod 600` 후 사용, 완료 후 `rm -f` — 고정 경로 `/tmp/deep-review-focus.txt` 사용 금지)
 
-{codex_target_flag}: clean 또는 WIP 커밋 후 → `--base {review_base}`, dirty tree → `--uncommitted`
+{codex_target_flag}: clean 또는 WIP 커밋 후 → `--base {review_base}`, dirty tree → `--uncommitted`.
+**untracked-only**는 git diff가 비어 Codex가 대상을 못 본다 — 기본적으로 Codex skip (Opus 단독), 명시 요청 시 `git add -N` intent-to-add 후 `--uncommitted`, 리뷰 완료 후 `git reset HEAD <files>`로 원복 (자세한 절차는 commands/deep-review.md 참조).
 
 **커밋되지 않은 상태에서:**
 - 사용자에게 WIP 커밋 제안
@@ -85,7 +99,7 @@ user-invocable: false
    - 리뷰어 실패 시 "미수행" 표시, 성공한 리뷰어만으로 합성
 2. 교차 검증 합성 (`codex-integration.md` 참조)
 3. Verdict 결정: APPROVE / REQUEST_CHANGES / CONCERN
-4. 리포트 생성: `.deep-review/reports/{날짜}-review.md`
+4. 리포트 생성: `.deep-review/reports/{YYYY-MM-DD}-{HHmmss}-review.md` (Bash `date "+%Y-%m-%d-%H%M%S"`로 타임스탬프 생성)
 5. REQUEST_CHANGES 시:
    "대응 방법을 선택하세요:"
    (1) 증거 기반 대응 시작 (`/deep-review --respond`) ← 기본 추천

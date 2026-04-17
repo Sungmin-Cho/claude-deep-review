@@ -103,7 +103,7 @@ The agent evaluates 5 criteria:
 | 🟡 Warnings, split opinion | `CONCERN` |
 | All pass | `APPROVE` |
 
-Report is saved to `.deep-review/reports/{YYYY-MM-DD}-review.md`.
+Report is saved to `.deep-review/reports/{YYYY-MM-DD}-{HHmmss}-review.md` (timestamp prevents same-day overwrite).
 
 ## Receiving Review (Stage 5)
 
@@ -285,11 +285,19 @@ Runtime state, auto-created on first run:
 ```yaml
 review_model: opus       # opus | sonnet
 codex_notified: false    # whether the Codex install hint has been shown
-last_review: null        # timestamp of last review
-app_qa:
+last_review: null        # timestamp of last review (ISO8601)
+app_qa:                  # reserved for future App QA mode (v1.1 placeholder)
   last_command: null
   last_url: null
 ```
+
+**Sharing policy (team usage)**:
+
+- **Per-machine (do not commit)**: `config.yaml`, `reports/`, `responses/`, `entropy-log.jsonl`, `recurring-findings.json` — these represent session output or local runtime state and vary by machine.
+- **Shared via git (tracked)**: `rules.yaml`, `contracts/`, `journeys/` — these encode project knowledge that should be synchronized across the team.
+- `/deep-review init` updates your `.gitignore` to enforce this split automatically.
+
+Updates to `config.yaml` are performed via the `Edit` tool on a single line at a time. This preserves any fields a user has modified manually (e.g., `review_model: sonnet`) and keeps unknown/reserved fields intact.
 
 ### Entropy Scan (`--entropy`)
 

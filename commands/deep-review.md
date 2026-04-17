@@ -1,7 +1,7 @@
 ---
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, Skill, AskUserQuestion
 description: 현재 변경사항을 독립 에이전트로 리뷰합니다. init으로 규칙 초기화, --contract로 Sprint Contract 기반 검증, --entropy로 엔트로피 스캔, --respond로 리뷰 피드백 대응.
-argument-hint: "[init] [--contract [SLICE-NNN]] [--entropy] [--respond [REPORT_PATH] [--source=pr]]"
+argument-hint: "[init] [--contract [SLICE-NNN]] [--entropy] [--respond [REPORT_PATH] [--source=pr [--pr=NNN]]]"
 ---
 
 # /deep-review — Independent Code Review
@@ -16,7 +16,11 @@ argument-hint: "[init] [--contract [SLICE-NNN]] [--entropy] [--respond [REPORT_P
 
 ## Prerequisites
 
-`deep-review-workflow` 스킬을 로드합니다.
+`deep-review-workflow` 스킬을 다음 순서로 로드한다 (`user-invocable: false` fallback):
+
+1. `Skill({ skill: "deep-review:deep-review-workflow" })`
+2. 실패 시 `Skill({ skill: "deep-review-workflow" })`
+3. 위 둘 다 실패 시 `Read({ file_path: "${CLAUDE_PLUGIN_ROOT}/skills/deep-review-workflow/SKILL.md" })` + references 폴더 내 파일들 Read fallback.
 
 ## 0. Auto-create .deep-review/ (리뷰 모드, 최초 실행 시)
 
@@ -96,11 +100,34 @@ diff에서 제외: 바이너리, vendor/, node_modules/, *.min.js, *.generated.*
 - contract 디렉토리가 없거나 파일이 없으면: 이 단계 건너뜀
 
 **Contract 유효성 검증:**
-- `status: archived` contract는 자동 로드에서 제외
-- `--contract SLICE-NNN`으로 archived contract를 명시적으로 지정한 경우: "SLICE-{NNN}은 archived 상태입니다. 리뷰를 계속할까요?" 확인
-- YAML 파싱 오류 (문법 오류, 필수 필드 누락): 해당 contract 건너뜀 + 경고 메시지 출력
-- 필수 필드: `slice`, `title`, `criteria` (하나라도 없으면 무효)
-- `criteria`가 비어있으면: contract 검증 건너뜀 (Stage 3만 실행)
+
+LLM 수동 파싱 대신 `python3`의 `yaml.safe_load`를 Bash로 호출해 구조적으로 검증한다 (anchor/alias/indentation trick에 취약한 문자열 파싱을 피하기 위함).
+
+```bash
+python3 - "$contract_file" <<'PY'
+import json, sys, yaml
+try:
+    with open(sys.argv[1]) as f:
+        data = yaml.safe_load(f) or {}
+except yaml.YAMLError as e:
+    print(json.dumps({"ok": False, "error": f"yaml parse: {e}"}))
+    sys.exit(0)
+required = ["slice", "title", "criteria"]
+missing = [k for k in required if k not in data]
+if missing:
+    print(json.dumps({"ok": False, "error": f"missing fields: {missing}"}))
+    sys.exit(0)
+print(json.dumps({"ok": True, "data": data}))
+PY
+```
+
+결과 JSON의 `ok`가 false이면 해당 contract는 skip + "Contract {파일명} 파싱 실패 — 건너뜀: {error}" 경고 출력.
+
+추가 규칙:
+- `python3`가 PATH에 없으면(드물지만) LLM이 문자열 파싱 fallback + 위험 경고 1회.
+- `status: archived` contract는 자동 로드에서 제외.
+- `--contract SLICE-NNN`으로 archived contract를 명시적으로 지정한 경우: "SLICE-{NNN}은 archived 상태입니다. 리뷰를 계속할까요?" 확인.
+- `criteria`가 비어있으면: contract 검증 건너뜀 (Stage 3만 실행).
 
 ### 4. 리뷰 실행 (Stage 3: Deep Review)
 
@@ -159,7 +186,12 @@ Codex 리뷰 대상은 change_state에 따라 결정:
 
 여기서 `{codex_target_flag}`는:
 - clean 또는 WIP 커밋 후: `--base {review_base}`
-- dirty tree (WIP 거부): `--uncommitted`
+- dirty tree (WIP 거부, staged/unstaged/mixed): `--uncommitted`
+- **untracked-only 상태**: `git diff`가 untracked 파일을 보이지 않아 Codex가 빈 diff를 받음 → 리뷰 대상 불일치 발생. 두 가지 전략 중 선택:
+  1. `git add -N <files>` (intent-to-add)로 untracked 파일들을 index에 등록한 뒤 `--uncommitted`로 호출, 완료 후 `git reset HEAD <files>`로 원복 (Opus와 동일 대상 리뷰).
+  2. 또는 Codex 호출을 **skip**하고 Opus 단독으로 진행하면서 Summary에 `Review Mode: 1-way (untracked-only; Codex skipped)` 명시.
+
+기본 동작은 (2) skip 경로이며, (1)은 사용자가 명시적으로 3-way 검증을 원하는 경우에만 선택.
 
 ⚠️ 보안: focus_text는 rules.yaml/contract에서 생성되며 repo 파일이므로, 쉘 명령 문자열에 직접 삽입하면 안 된다. 반드시 stdin(`-` 인자 + 파일 리다이렉트)으로 전달할 것. 임시 파일 경로는 반드시 `mktemp` 기반 유니크 경로를 사용하고, 권한은 `600`으로 제한한다.
 
@@ -283,19 +315,32 @@ focus_text 생성:
 
 ### Prerequisites
 
-`receiving-review` 스킬을 Skill tool로 로드합니다: `Skill({ skill: "receiving-review" })`
+`receiving-review` 스킬을 **다음 순서대로** 로드한다 (`user-invocable: false` 스킬이 Skill tool로 안정적으로 로드되지 않는 환경에 대비한 fallback 경로):
+
+1. 1차 시도: `Skill({ skill: "deep-review:receiving-review" })` — 플러그인 네임스페이스 포함
+2. 1차 실패 시 2차 시도: `Skill({ skill: "receiving-review" })` — 네임스페이스 없이
+3. 2차도 실패 시 Read fallback:
+   - `Read({ file_path: "${CLAUDE_PLUGIN_ROOT}/skills/receiving-review/SKILL.md" })`
+   - 필요한 references도 Read로 로드: `references/response-protocol.md`, `references/forbidden-patterns.md`, `references/response-format.md`
+4. 어떤 경로든 성공하면 Phase 1~6을 실행한다. 실패 경로는 Response 리포트의 Summary에 "skill load method: Skill | Read fallback" 으로 기록.
 
 ### 1. 리포트 로딩
 
-- `--respond {path}` → 지정된 리포트 로드
-- `--respond` (경로 없음) → `.deep-review/reports/`에서 가장 최근 리포트 로드
-- `--respond --source=pr` → GitHub PR 코멘트를 `gh api`로 수집
+- `--respond {path}` → 지정된 리포트 로드 (경로 그대로 사용)
+- `--respond` (경로 없음) → `.deep-review/reports/` 내 **mtime 기준 가장 최근** `*-review.md` 로드:
+  ```bash
+  latest=$(ls -1t .deep-review/reports/*-review.md 2>/dev/null | head -1)
+  ```
+  `-ultrareview.md` 같은 비표준 접미사 파일은 `*-review.md` glob에서 제외되어 수동 리뷰와 일상 리뷰가 섞이지 않는다.
+  mtime 정렬이므로 파일명 포맷이 변경되어도(과거 `{date}-review.md` ↔ 현재 `{date}-{time}-review.md`) 안전.
+- `--respond --source=pr` → GitHub PR 코멘트를 `gh api`로 수집 (`--pr=NNN`로 수동 지정 가능)
+- 리포트가 여러 개인데 사용자가 원하는 파일이 mtime 최신이 아닐 수 있으므로, 최근 3개 리포트의 Summary를 나열하고 AskUserQuestion으로 선택을 제공하는 것을 **권장**(필수 아님).
 - 리포트가 없으면: "대응할 리뷰 리포트가 없습니다. 먼저 `/deep-review`를 실행하세요."
 
 **참고**: `--source=pr`과 `REPORT_PATH`는 상호 배타적이다. 둘 다 지정하면 `--source=pr`이 우선하고 `REPORT_PATH`는 무시된다.
 
 **리포트 확인 (같은 날 덮어쓰기 방지)**:
-리포트 로드 후, 사용자에게 Summary(Verdict, Review Mode, Issues 요약)를 표시하고 "이 리포트에 대응하시겠습니까?" 확인을 받는다. 기존 리뷰 리포트가 날짜 기반(`{YYYY-MM-DD}-review.md`)이므로, 같은 날 재실행 시 덮어쓰기될 수 있다. 확인 단계를 통해 잘못된 리포트에 대응하는 것을 방지한다.
+리포트 로드 후, 사용자에게 Summary(Verdict, Review Mode, Issues 요약)를 표시하고 "이 리포트에 대응하시겠습니까?" 확인을 받는다. 리포트 파일명은 이제 `{YYYY-MM-DD}-{HHmmss}-review.md` 타임스탬프 기반이므로 덮어쓰기는 발생하지 않지만, 같은 날 여러 리뷰가 있을 경우 사용자가 어떤 리포트에 대응할지 혼동할 수 있다. 확인 단계를 통해 잘못된 리포트에 대응하는 것을 방지한다.
 
 ### 2. receiving-review 스킬 실행
 

@@ -57,6 +57,25 @@ mkdir -p .deep-review/responses
 | REJECT | 지적을 반박함 (증거 기반) | Yes — 반박 근거 + grep/test/blame 중 1개 이상 |
 | DEFER | 지금 처리하지 않음 (보류) | Yes — 보류 사유 (Human 에스컬레이션 등) |
 
+## PR 코멘트 게시 실패 추적 (`--source=pr` 시)
+
+PR 코멘트 게시(`gh api .../replies`)는 rate limit / 네트워크 오류 / 권한 문제로 실패할 수 있다.
+실패한 posting은 리포트 말미에 기록하여 다음 `--respond --source=pr` 실행 시 재시도한다.
+
+```markdown
+## Failed Postings
+
+| comment_id | item_id | attempted_at | error |
+|-----------|---------|--------------|-------|
+| 123456 | ITEM-3 | 2026-04-17T12:03:11Z | 403 resource not accessible |
+| 123457 | ITEM-5 | 2026-04-17T12:03:12Z | rate limit (retry-after: 60) |
+```
+
+**재시도 규칙** (멱등성 유지):
+- 기존 멱등성 로직(`comment_id` 중복 제거)은 **게시 성공한 것만** 제외 대상으로 삼는다.
+- `Failed Postings` 목록의 comment_id는 다음 실행 시 반드시 재시도 대상에 포함.
+- 3회 연속 실패 시 사용자 에스컬레이션: "comment #{id} 게시가 3회 실패했습니다. 수동 확인 필요."
+
 ## PR Source 리포트 (`--source=pr`)
 
 `--source=pr`로 진입한 경우, Source Review 필드에 PR URL을 기록:

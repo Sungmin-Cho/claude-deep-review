@@ -103,7 +103,7 @@ diff 제외 대상: 바이너리, `vendor/`, `node_modules/`, `*.min.js`, `*.gen
 | 🟡 Warning, 의견 분리 | `CONCERN` |
 | 전원 통과 | `APPROVE` |
 
-리포트는 `.deep-review/reports/{YYYY-MM-DD}-review.md`에 저장됩니다.
+리포트는 `.deep-review/reports/{YYYY-MM-DD}-{HHmmss}-review.md`에 저장됩니다 (같은 날 덮어쓰기 방지).
 
 ## Receiving Review (Stage 5)
 
@@ -271,11 +271,19 @@ deep-work 세션 receipt에 `health_report` 필드가 있으면 리뷰 컨텍스
 ```yaml
 review_model: opus       # opus | sonnet
 codex_notified: false    # Codex 설치 안내 표시 여부
-last_review: null        # 마지막 리뷰 시각
-app_qa:
+last_review: null        # 마지막 리뷰 시각 (ISO8601)
+app_qa:                  # App QA 모드(향후 릴리스 예정) 예약 필드
   last_command: null
   last_url: null
 ```
+
+**공유 정책 (팀 사용 시)**:
+
+- **머신별 (커밋 금지)**: `config.yaml`, `reports/`, `responses/`, `entropy-log.jsonl`, `recurring-findings.json` — 세션 출력/로컬 runtime 상태로 머신마다 다르다.
+- **팀 공유 (tracked)**: `rules.yaml`, `contracts/`, `journeys/` — 프로젝트 지식으로 팀 간 동기화 필요.
+- `/deep-review init`이 이 구분을 `.gitignore`에 자동 반영한다.
+
+`config.yaml`의 필드 변경은 `Edit` tool로 한 줄만 교체한다. 사용자가 수동 설정한 다른 필드(`review_model: sonnet` 등)와 예약 필드가 사라지지 않도록 보호하기 위함.
 
 ### 엔트로피 스캔 (`--entropy`)
 

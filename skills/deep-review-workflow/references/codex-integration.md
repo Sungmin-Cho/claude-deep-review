@@ -15,8 +15,14 @@
 
 Codex 3-way 리뷰 진입 전 반드시 확인:
 1. codex_plugin=true (환경 감지 스크립트 결과)
-2. 첫 번째 Codex 호출 시 실패하면 즉시 fallback — silent degradation 금지
-3. 리포트에 각 리뷰어의 실행 상태를 명시 (성공/실패/미수행)
+2. **가벼운 dry-run 호출로 Codex 동작 확인**:
+   `Bash({ command: 'timeout 10 node "{codex_companion_path}" --help >/dev/null 2>&1 && echo OK || echo FAIL', run_in_background: false })`
+   - `OK` → 정상, 3-way 리뷰 진행
+   - `FAIL` 또는 timeout → Codex를 "미수행"으로 표시하고 Opus 단독으로 즉시 fallback (silent degradation 금지)
+3. **실제 리뷰 호출 timeout**: review/adversarial-review 각각 `timeout 300` (5분) 래퍼로 감싸기.
+   초과 시 해당 리뷰어는 "미수행" 처리.
+4. 리포트에 각 리뷰어의 실행 상태를 명시 (`success` / `failed: <사유>` / `timeout` / `not_attempted`).
+5. 3개 중 2개 실패해도 남은 1개로 합성 진행 (N-way synthesis, 아래 표 참조).
 
 ## 3-way 병렬 리뷰
 
@@ -74,3 +80,17 @@ Codex 플러그인 미설치 시 (codex_plugin=false):
 | 2/3 일치 | 중간 🟡 | CONCERN (사람에게 에스컬레이션) |
 | 1/3 단독 | 낮음 | 참고 사항으로 표시 |
 | 0/3 | 안전 🟢 | APPROVE |
+
+### N-way 합성 (일부 리뷰어 미수행)
+
+리뷰어가 실패·timeout·미설치 등으로 실제 실행된 개수(N)가 3 미만일 때:
+
+| 실제 실행 | 일치 패턴 | 처리 |
+|-----------|-----------|------|
+| N=2 | 2/2 일치 | 🔴 높음 → REQUEST_CHANGES |
+| N=2 | 1/2 단독 | 🟡 CONCERN (에스컬레이션) |
+| N=2 | 0/2 | 🟢 APPROVE |
+| N=1 | 1/1 지적 | 🟡 단독 — 리포트에 "단일 리뷰어" 주의 표시 후 CONCERN |
+| N=1 | 0/1 | 🟢 APPROVE (단, "단일 리뷰어"로 표기) |
+
+리포트의 Summary에 `Review Mode: {N-way, executed=[reviewer list]}`로 실제 구성을 명시.
