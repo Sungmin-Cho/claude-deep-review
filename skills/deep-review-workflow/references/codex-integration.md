@@ -49,7 +49,7 @@ Codex 3-way 리뷰 진입 전 반드시 확인:
 5. 3개 중 2개 실패해도 남은 1개로 합성 진행 (N-way synthesis, 아래 표 참조).
 
 > macOS: Homebrew `coreutils`로 `gtimeout`/`timeout`을 설치하면 perl fallback 없이 동작한다. `brew install coreutils` 권장. shim이 두 케이스를 모두 처리하므로 사전 설치 여부와 무관하게 안전.
-> 향후 `hooks/scripts/timeout-shim.sh` 같은 독립 파일로 분리하여 `source`하는 패턴으로 개선하면 command string이 짧아진다 (v1.4 백로그 후보).
+> 향후 `hooks/scripts/timeout-shim.sh` 같은 독립 파일로 분리하여 `source`하는 패턴으로 개선하면 command string이 짧아진다 (v1.3.2 백로그 후보 — `docs/backlog-2026-04-17.md` 항목 2).
 
 ## 3-way 병렬 리뷰
 
