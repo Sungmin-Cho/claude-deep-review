@@ -65,9 +65,19 @@ bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/detect-environment.sh
 
 **git + staged/unstaged/mixed:**
 - 해당 상태에 맞는 diff 수집 (staged: `--cached`, unstaged: `git diff`, mixed: `git diff HEAD`)
-- AskUserQuestion으로 WIP 커밋 제안: "Codex 교차 검증을 위해 WIP 커밋을 생성할까요?"
-  - 수락: `git add -A && git commit -m "wip: deep-review checkpoint"`
-  - 거부: diff 기반으로 진행 (Claude Opus + 가능하면 Codex도)
+- WIP 커밋 제안 전에 포함될 파일 목록과 민감 파일 경고를 먼저 보여줌:
+
+  1. `Bash({ command: "git status --short" })`로 대상 파일 목록을 사용자에게 표시
+  2. 민감 파일 패턴(`.env*`, `**/credentials*`, `**/*secret*`, `**/*.key`, `**/*.pem`) 탐지 시 **강한 경고**:
+     "다음 untracked 파일이 감지되었습니다. 실수로 커밋되면 유출될 수 있습니다: {파일 목록}. 계속 진행하시겠습니까?"
+  3. AskUserQuestion: "Codex 교차 검증을 위해 WIP 커밋을 생성할까요?"
+     - 옵션 A (수락 — tracked만): `git add -u && git commit -m "wip: deep-review checkpoint"`
+       (tracked 파일의 수정분만 커밋. untracked 파일은 포함하지 않음)
+     - 옵션 B (수락 — 전체): untracked 파일까지 포함하려는 경우, 먼저 파일 목록을 다시 확인시킨 뒤
+       `git add <explicit files> && git commit -m "wip: deep-review checkpoint"` 로 명시적 add
+     - 옵션 C (거부): diff 기반으로 진행 (Claude Opus + 가능하면 Codex도)
+  4. 수락 시 안내: "리뷰 완료 후 `git reset --soft HEAD~1`로 WIP 커밋을 해제할 수 있습니다."
+  5. `git add -A`는 사용하지 않음 — 민감 파일 무분별 스테이징을 방지.
 
 **git + untracked-only:**
 - `git ls-files --others --exclude-standard`로 파일 목록 수집 후 내용 읽기
@@ -138,15 +148,20 @@ Codex 리뷰 대상은 change_state에 따라 결정:
 병렬 백그라운드 실행 (Bash tool 직접 호출):
 - `Bash({ command: 'node "{codex_companion_path}" review {codex_target_flag}', run_in_background: true })`
 - adversarial-review (focus_text는 stdin으로 전달하여 쉘 인젝션 방지):
-  1. Write tool로 focus_text를 임시 파일에 저장 (예: `/tmp/deep-review-focus.txt`)
-  2. `Bash({ command: 'node "{codex_companion_path}" adversarial-review {codex_target_flag} - < /tmp/deep-review-focus.txt', run_in_background: true })`
-  3. 리뷰 완료 후 임시 파일 삭제
+  1. **유니크 임시 파일 생성** (race condition / symlink 공격 방지):
+     ```bash
+     focus_file=$(mktemp -t deep-review-focus.XXXXXX) && chmod 600 "$focus_file"
+     ```
+     이후 단계에서 이 `$focus_file` 경로를 사용한다.
+  2. Write tool로 focus_text를 `$focus_file`에 저장 (경로 고정 사용 금지 — `/tmp/deep-review-focus.txt` 같은 predictable name은 취약하다).
+  3. `Bash({ command: 'node "{codex_companion_path}" adversarial-review {codex_target_flag} - < "$focus_file"', run_in_background: true })`
+  4. 백그라운드 프로세스가 끝나면 `rm -f "$focus_file"`로 삭제. 예외 경로에서도 누락되지 않도록 호출 직후 `trap 'rm -f "$focus_file"' EXIT` 를 함께 설정한다 (동일 쉘에서 가능할 때). 별도 Bash 호출로 삭제하는 경우 Stage 4 완료 스텝에 "임시 focus 파일 정리" 항목을 포함.
 
 여기서 `{codex_target_flag}`는:
 - clean 또는 WIP 커밋 후: `--base {review_base}`
 - dirty tree (WIP 거부): `--uncommitted`
 
-⚠️ 보안: focus_text는 rules.yaml/contract에서 생성되며 repo 파일이므로, 쉘 명령 문자열에 직접 삽입하면 안 된다. 반드시 stdin(`-` 인자 + 파일 리다이렉트)으로 전달할 것.
+⚠️ 보안: focus_text는 rules.yaml/contract에서 생성되며 repo 파일이므로, 쉘 명령 문자열에 직접 삽입하면 안 된다. 반드시 stdin(`-` 인자 + 파일 리다이렉트)으로 전달할 것. 임시 파일 경로는 반드시 `mktemp` 기반 유니크 경로를 사용하고, 권한은 `600`으로 제한한다.
 
 focus_text 생성:
 - rules.yaml이 있으면: 아키텍처 규칙, 엔트로피 규칙에서 추출
@@ -158,7 +173,13 @@ focus_text 생성:
 - false이면 1회 안내:
   - codex_cli=false: "Codex 플러그인이 설치되어 있으면 교차 모델 검증이 가능합니다. 설치: `claude plugin add codex`"
   - codex_cli=true: "Codex CLI가 감지되었지만, 교차 모델 검증에는 Codex Claude Code 플러그인이 필요합니다. 설치: `claude plugin add codex`"
-- `codex_notified: true`로 업데이트
+- `codex_notified`를 true로 업데이트 — **반드시 Edit tool로 해당 라인만 교체** (Write로 전체 덮어쓰기 금지):
+  ```
+  Edit(file_path: ".deep-review/config.yaml",
+       old_string: "codex_notified: false",
+       new_string: "codex_notified: true")
+  ```
+  이유: 사용자가 수정한 다른 필드(`review_model: sonnet`, `last_review`, `app_qa.*` 등)가 Write 전체 덮어쓰기로 silent loss 되는 것을 방지.
 
 ### 5. 합성 및 판정 (Stage 4: Verdict)
 
@@ -180,7 +201,15 @@ focus_text 생성:
    - 🟡만, 의견 분리 → **CONCERN**
    - 🟢만 → **APPROVE**
 
-3. 리포트 저장: `.deep-review/reports/{YYYY-MM-DD}-review.md`
+3. 리포트 저장: `.deep-review/reports/{YYYY-MM-DD}-{HHmmss}-review.md` (Bash `date "+%Y-%m-%d-%H%M%S"`로 파일명 생성 — 같은 날 재실행 시 덮어쓰기 방지)
+
+3a. `config.yaml`의 `last_review`를 현재 ISO8601 시각으로 업데이트:
+   ```
+   Edit(file_path: ".deep-review/config.yaml",
+        old_string: "last_review: {이전 값 또는 null}",
+        new_string: "last_review: \"{현재 ISO8601}\"")
+   ```
+   이전 값을 먼저 Read로 확인한 후 교체 — 전체 Write 금지 (다른 필드 보존).
 
 4. REQUEST_CHANGES 시:
    "대응 방법을 선택하세요:"
@@ -375,9 +404,21 @@ entropy:
 
 ### 8. .gitignore 업데이트
 
-`.deep-review/reports/`를 .gitignore에 추가할지 사용자에게 확인:
-- 리포트는 보통 커밋할 필요 없음 (일시적)
-- config.yaml과 rules.yaml은 커밋 권장
+`.gitignore`에 아래 블록이 없으면 추가 제안:
+
+```
+# deep-review — runtime 상태 및 로컬 리뷰 출력
+.deep-review/config.yaml
+.deep-review/reports/
+.deep-review/responses/
+.deep-review/entropy-log.jsonl
+.deep-review/recurring-findings.json
+```
+
+**커밋 정책**:
+- **Tracked (팀 공유)**: `rules.yaml`, `contracts/`, `journeys/` — 프로젝트 지식 자산
+- **Untracked (머신별)**: `config.yaml` (runtime 상태), `reports/`, `responses/` (세션별 출력), `entropy-log.jsonl`, `recurring-findings.json` (증적)
+- 사용자가 팀에서 recurring 패턴을 공유하려면 `recurring-findings.json`만 선택적으로 tracked 가능
 
 ### 9. 완료 메시지
 

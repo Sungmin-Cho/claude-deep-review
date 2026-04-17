@@ -1,2 +1,18 @@
+# deep-review 플러그인 소스 레포(공개) 전용 ignore 규칙
+#
+# 이 레포는 플러그인 자체의 소스이며, 플러그인을 dogfooding 하는 과정에서
+# `.deep-review/`에 로컬 로그(config, reports, responses 등)가 자동 생성됩니다.
+# 공개 레포에 해당 로컬 로그를 커밋하지 않도록 전체를 제외합니다.
+#
+# `docs/` 는 설계·플랜·백로그 등 내부 개발 문서이며, 플러그인 사용자에게는
+# README/CHANGELOG로 충분합니다. 공개 저장소에 내부 문서를 포함하지 않기 위해
+# 전체를 제외합니다.
+#
+# 플러그인을 "사용"하는 프로젝트의 .gitignore 권고는 `/deep-review init`이
+# 대화형으로 제안합니다 (commands/deep-review.md 의 init 모드 Step 8 참고).
+
+.deep-review/
 docs/
-.deep-review/config.yaml
+
+# 운영체제
+.DS_Store

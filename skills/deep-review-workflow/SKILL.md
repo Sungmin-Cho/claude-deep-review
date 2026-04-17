@@ -69,7 +69,7 @@ user-invocable: false
 → 3-way 병렬 백그라운드 실행:
   1. Agent(code-reviewer, model: opus, run_in_background: true) — 독립 리뷰
   2. Bash(node "{codex_companion_path}" review {codex_target_flag}, run_in_background: true) — 코드 리뷰
-  3. Bash(node "{codex_companion_path}" adversarial-review {codex_target_flag} - < /tmp/deep-review-focus.txt, run_in_background: true) — 적대적 리뷰 (focus_text는 stdin)
+  3. Bash(node "{codex_companion_path}" adversarial-review {codex_target_flag} - < "$focus_file", run_in_background: true) — 적대적 리뷰 (focus_text는 stdin; `$focus_file`은 `mktemp -t deep-review-focus.XXXXXX`로 생성한 유니크 경로, `chmod 600` 후 사용, 완료 후 `rm -f` — 고정 경로 `/tmp/deep-review-focus.txt` 사용 금지)
 
 {codex_target_flag}: clean 또는 WIP 커밋 후 → `--base {review_base}`, dirty tree → `--uncommitted`
 
@@ -98,8 +98,14 @@ user-invocable: false
 # .deep-review/config.yaml
 review_model: opus              # opus | sonnet (리뷰어 모델)
 codex_notified: false           # Codex 설치 안내 1회 표시 여부
-last_review: null               # 마지막 리뷰 시각
-app_qa:                         # Mode 2 (v1.1에서 구현)
+last_review: null               # 마지막 리뷰 시각 (ISO8601)
+app_qa:                         # Mode 2 (향후 릴리스에서 구현 예정 — dead field 허용)
   last_command: null
   last_url: null
 ```
+
+### 업데이트 원칙 (필드 보존)
+
+- **필드 변경은 Edit tool로 해당 라인만 교체**. `Write`로 전체 파일을 덮어쓰지 않는다 — 사용자가 수동으로 수정했을 수 있는 다른 필드가 사라진다.
+- 스키마에 없는 추가 필드가 있어도 삭제하지 않는다 (사용자의 확장을 존중).
+- YAML 파서 없이 텍스트 매칭으로 수정하므로 `old_string`에 전/후 컨텍스트를 충분히 포함해 유일성을 보장.
