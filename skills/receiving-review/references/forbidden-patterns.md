@@ -11,6 +11,12 @@
 | "Excellent feedback!" | 위와 동일 | 생략하고 바로 행동 |
 | "Thanks for catching that!" | 감사보다 수정이 중요 | "Fixed in [위치]." |
 | "Good catch!" (단독 사용) | 단독 사용 시 빈 반응 | "Good catch — [구체적 이슈]. Fixed in [위치]." |
+
+> **"Good catch" 사용 규칙**:
+> - ❌ `"Good catch!"` (단독) — 내용 없는 인사로 취급, 금지.
+> - ❌ `"Good catch, thanks!"` — 감사 표현 포함, 금지.
+> - ✅ `"Good catch — null 체크 누락이 맞습니다. src/foo.ts:45 에서 수정."` — 구체적 이슈 + 수정 위치 포함. 허용.
+> - 핵심은 "캐치한 내용을 기술적으로 재진술"해야 한다는 것. 대시 뒤에 구체 내용이 없으면 금지 표현과 동일.
 | ANY gratitude expression | 대응이 아닌 사교 행위 | 기술적 재진술 또는 코드 변경 |
 | "Let me implement that now" | 검증 전 구현 약속 | VERIFY 단계 먼저 실행 |
 | "I'll fix that right away" | 위와 동일 | VERIFY 단계 먼저 실행 |

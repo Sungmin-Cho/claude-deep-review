@@ -188,7 +188,7 @@ Deep Review works in any environment. Review strategy adjusts automatically:
 | `mixed` | Both staged + unstaged | `git diff HEAD` |
 | `untracked-only` | New files, not staged | Read untracked files directly |
 
-For `staged`, `unstaged`, and `mixed` states, Deep Review offers to create a WIP commit so Codex cross-verification can run against a real commit base.
+For `staged`, `unstaged`, and `mixed` states, Deep Review offers to create a WIP commit so Codex cross-verification can run against a real commit base. The WIP prompt previews the file list, warns about sensitive patterns (`.env*`, credentials, keys), and never uses `git add -A`. After the review you can undo the WIP commit with `git reset --soft HEAD~1` (working tree preserved).
 
 Shallow clones (`git clone --depth`) are detected; a `git fetch --unshallow` recommendation is shown and HEAD~1 is used as fallback base.
 

@@ -2,6 +2,40 @@
 
 [English](./CHANGELOG.md) | **한국어**
 
+## [1.3.1] — 2026-04-17
+
+### 수정
+
+ultrareview 감사(`.deep-review/reports/2026-04-17-ultrareview.md`)에서 발견된 모든 항목을 반영했다.
+
+#### 🔴 Critical
+- **공개 플러그인 레포용 `.gitignore`**: `.deep-review/`와 `docs/`를 완전히 ignore (이 레포는 플러그인 소스이며 dogfooding 로그/내부 문서는 공개 대상이 아님). 과거 tracked였던 설계 문서 하나도 untrack. 사용자 프로젝트용 `.gitignore`는 `/deep-review init`이 계속 세분화된 규칙을 제안한다.
+- **WIP 커밋 안전화**: `git add -A` 제거. 제안 전에 파일 목록 미리보기 + 민감 패턴(`.env*`, credentials, key) 경고. 리뷰 후 `git reset --soft HEAD~1` 원복 힌트.
+- **`mktemp` 기반 adversarial focus 파일**: 고정 `/tmp/deep-review-focus.txt` 제거. `chmod 600` + `trap rm -f` 정리. /tmp race / symlink 공격 표면 제거.
+- **`config.yaml` 수정은 `Edit` tool 전용**: 사용자가 수동 설정한 필드(`review_model`, `app_qa.*`)와 미지 필드 보존. `last_review`를 리뷰 완료 시 ISO8601로 명시적 업데이트.
+
+#### 🟡 Warning
+- **POSIX 호환 semver 정렬**을 `detect-environment.sh`에 적용(기존 `sort -V` 대체). 구버전 macOS/BusyBox 호환.
+- **Prompt injection 방어** 문구를 `code-reviewer` system prompt과 PR 코멘트 수집 단계에 추가. 의심 문구는 보안 이슈로 보고.
+- **리뷰 리포트 파일명에 `{HHmmss}` 타임스탬프 추가** — 같은 날 덮어쓰기로 인한 recurring-findings 카운트 오염 제거.
+- **대용량 diff 전략**을 Stage 3에 추가: 크기 기준 라우팅, >1 MB는 디렉토리 그룹 순차 spawn, 300 KB+ 단일 파일 경고.
+- **Codex preflight**를 실제 `timeout 10 node codex-companion --help`로 구체화. 실 호출에는 `timeout 300` 적용. 부분 실행 대비 N-way 합성 표 추가.
+- **`gh pr view`/`gh repo view` 실패 처리** 명시. `--pr=NNN` 수동 지정 추가. `gh api` 부분 실패 시 전체 중단 금지.
+- **Contract YAML**은 `python3 yaml.safe_load` 래퍼로 파싱. 오류 시 해당 contract만 skip.
+- **`--respond`의 "가장 최근"**을 `*-review.md` glob의 mtime으로 정의 (비표준 `-ultrareview.md` 등 제외).
+- **3단계 skill 로딩**: 네임스페이스 Skill → 일반 Skill → `${CLAUDE_PLUGIN_ROOT}/skills/...` Read fallback.
+- **Recurring findings 분류** 단일 소스화(`response-protocol.md` Phase 1). SKILL.md, command는 참조만.
+- **`Failed Postings` 섹션**을 response 리포트에 추가. PR 코멘트 게시 실패 추적 + 3회 연속 실패 시 에스컬레이션.
+- **`untracked-only` + Codex 불일치** 해결: 기본 Opus 단독, 명시 요청 시 `git add -N` intent-to-add 경로.
+- **머신별 vs 팀 공유** 정책을 README(EN/KO)에 문서화.
+
+#### ℹ️ Info
+- `/deep-review --qa`를 "향후 릴리스 예정"으로 명확화 (v1.1 약속 취소). `app_qa.*`는 예약 스키마로 유지.
+- `package.json`에 `"category": "Productivity"` 추가 — `plugin.json`과 정렬.
+- "Good catch!" 사용 규칙에 구체적 허용/금지 예시 추가.
+- Source Trust Matrix 단일 소스를 `receiving-review/SKILL.md`로 명시. 다른 위치는 참조.
+- WIP 원복 힌트(`git reset --soft HEAD~1`)를 양국 README에 노출.
+
 ## [1.3.0] — 2026-04-16
 
 ### 추가
