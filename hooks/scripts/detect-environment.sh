@@ -17,12 +17,35 @@ fi
 echo "is_git=true"
 
 # === 2. 커밋 존재 여부 ===
+
+# semver 기반 최신 codex-companion.mjs 선택 (POSIX 호환, `sort -V` 미지원 환경 대응).
+# awk로 zero-padded 정렬 키를 만들어 일반 `sort`로 처리 → macOS 구버전/BusyBox에서도 안정적.
+#
+# 한계:
+# - pre-release 식별자 처리 안 됨: `1.2.0-rc.1` 과 `1.2.0` 이 같은 정렬 키(000000001.000000002.000000000)
+#   를 가져 `tail -1`이 filesystem-dependent한 순서를 따른다. Codex companion이 pre-release 버전을
+#   실제로 배포하면 명시적 우선순위(정식 > pre-release) 비교를 추가해야 함.
+# - 구버전 BSD awk(macOS 10.14 이하)에서 `+0`이 NaN을 반환할 여지가 있음. 현재 macOS(Darwin 22+)는 OK.
+select_latest_codex_script() {
+  ls -d "$HOME/.claude/plugins/cache/openai-codex/codex"/*/scripts/codex-companion.mjs 2>/dev/null \
+    | awk -F/ '{
+        ver = ""
+        for (i = 1; i <= NF; i++) { if ($i == "codex" && (i+1) <= NF) { ver = $(i+1); break } }
+        n = split(ver, parts, ".")
+        for (j = 1; j <= 3; j++) { if (j > n) parts[j] = 0; else parts[j] = parts[j] + 0 }
+        printf "%010d.%010d.%010d\t%s\n", parts[1], parts[2], parts[3], $0
+      }' \
+    | sort \
+    | tail -1 \
+    | cut -f2-
+}
+
 if ! git rev-parse HEAD >/dev/null 2>&1; then
   echo "has_commits=false"
   echo "change_state=initial"
   codex_plugin="false"
   codex_companion_path=""
-  CODEX_SCRIPT=$(ls -d "$HOME/.claude/plugins/cache/openai-codex/codex"/*/scripts/codex-companion.mjs 2>/dev/null | sort -V | tail -1 || true)
+  CODEX_SCRIPT=$(select_latest_codex_script || true)
   if [ -n "$CODEX_SCRIPT" ] && [ -f "$CODEX_SCRIPT" ]; then
     codex_plugin="true"
     codex_companion_path="$CODEX_SCRIPT"
@@ -121,9 +144,9 @@ fi
 # 5a. Codex 플러그인 감지 + companion 스크립트 경로
 codex_plugin="false"
 codex_companion_path=""
-# NOTE: sort -V는 GNU 확장. macOS에서는 Homebrew coreutils 필요할 수 있음.
-# 실패 시 codex_plugin=false fallback.
-CODEX_SCRIPT=$(ls -d "$HOME/.claude/plugins/cache/openai-codex/codex"/*/scripts/codex-companion.mjs 2>/dev/null | sort -V | tail -1 || true)
+# POSIX 호환 semver 정렬 (select_latest_codex_script 함수 사용).
+# 구버전 macOS/BusyBox의 `sort -V` 미지원 문제를 회피.
+CODEX_SCRIPT=$(select_latest_codex_script || true)
 if [ -n "$CODEX_SCRIPT" ] && [ -f "$CODEX_SCRIPT" ]; then
   codex_plugin="true"
   codex_companion_path="$CODEX_SCRIPT"

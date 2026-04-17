@@ -57,6 +57,52 @@ mkdir -p .deep-review/responses
 | REJECT | 지적을 반박함 (증거 기반) | Yes — 반박 근거 + grep/test/blame 중 1개 이상 |
 | DEFER | 지금 처리하지 않음 (보류) | Yes — 보류 사유 (Human 에스컬레이션 등) |
 
+## PR 코멘트 게시 실패 추적 (`--source=pr` 시)
+
+PR 코멘트 게시(`gh api .../replies`)는 rate limit / 네트워크 오류 / 권한 문제로 실패할 수 있다.
+실패한 posting은 리포트 말미에 기록하여 다음 `--respond --source=pr` 실행 시 재시도한다.
+
+```markdown
+## Failed Postings
+
+| comment_id | item_id | attempted_at | error |
+|-----------|---------|--------------|-------|
+| 123456 | ITEM-3 | 2026-04-17T12:03:11Z | 403 resource not accessible |
+| 123457 | ITEM-5 | 2026-04-17T12:03:12Z | rate limit (retry-after: 60) |
+```
+
+**재시도 규칙** (멱등성 유지):
+- 기존 멱등성 로직(`comment_id` 중복 제거)은 **게시 성공한 것만** 제외 대상으로 삼는다.
+- `Failed Postings` 목록의 comment_id는 다음 실행 시 반드시 재시도 대상에 포함.
+
+**세션 간 집계 (3-strike 판정)**:
+
+`comment_id`별 연속 실패 카운트는 단일 response 리포트에만 기록하면 세션 간 추적이 불가능하다. 다음 중 하나로 명시적 persistence를 구현한다:
+
+- **권장 — 롤링 레저**: `.deep-review/responses/failed-postings.json`을 source of truth로 유지.
+
+  ```json
+  {
+    "updated_at": "2026-04-17T12:34:56Z",
+    "entries": {
+      "<comment_id>": {
+        "attempts": 2,
+        "last_error": "rate limit (retry-after: 60)",
+        "last_attempt_at": "2026-04-17T12:30:11Z",
+        "source_reports": ["2026-04-17-120000-response.md", "2026-04-17-121441-response.md"]
+      }
+    }
+  }
+  ```
+
+  - 재시도 성공 시 해당 `comment_id` 제거.
+  - `attempts >= 3`에 도달하면 사용자 에스컬레이션 + 해당 엔트리 유지 (자동 재시도 중단).
+
+- **대안 — 스캔 방식**: 매 `--source=pr` 실행 시 `.deep-review/responses/*.md`의 모든 `Failed Postings` 테이블을 스캔하여 동일 `comment_id`의 연속 항목 수를 세어 판정. persistence 파일이 필요 없으나, 리포트가 많아질수록 비용이 O(N).
+
+**3-strike 에스컬레이션 메시지**:
+"comment #{id} 게시가 3회 실패했습니다. 마지막 에러: {last_error}. 수동 확인이 필요합니다."
+
 ## PR Source 리포트 (`--source=pr`)
 
 `--source=pr`로 진입한 경우, Source Review 필드에 PR URL을 기록:

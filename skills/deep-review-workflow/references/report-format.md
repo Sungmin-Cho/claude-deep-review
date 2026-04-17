@@ -2,7 +2,10 @@
 
 ## 파일 위치
 
-`.deep-review/reports/{YYYY-MM-DD}-review.md`
+`.deep-review/reports/{YYYY-MM-DD}-{HHmmss}-review.md`
+
+타임스탬프는 리뷰 완료(또는 합성 직전) 시점 기준. 같은 날 여러 번 실행해도
+파일이 충돌하지 않는다. 파일명 생성 예: `date "+%Y-%m-%d-%H%M%S"` → `2026-04-17-115156-review.md`.
 
 ## 구조
 

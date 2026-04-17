@@ -2,6 +2,64 @@
 
 [English](./CHANGELOG.md) | **한국어**
 
+## [1.3.1] — 2026-04-17
+
+### 수정
+
+ultrareview 감사(`.deep-review/reports/2026-04-17-ultrareview.md`)에서 발견된 모든 항목을 반영했다.
+
+#### 🔴 Critical
+- **공개 플러그인 레포용 `.gitignore`**: `.deep-review/`와 `docs/`를 완전히 ignore (이 레포는 플러그인 소스이며 dogfooding 로그/내부 문서는 공개 대상이 아님). 과거 tracked였던 설계 문서 하나도 untrack. 사용자 프로젝트용 `.gitignore`는 `/deep-review init`이 계속 세분화된 규칙을 제안한다.
+- **WIP 커밋 안전화**: `git add -A` 제거. 제안 전에 파일 목록 미리보기 + 민감 패턴(`.env*`, credentials, key) 경고. 리뷰 후 `git reset --soft HEAD~1` 원복 힌트.
+- **`mktemp` 기반 adversarial focus 파일**: 고정 `/tmp/deep-review-focus.txt` 제거. `chmod 600` + `trap rm -f` 정리. /tmp race / symlink 공격 표면 제거.
+- **`config.yaml` 수정은 `Edit` tool 전용**: 사용자가 수동 설정한 필드(`review_model`, `app_qa.*`)와 미지 필드 보존. `last_review`를 리뷰 완료 시 ISO8601로 명시적 업데이트.
+
+#### 🟡 Warning
+- **POSIX 호환 semver 정렬**을 `detect-environment.sh`에 적용(기존 `sort -V` 대체). 현재 macOS(Darwin 25)에서 검증, BusyBox awk는 미검증. pre-release 식별자 순서는 지원하지 않음(한계 명시).
+- **Prompt injection 방어** 문구를 `code-reviewer` system prompt과 PR 코멘트 수집 단계에 추가. 의심 문구는 보안 이슈로 보고.
+- **리뷰 리포트 파일명에 `{HHmmss}` 타임스탬프 추가** — 같은 날 덮어쓰기로 인한 recurring-findings 카운트 오염 제거.
+- **대용량 diff 전략**을 Stage 3에 추가: 크기 기준 라우팅, >1 MB는 디렉토리 그룹 순차 spawn, 300 KB+ 단일 파일 경고.
+- **Codex preflight**를 실제 `timeout 10 node codex-companion --help`로 구체화. 실 호출에는 `timeout 300` 적용. 부분 실행 대비 N-way 합성 표 추가.
+- **`gh pr view`/`gh repo view` 실패 처리** 명시. `--pr=NNN` 수동 지정 추가. `gh api` 부분 실패 시 전체 중단 금지.
+- **Contract YAML**은 `python3 yaml.safe_load` 래퍼로 파싱. 오류 시 해당 contract만 skip.
+- **`--respond`의 "가장 최근"**을 `*-review.md` glob의 mtime으로 정의 (비표준 `-ultrareview.md` 등 제외).
+- **3단계 skill 로딩**: 네임스페이스 Skill → 일반 Skill → `${CLAUDE_PLUGIN_ROOT}/skills/...` Read fallback.
+- **Recurring findings 분류** 단일 소스화(`response-protocol.md` Phase 1). SKILL.md, command는 참조만.
+- **`Failed Postings` 섹션**을 response 리포트에 추가. PR 코멘트 게시 실패 추적 + 3회 연속 실패 시 에스컬레이션.
+- **`untracked-only` + Codex 불일치** 해결: 기본 Opus 단독, 명시 요청 시 `git add -N` intent-to-add 경로.
+- **머신별 vs 팀 공유** 정책을 README(EN/KO)에 문서화.
+
+#### ℹ️ Info
+- `/deep-review --qa`를 "향후 릴리스 예정"으로 명확화 (v1.1 약속 취소). `app_qa.*`는 예약 스키마로 유지.
+- `package.json`에 `"category": "Productivity"` 추가 — `plugin.json`과 정렬.
+- "Good catch!" 사용 규칙에 구체적 허용/금지 예시 추가.
+- Source Trust Matrix 단일 소스를 `receiving-review/SKILL.md`로 명시. 다른 위치는 참조.
+- WIP 원복 힌트(`git reset --soft HEAD~1`)를 양국 README에 노출.
+
+### 추가 수정 (self-review 2차 라운드)
+
+v1.3.1 패치 브랜치에 대해 `/deep-review`를 재실행하자 1차 라운드가 **새로 도입한 버그**가 드러남. 동일 릴리스에 함께 반영:
+
+#### 🔴 Critical
+- **`timeout` portable shim**: 1차 라운드의 `timeout 10` / `timeout 300` 래퍼가 macOS에서 `timeout(1)` 부재로 silently 실패. `codex-integration.md`에 `gtimeout`/`timeout`을 우선 시도하고 없으면 `perl -e 'alarm …'` (macOS 기본 탑재)로 fallback하는 `_timeout` 헬퍼 도입. preflight가 항상 FAIL 반환해 macOS에서 모든 교차 검증이 1-way로 전락하던 문제 해결.
+- **`$focus_file` subshell scoping**: 1차 라운드의 `mktemp → Write → Bash` 3단계 흐름은 쉘 변수가 별개의 `Bash` 호출 간 유지된다는 잘못된 가정 기반. 단일 inline `Bash` 명령(here-doc + `_timeout 300 node …` + `rm -f`)으로 재작성. Option B(리터럴 경로 캡처)도 대안으로 문서화. `trap EXIT` 주의점 명시.
+
+#### 🟡 Warning
+- **`python3 yaml.safe_load` ImportError 가드**: stock macOS python3에 PyYAML 없음. Contract loader가 hard failure 대신 `{"ok": false, "error": "pyyaml-missing", "fallback": "llm-parse"}`를 반환하고, 호출 측은 이를 "LLM fallback" 신호로 취급하도록 명시.
+- **`mktemp "${TMPDIR:-/tmp}/…"`**: macOS/GNU 간 semantics 차이로 취약한 `mktemp -t PREFIX` 대체.
+- **WIP 민감 파일 경고**를 state-neutral 문구로 통일 (staged/unstaged/untracked 모두 동일 경고).
+- **`failed-postings.json` 롤링 레저**: PR 코멘트 3-strike 재시도 룰의 세션 간 집계 경로 명시.
+- **`--qa` Argument Dispatch 분기** 추가 — "향후 릴리스 예정" 메시지가 실제로 나오도록.
+- **`argument-hint`가 상호 배타성** 표현 (`REPORT_PATH | --source=pr`).
+- **영어 README `(v1.1 placeholder)` 제거** (한국어는 이미 수정됨).
+- **양국 README의 파일명 placeholder** `{timestamp}` → `{YYYY-MM-DD}-{HHmmss}` 통일.
+- **`.gitignore` 정책 주석**이 `docs/` blanket unignore를 경고하고 `.deep-review/journeys/` 또는 `docs/internal/`을 대안으로 제시.
+
+#### ℹ️ Info
+- **injection severity 통일**: PR 코멘트 injection 시도를 `DEFER`가 아니라 `security` / 🔴 `SECURITY_ESCALATION`으로 격상 (code-reviewer agent와 일치).
+- **`detect-environment.sh` semver 한계** 주석: pre-release 식별자 미처리, 구버전 BSD awk `+0` 주의.
+- **`forbidden-patterns.md` "Good catch"** 설명 재표현: technical clause vs. social filler, 문장부호는 마법이 아님.
+
 ## [1.3.0] — 2026-04-16
 
 ### 추가

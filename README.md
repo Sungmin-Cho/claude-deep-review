@@ -103,7 +103,7 @@ The agent evaluates 5 criteria:
 | 🟡 Warnings, split opinion | `CONCERN` |
 | All pass | `APPROVE` |
 
-Report is saved to `.deep-review/reports/{YYYY-MM-DD}-review.md`.
+Report is saved to `.deep-review/reports/{YYYY-MM-DD}-{HHmmss}-review.md` (timestamp prevents same-day overwrite).
 
 ## Receiving Review (Stage 5)
 
@@ -142,7 +142,7 @@ The `--respond` flag activates a structured response workflow:
 
 ### Response Report
 
-Each response session produces a structured report at `.deep-review/responses/{timestamp}-response.md` documenting every accept/reject/defer decision with evidence.
+Each response session produces a structured report at `.deep-review/responses/{YYYY-MM-DD}-{HHmmss}-response.md` documenting every accept/reject/defer decision with evidence.
 
 ## Cross-Model Verification
 
@@ -188,7 +188,7 @@ Deep Review works in any environment. Review strategy adjusts automatically:
 | `mixed` | Both staged + unstaged | `git diff HEAD` |
 | `untracked-only` | New files, not staged | Read untracked files directly |
 
-For `staged`, `unstaged`, and `mixed` states, Deep Review offers to create a WIP commit so Codex cross-verification can run against a real commit base.
+For `staged`, `unstaged`, and `mixed` states, Deep Review offers to create a WIP commit so Codex cross-verification can run against a real commit base. The WIP prompt previews the file list, warns about sensitive patterns (`.env*`, credentials, keys), and never uses `git add -A`. After the review you can undo the WIP commit with `git reset --soft HEAD~1` (working tree preserved).
 
 Shallow clones (`git clone --depth`) are detected; a `git fetch --unshallow` recommendation is shown and HEAD~1 is used as fallback base.
 
@@ -285,11 +285,19 @@ Runtime state, auto-created on first run:
 ```yaml
 review_model: opus       # opus | sonnet
 codex_notified: false    # whether the Codex install hint has been shown
-last_review: null        # timestamp of last review
-app_qa:
+last_review: null        # timestamp of last review (ISO8601)
+app_qa:                  # reserved for future App QA mode
   last_command: null
   last_url: null
 ```
+
+**Sharing policy (team usage)**:
+
+- **Per-machine (do not commit)**: `config.yaml`, `reports/`, `responses/`, `entropy-log.jsonl`, `recurring-findings.json` — these represent session output or local runtime state and vary by machine.
+- **Shared via git (tracked)**: `rules.yaml`, `contracts/`, `journeys/` — these encode project knowledge that should be synchronized across the team.
+- `/deep-review init` updates your `.gitignore` to enforce this split automatically.
+
+Updates to `config.yaml` are performed via the `Edit` tool on a single line at a time. This preserves any fields a user has modified manually (e.g., `review_model: sonnet`) and keeps unknown/reserved fields intact.
 
 ### Entropy Scan (`--entropy`)
 
