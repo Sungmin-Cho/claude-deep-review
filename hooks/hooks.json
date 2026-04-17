@@ -1,4 +1,4 @@
 {
-  "description": "deep-review hooks (v1.0: no active hooks)",
+  "description": "deep-review hooks (no active hooks as of v1.3.1)",
   "hooks": {}
 }

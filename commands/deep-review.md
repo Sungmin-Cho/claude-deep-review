@@ -186,14 +186,33 @@ Codex 리뷰 대상은 change_state에 따라 결정:
 이렇게 해야 Opus(diff 기반)와 Codex가 같은 대상을 리뷰한다.
 
 병렬 백그라운드 실행 (Bash tool 직접 호출):
-- `Bash({ command: '_timeout 300 node "{codex_companion_path}" review {codex_target_flag}', run_in_background: true })`
-  (`_timeout`은 `codex-integration.md` preflight 섹션의 portable shim 함수)
+
+> **중요 — shim inline 원칙**: `_timeout`은 bash 함수이므로 각 Bash 호출의 command 문자열에 **정의 + 사용을 한 번에** 포함해야 한다. 별도 Bash 호출에서 정의된 함수는 새 subshell에서 보이지 않는다. 상세는 `skills/deep-review-workflow/references/codex-integration.md` Preflight 섹션 참조. 아래 예제들은 shim 정의를 묵시적으로 전제하므로 실제 호출 시 함수 본문을 command 시작부에 붙여라.
+
+- review 호출:
+
+  ```
+  Bash({ command: '
+  _timeout() { sec=$1; shift
+    if command -v gtimeout >/dev/null 2>&1; then gtimeout "$sec" "$@"; return; fi
+    if command -v timeout  >/dev/null 2>&1; then  timeout "$sec" "$@"; return; fi
+    perl -e '"'"'alarm shift; exec @ARGV'"'"' "$sec" "$@"
+  }
+  _timeout 300 node "{codex_companion_path}" review {codex_target_flag}
+  ', run_in_background: true })
+  ```
 - adversarial-review (focus_text는 stdin으로 전달하여 쉘 인젝션 방지):
 
   **권장 (Option A — 단일 Bash 호출에 inline)**: mktemp/write/실행/정리를 한 쉘 세션에서 모두 처리. 이렇게 해야 `$focus_file` 변수가 같은 subshell 내부에서만 유효하므로 rival Bash 호출에서 unset되는 문제가 발생하지 않는다.
 
   ```
   Bash({ command: '
+  # _timeout shim — 각 Bash 호출 subshell에 정의해야 함 (review 예제 상단 참조)
+  _timeout() { sec=$1; shift
+    if command -v gtimeout >/dev/null 2>&1; then gtimeout "$sec" "$@"; return; fi
+    if command -v timeout  >/dev/null 2>&1; then  timeout "$sec" "$@"; return; fi
+    perl -e '"'"'alarm shift; exec @ARGV'"'"' "$sec" "$@"
+  }
   focus_file=$(mktemp "${TMPDIR:-/tmp}/deep-review-focus.XXXXXX") \
     && chmod 600 "$focus_file" \
     && cat > "$focus_file" <<'"'"'FOCUS_EOF_deepreview'"'"'
