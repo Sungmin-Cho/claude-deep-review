@@ -159,3 +159,50 @@ os.replace(p + ".tmp", p)
 PY
   return 0
 }
+
+# restore_mutation
+#   Reads state file, filters files via is_our_ita_entry, removes matching entries
+#   from index via git rm --cached, then deletes state file AND releases lock.
+#   Preserves user's real staged files (C4 defense).
+#
+#   IMPORTANT (CR1): Lock release is the responsibility of this function, NOT of
+#   perform_mutation's trap EXIT (which fires on subshell boundary before Codex runs).
+#
+#   bash 3.2 compatible — uses `while IFS= read -r -d ''` instead of mapfile.
+restore_mutation() {
+  [ ! -f "$STATE_FILE" ] && { release_mutation_lock; return 0; }
+
+  # Load file list from state (NUL-separated, bash 3.2 safe)
+  local files=()
+  local p
+  while IFS= read -r -d '' p; do
+    files+=("$p")
+  done < <(python3 -c '
+import json, sys
+with open(".deep-review/.pending-mutation.json") as f:
+    for p in json.load(f)["files"]:
+        sys.stdout.write(p + "\0")
+')
+
+  # Filter: only our i-t-a entries; preserve user's actual staging
+  local restore_list=()
+  local f
+  for f in "${files[@]}"; do
+    if is_our_ita_entry "$f"; then
+      restore_list+=("$f")
+    elif git ls-files --error-unmatch --cached -- "$f" >/dev/null 2>&1; then
+      echo "ℹ️ $f was staged by user during review — preserving, skipping restore." >&2
+    fi
+  done
+
+  # Remove from index (NUL-separated paths)
+  if [ "${#restore_list[@]}" -gt 0 ]; then
+    printf '%s\0' "${restore_list[@]}" \
+      | xargs -0 git rm --cached --force --ignore-unmatch --
+  fi
+
+  rm -f "$STATE_FILE"
+  # CR1: explicit lock release on successful restore
+  release_mutation_lock
+  return 0
+}

@@ -131,7 +131,9 @@ mkdir -p .deep-review
 echo "g1" > g1.md
 perform_mutation g1.md
 restore_mutation
-assert_failure "git ls-files --cached g1.md" "g1 removed from index"
+# NOTE: plan used `git ls-files --cached g1.md` which always returns 0 (it's a list op).
+# `--error-unmatch` makes it actually fail when the path isn't in the index.
+assert_failure "git ls-files --error-unmatch --cached g1.md" "g1 removed from index"
 assert_failure "[ -f .deep-review/.pending-mutation.json ]" "state file removed"
 release_mutation_lock
 teardown_test_repo
