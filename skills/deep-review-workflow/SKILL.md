@@ -52,9 +52,9 @@ user-invocable: false
 
 **공통: 유저 고지 + 백그라운드 실행**
 모든 Case에서 리뷰어 spawn 직전 고지 메시지를 출력하고, 모든 리뷰어를 백그라운드에서 실행한다.
-- Case A/B: "Opus 리뷰를 백그라운드에서 실행합니다. 완료되면 결과를 알려드리겠습니다."
-- Case C: "3개 리뷰어(Opus, Codex review, Codex adversarial)를 백그라운드에서 실행합니다. 완료되면 결과를 합성하여 알려드리겠습니다."
-코드 경로 단일화를 위해 단독 리뷰어(Case A/B)에서도 백그라운드로 실행한다.
+- Case 1/2: "Opus 리뷰를 백그라운드에서 실행합니다. 완료되면 결과를 알려드리겠습니다."
+- Case 3: "3개 리뷰어(Opus, Codex review, Codex adversarial)를 백그라운드에서 실행합니다. 완료되면 결과를 합성하여 알려드리겠습니다."
+코드 경로 단일화를 위해 단독 리뷰어(Case 1/2)에서도 백그라운드로 실행한다.
 
 **대용량 diff 처리 (Agent prompt 크기 관리)**
 리뷰어 spawn 전 diff 크기를 측정하고 임계치를 넘으면 전략을 조정한다:
@@ -69,28 +69,32 @@ user-invocable: false
 3. `*.min.js`, `*.lock`, `*.generated.*`, `vendor/`, `node_modules/` 외에도 300 KB를 초과하는 단일 파일은 기본 exclusion 후보로 표시하고 사용자에게 포함 여부 확인.
 4. Agent 호출이 size·token 오류로 실패하면 Stage 4의 "부분 성공" 경로로 처리하고 원인을 리포트에 기록. 무한 재시도 금지 (1회 재시도만 허용).
 
-**Case A: non-git 또는 커밋 0건**
-→ Claude Opus 서브에이전트 단독 리뷰 (run_in_background: true)
+**Case 1: non-git (`is_git=false`)**
+→ Claude Opus 서브에이전트 단독 리뷰 (run_in_background: true). Codex companion 이 `ensureGitRepository` 로 즉시 에러 — 호출 경로 없음.
 
-**Case B: git + 커밋 있음 + Codex 플러그인 미설치 (codex_plugin=false)**
+**Case 2: git + `codex_plugin=false`**
 → Claude Opus 서브에이전트 단독 리뷰 (run_in_background: true)
 → 세션 내 최초 1회 안내:
   - codex_cli=false: Codex 플러그인 설치 안내
   - codex_cli=true: "CLI가 감지되었지만 플러그인이 필요합니다" 안내
 
-**Case C: git + 커밋 있음 + Codex 플러그인 설치 (codex_plugin=true)**
+**Case 3: git + `codex_plugin=true`** (v1.3.2: `has_commits` 요구 제거 — 첫 커밋 전도 포함)
 → 3-way 병렬 백그라운드 실행:
   1. Agent(code-reviewer, model: opus, run_in_background: true) — 독립 리뷰
   2. Bash(_timeout 300 node "{codex_companion_path}" review {codex_target_flag}, run_in_background: true) — 코드 리뷰 (`_timeout`은 `references/codex-integration.md` preflight 섹션의 portable shim)
   3. Bash (run_in_background: true) — adversarial-review를 **단일 Bash 호출 내에 inline**으로 실행한다. mktemp 생성 → here-doc으로 focus_text 주입 → `_timeout 300 node ... adversarial-review ... - < "$focus_file"` 호출 → 종료 후 `rm -f` 정리. 별도 Bash에 `$focus_file`을 넘기면 subshell 경계에서 unset되므로 **반드시 같은 Bash command 문자열 안에서 완결**. 상세 예제는 `commands/deep-review.md` Stage 3 참조. mktemp 경로는 `"${TMPDIR:-/tmp}/deep-review-focus.XXXXXX"` 형식 — 고정 경로 사용 금지.
 
-{codex_target_flag}: clean 또는 WIP 커밋 후 → `--base {review_base}`, dirty tree → `--uncommitted`.
-**untracked-only**는 git diff가 비어 Codex가 대상을 못 본다 — 기본적으로 Codex skip (Opus 단독), 명시 요청 시 `git add -N` intent-to-add 후 `--uncommitted`, 리뷰 완료 후 `git reset HEAD <files>`로 원복 (자세한 절차는 commands/deep-review.md 참조).
+{codex_target_flag}: clean 또는 WIP 커밋 후 → `--base {review_base}`, dirty tree → `--scope working-tree` (v1.3.2 F8 교정 — 기존 `--uncommitted` 는 companion 1.0.x 에서 미지원).
+**untracked-only**: `--scope working-tree` 가 `git ls-files --others --exclude-standard` 로 자동 수집. v1.3.1 의 `git add -N` + `git reset HEAD` fallback 은 F8 교정으로 불필요.
+
+**Codex Mutation Protocol (Case 3 전용, spec §3-§6)**
+
+gitignored 세션 파일을 Codex 에 임시 노출하여 3-way 검증을 수행. 구현: `hooks/scripts/mutation-protocol.sh` 의 7개 함수 (`is_our_ita_entry`, `acquire_mutation_lock`, `release_mutation_lock`, `perform_mutation`, `restore_mutation`, `auto_recover`, `scan_sensitive_files`). Entry point: `commands/deep-review.md` Stage 0.1 (auto_recover), Stage 2.1 (session inference), Stage 3.0 (perform_mutation), Stage 5.0 (restore_mutation).
 
 **커밋되지 않은 상태에서:**
 - 사용자에게 WIP 커밋 제안
-- 수락 → WIP 커밋 후 Case C (--base)
-- 거부 → Claude Opus 리뷰 (diff 기반) + Codex도 실행 (--uncommitted로 동일 대상 리뷰)
+- 수락 → WIP 커밋 후 Case 3 (--base)
+- 거부 → Claude Opus 리뷰 (diff 기반) + Codex 도 실행 (`--scope working-tree` 로 동일 대상 리뷰)
 
 ### Stage 4: Verdict (판정)
 
