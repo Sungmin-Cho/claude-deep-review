@@ -69,3 +69,93 @@ acquire_mutation_lock() {
 release_mutation_lock() {
   rmdir "$LOCK_DIR" 2>/dev/null || true
 }
+
+STATE_FILE=".deep-review/.pending-mutation.json"
+
+# perform_mutation <file> [<file> ...]
+#   Acquires lock, validates preconditions, writes state file, runs git add -f -N,
+#   and updates state file to committed status.
+#   Returns 0 on success, 1 on any failure (lock / precondition / git add).
+#
+#   CR1: lock is NOT released here. Due to deep-review's call structure
+#   (perform_mutation and Codex reviewers run in separate Bash subshells),
+#   a `trap EXIT` would fire before Codex starts. Lock release is deferred to
+#   `restore_mutation` (see Task 9) which runs after all reviewers complete.
+perform_mutation() {
+  local files=("$@")
+  [ "${#files[@]}" -eq 0 ] && return 0
+
+  # Acquire lock (no trap — see CR1 comment above)
+  if ! acquire_mutation_lock; then
+    echo "❌ Another /deep-review session is active. Aborting." >&2
+    return 1
+  fi
+
+  # Precondition: no target file may be in index yet
+  local f
+  for f in "${files[@]}"; do
+    if git ls-files --error-unmatch --cached -- "$f" >/dev/null 2>&1; then
+      echo "❌ $f is already in index. Mutation refused to avoid overwriting user work." >&2
+      return 1
+    fi
+  done
+
+  # Write state file (status=in-progress) via atomic temp→rename
+  mkdir -p .deep-review
+  umask 077
+  python3 - "${files[@]}" > "$STATE_FILE.tmp" <<'PY'
+import json, subprocess, sys, datetime
+files = sys.argv[1:]
+now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+try:
+    head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL, text=True
+    ).strip() or None
+except (subprocess.CalledProcessError, FileNotFoundError):
+    head = None
+json.dump({
+    "schema_version": 1,
+    "operation": "git-add-f-N",
+    "status": "in-progress",
+    "started_at": now,
+    "commit_hash": head,
+    "shell_ppid": None,
+    "restore_attempts": 0,
+    "files": files,
+}, sys.stdout, indent=2)
+PY
+  mv "$STATE_FILE.tmp" "$STATE_FILE"
+
+  # Execute mutation. Partial failure → mark failed, let auto-R clean up later.
+  if ! git add -f -N -- "${files[@]}"; then
+    python3 - <<'PY'
+import json, os
+p = ".deep-review/.pending-mutation.json"
+with open(p) as f:
+    data = json.load(f)
+data["status"] = "failed"
+with open(p + ".tmp", "w") as f:
+    json.dump(data, f, indent=2)
+os.replace(p + ".tmp", p)
+PY
+    echo "⚠️ git add -f -N partial/full failure. state file marked 'failed'; next /deep-review will attempt restore." >&2
+    return 1
+  fi
+
+  # Success — flip status to committed
+  python3 - <<'PY'
+import json, os
+p = ".deep-review/.pending-mutation.json"
+with open(p) as f:
+    data = json.load(f)
+data["status"] = "committed"
+try:
+    data["shell_ppid"] = int(os.environ.get("BASHPID", os.getppid()))
+except Exception:
+    data["shell_ppid"] = None
+with open(p + ".tmp", "w") as f:
+    json.dump(data, f, indent=2)
+os.replace(p + ".tmp", p)
+PY
+  return 0
+}
