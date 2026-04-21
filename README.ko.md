@@ -105,6 +105,22 @@ diff 제외 대상: 바이너리, `vendor/`, `node_modules/`, `*.min.js`, `*.gen
 
 리포트는 `.deep-review/reports/{YYYY-MM-DD}-{HHmmss}-review.md`에 저장됩니다 (같은 날 덮어쓰기 방지).
 
+### Codex 자동 노출 프로토콜 (v1.3.2)
+
+Case 3 (git 리포지터리 + Codex 플러그인 설치) 에서 `/deep-review` 는 **이번 Claude Code 세션에서 Edit/Write 한 gitignored 파일** — 전형적으로 스펙, 리서치 노트, 플랜 문서 — 을 자동 감지해 사용자 승인 하에 Codex 에 임시 노출하여 교차 모델 리뷰를 수행합니다.
+
+**흐름:**
+1. Stage 2.1 이 현재 세션의 Edit/Write tool call 이력을 반추하고 `git check-ignore` 와 교차 참조.
+2. 감지된 파일을 단일 AskUserQuestion 프롬프트에 노출 — 실행될 git 명령도 함께 표시.
+3. 승인 시 `perform_mutation` 이 `mkdir` atomic lock 획득, precondition 검증, `.deep-review/.pending-mutation.json` 상태 기록, `git add -f -N` 실행.
+4. 3-way 리뷰가 `--scope working-tree` 로 실행.
+5. 완료 시 `restore_mutation` 이 사용자가 리뷰 중 실제로 staging 한 파일은 보존하고, 프로토콜이 만든 intent-to-add entry 만 제거 후 lock 해제.
+6. 중간에 크래시된 세션은 다음 `/deep-review` 실행 시 자동 회수.
+
+민감 파일 패턴 (`.env*`, credentials, SSH 키, GCP 서비스 계정, `.pgpass`, `.netrc`, `wrangler.toml`, JWT 등) 을 대소문자 불문으로 스캔. 전원 민감 파일이면 프롬프트 없이 자동 skip.
+
+구현: `hooks/scripts/mutation-protocol.sh`. preflight 와 인증 실패 처리 상세: `skills/deep-review-workflow/references/codex-integration.md`.
+
 ## Receiving Review (Stage 5)
 
 Stage 4에서 `REQUEST_CHANGES`가 반환되면, Deep Review는 세 가지 선택지를 제공합니다:

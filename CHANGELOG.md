@@ -2,6 +2,40 @@
 
 **English** | [한국어](./CHANGELOG.ko.md)
 
+## [1.3.2] — 2026-04-21
+
+### Added
+
+- **Codex Auto-Exposure Protocol (Case 3)**: `/deep-review` now detects gitignored files the user has been editing in the current Claude Code session (via Edit/Write tool-use history) and offers to temporarily expose them to Codex via `git add -f -N` for cross-model review. Mutual exclusion is enforced by a `mkdir`-based atomic lock (`.deep-review/.mutation.lock/`, POSIX-portable, no `flock` dependency). State is tracked in `.deep-review/.pending-mutation.json` with `schema_version: 1`.
+- **Shared Bash library**: new `hooks/scripts/mutation-protocol.sh` with 7 functions — `is_our_ita_entry`, `acquire_mutation_lock`, `release_mutation_lock`, `perform_mutation`, `restore_mutation`, `auto_recover`, `scan_sensitive_files`. Bash 3.2 compatible (no `mapfile`, no `globstar`) and macOS / GNU Linux tested.
+- **F1 / plugin detection boundary**: tests assert that only the canonical `openai-codex` marketplace is trusted. Non-openai-codex paths are explicitly rejected (supply-chain boundary).
+- **F2 / Node.js availability**: `detect-environment.sh` emits `node_available` + `node_path` flags in every output branch (non-git / no-commits / main). Preflight uses this to distinguish "plugin installed but node missing" from other failures.
+- **F3 / Codex auth error detection**: review/adversarial-review stderr is captured and pattern-matched against `not authenticated`, `Codex CLI is not authenticated`, `Run.*codex login`. A matching status produces a dedicated "run `!codex login`" hint instead of generic failure.
+- **Session inference (Stage 2.1)**: session context is used to infer which gitignored files the user is actively working on. Strict inclusion rules — only Edit/Write tool calls qualify. Read and Bash are excluded to avoid false positives.
+- **Sensitive file scan**: 40+ patterns (dotenv, credentials, SSH keys, GCP service accounts, `.pgpass`, `.netrc`, `wrangler.toml`, JWT, etc.) matched via Python `fnmatch` (case-insensitive). Nested paths like `apps/web/.env.local` are covered. All-sensitive sets auto-skip without prompting.
+- **Graceful mutation fallback**: if `perform_mutation` fails (precondition or `git add` error), the workflow falls back to 1-way Opus-only review instead of aborting the entire command.
+- **Stale mutation auto-recovery**: at `/deep-review` and `/deep-review --respond` entry, stale `.pending-mutation.json` from crashed sessions is silently cleaned up via `is_our_ita_entry` filter (user's real staging is preserved). A `restore_attempts` counter escalates to the user after 3 failures.
+
+### Fixed
+
+- **F8 / Codex `--uncommitted` → `--scope working-tree` (pre-existing bug)**: Codex companion 1.0.x accepts only `--base <ref>` and `--scope <auto|working-tree|branch>`. The `--uncommitted` flag was treated as positional focus text and rejected by native review. This silent failure existed across v1.3.x until now. All call sites in `commands/deep-review.md`, `SKILL.md`, and `codex-integration.md` corrected.
+- **`detect-environment.sh` empty-tree SHA**: the fallback `review_base` was using `4b825dc642cb6eb9a060e54bf899d69f7cb46617`, which is not a valid git empty-tree object. The canonical hash (verified via `git hash-object -t tree /dev/null`) is `4b825dc642cb6eb9a060e54bf8d69288fbee4904`. Git silently accepted the wrong value as an arbitrary treeish, so this never surfaced before.
+
+### Changed
+
+- **Case gate extension**: Case 3 (3-way review) now requires only `is_git=true AND codex_plugin=true`. The previous `has_commits=true` requirement is dropped, so repositories in their initial-commit state also get cross-model review (using `--scope working-tree`).
+- **Case renaming**: internal labels A/B/C renamed to 1/2/3 for clarity across `commands/deep-review.md` and `SKILL.md`.
+- **`.gitignore` init block**: `init` mode now suggests ignoring `.deep-review/.pending-mutation.json` and `.deep-review/.mutation.lock/`.
+
+### Deprecated
+
+- **`codex_installed` field in `detect-environment.sh` output**: still emitted in v1.3.2 for backward compatibility, but slated for removal in v1.4.0. New consumers should use `codex_plugin` directly. The field has no in-repo consumers today.
+
+### Notes
+
+- **bash 3.2 compatibility**: all new library code in `mutation-protocol.sh` avoids `mapfile`, `globstar`, and bash 4+ features. Tested under macOS `/bin/bash` 3.2.57.
+- **F1 marketplace widening deferred**: the original v1.3.2 plan considered loosening plugin discovery to `~/.claude/plugins/cache/*/codex/*`. This was reverted after a 3rd-round review flagged it as a supply-chain risk (any third-party plugin named `codex` would become trusted executable code). F1 is now tracked in backlog and requires publisher verification before reopening.
+
 ## [1.3.1] — 2026-04-17
 
 ### Fixed

@@ -2,6 +2,40 @@
 
 [English](./CHANGELOG.md) | **한국어**
 
+## [1.3.2] — 2026-04-21
+
+### 추가
+
+- **Codex 자동 노출 프로토콜 (Case 3)**: `/deep-review` 가 이번 Claude Code 세션에서 Edit/Write 한 gitignored 파일을 자동 감지 → 사용자 승인 하에 `git add -f -N` 으로 임시 index 노출 → 3-way 리뷰 후 `git rm --cached` 로 원복. 동시 세션 상호 배제는 `mkdir` 기반 atomic lock (`.deep-review/.mutation.lock/`, POSIX-portable, `flock` 의존성 없음). 상태는 `.deep-review/.pending-mutation.json` (schema_version: 1) 로 추적.
+- **공유 Bash 라이브러리**: 신규 `hooks/scripts/mutation-protocol.sh` — 7개 함수 (`is_our_ita_entry`, `acquire_mutation_lock`, `release_mutation_lock`, `perform_mutation`, `restore_mutation`, `auto_recover`, `scan_sensitive_files`). bash 3.2 호환 (`mapfile`, `globstar` 미사용), macOS + GNU Linux 양쪽 테스트.
+- **F1 / 플러그인 감지 경계**: `openai-codex` marketplace 만 신뢰되는지 테스트로 강제. 다른 marketplace 경로는 명시적으로 거부 (supply-chain 경계).
+- **F2 / Node.js 가용성**: `detect-environment.sh` 가 모든 출력 분기(non-git / no-commits / main)에서 `node_available` + `node_path` 출력. preflight 가 "플러그인 설치됨 but node 없음" 을 일반 실패와 구분해 명확히 안내.
+- **F3 / Codex 인증 오류 구분**: review / adversarial-review stderr 를 캡처하고 `not authenticated`, `Codex CLI is not authenticated`, `Run.*codex login` 패턴을 매칭. 매칭 시 "`!codex login` 후 재시도" 전용 안내.
+- **세션 추론 (Stage 2.1)**: Edit / Write tool call 이력을 반추하여 작업 중인 gitignored 파일을 추정. 엄격 규칙 — **Read / Bash 는 제외** (false positive 방지).
+- **민감 파일 스캔**: 40+ 패턴 (dotenv, credentials, SSH 키, GCP 서비스 계정, `.pgpass`, `.netrc`, `wrangler.toml`, JWT 등) 을 Python `fnmatch` 로 case-insensitive 매칭. `apps/web/.env.local` 같은 monorepo 중첩 경로 포함. 전원 민감 파일이면 프롬프트 없이 자동 skip.
+- **Mutation 실패 시 graceful fallback**: `perform_mutation` 이 실패하면 (precondition 또는 `git add` 오류) 전체 `/deep-review` 를 중단하는 대신 1-way Opus 단독 리뷰로 자동 전환.
+- **Stale mutation 자동 회수**: `/deep-review` 와 `--respond` 진입 시 크래시된 이전 세션의 `.pending-mutation.json` 을 `is_our_ita_entry` 필터로 silent 정리 (사용자가 이후 실제 staging 한 파일은 보존). `restore_attempts` 카운터가 3회 이상이면 사용자 에스컬레이션.
+
+### 고침
+
+- **F8 / Codex `--uncommitted` → `--scope working-tree` (pre-existing bug)**: Codex companion 1.0.x 는 `--base <ref>` 와 `--scope <auto|working-tree|branch>` 만 지원. `--uncommitted` 는 positional (focus text) 로 분류되어 native review 가 거부함. 이 silent 실패는 v1.3.x 내내 존재했으며 이번에 발견·교정. `commands/deep-review.md`, `SKILL.md`, `codex-integration.md` 전체에 반영.
+- **`detect-environment.sh` empty-tree SHA**: fallback `review_base` 가 `4b825dc642cb6eb9a060e54bf899d69f7cb46617` 였는데 유효한 git empty-tree object 가 아님. 정식 해시 (`git hash-object -t tree /dev/null` 로 확인) 는 `4b825dc642cb6eb9a060e54bf8d69288fbee4904`. git 이 잘못된 값을 임의 treeish 로 silent 수용해 표면화되지 않았음.
+
+### 변경
+
+- **Case 게이트 확장**: Case 3 (3-way 리뷰) 는 `is_git=true AND codex_plugin=true` 만 필요. 기존 `has_commits=true` 요구 제거 — 첫 커밋 전 상태의 리포지터리도 `--scope working-tree` 로 교차 모델 리뷰 가능.
+- **Case 명칭 변경**: A/B/C → 1/2/3 (commands, SKILL.md 전체).
+- **`.gitignore` init 블록**: init 모드가 `.deep-review/.pending-mutation.json`, `.deep-review/.mutation.lock/` 제외 제안 포함.
+
+### 폐기 예정
+
+- **`detect-environment.sh` 의 `codex_installed` 필드**: v1.3.2 에서는 하위호환을 위해 계속 출력되나 **v1.4.0 에서 제거 예정**. 새 소비자는 `codex_plugin` 을 직접 사용. 현재 in-repo 소비처는 0건.
+
+### 참고
+
+- **bash 3.2 호환성**: `mutation-protocol.sh` 의 모든 신규 코드는 `mapfile`, `globstar` 및 bash 4+ 전용 기능을 피함. macOS `/bin/bash` 3.2.57 에서 테스트.
+- **F1 marketplace 완화 유보**: v1.3.2 기획 초기에 `~/.claude/plugins/cache/*/codex/*` 로 플러그인 경로 완화를 고려했으나, 3회차 리뷰에서 supply-chain 리스크 (임의 marketplace 의 `codex` 이름 플러그인이 trusted executable 이 됨) 지적으로 유보. F1 은 backlog 이동 — publisher 검증 선행 후에만 재오픈.
+
 ## [1.3.1] — 2026-04-17
 
 ### 수정
