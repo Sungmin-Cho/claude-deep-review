@@ -138,4 +138,47 @@ assert_failure "[ -f .deep-review/.pending-mutation.json ]" "state file removed"
 release_mutation_lock
 teardown_test_repo
 
+echo ""
+echo "=== auto_recover tests ==="
+
+# Test 12: auto_recover with stale state file performs restore
+repo=$(setup_test_repo)
+cd "$repo"
+mkdir -p .deep-review
+echo "g1" > g1.md
+perform_mutation g1.md
+release_mutation_lock
+# Simulate session crash: state file + i-t-a exists, but lock is gone
+auto_recover
+assert_failure "[ -f .deep-review/.pending-mutation.json ]" "state file cleaned"
+assert_failure "git ls-files --error-unmatch --cached g1.md" "g1 not in index"
+teardown_test_repo
+
+# Test 13: auto_recover skips when another session holds lock
+repo=$(setup_test_repo)
+cd "$repo"
+mkdir -p .deep-review
+echo "g1" > g1.md
+perform_mutation g1.md
+# Lock still held. auto_recover should not touch state file.
+output=$(auto_recover 2>&1 || true)
+assert_success "[ -f .deep-review/.pending-mutation.json ]" "state file preserved when lock held"
+echo "$output" | grep -q "lock age" && echo "  ✅ warning about active session" || echo "  ❌ expected lock warning"
+release_mutation_lock
+restore_mutation
+teardown_test_repo
+
+# Test 14: auto_recover escalates after 3 failed attempts
+repo=$(setup_test_repo)
+cd "$repo"
+mkdir -p .deep-review
+# Manually craft a state file with restore_attempts=3
+cat > .deep-review/.pending-mutation.json <<'JSON'
+{"schema_version":1,"operation":"git-add-f-N","status":"failed","started_at":"2026-01-01T00:00:00Z","commit_hash":null,"shell_ppid":null,"restore_attempts":3,"files":["nonexistent.md"]}
+JSON
+output=$(auto_recover 2>&1 || true)
+echo "$output" | grep -q "수동 처리를 권장" && echo "  ✅ escalation message shown" || echo "  ❌ expected escalation"
+assert_success "[ -f .deep-review/.pending-mutation.json ]" "state file preserved for user action"
+teardown_test_repo
+
 test_summary
