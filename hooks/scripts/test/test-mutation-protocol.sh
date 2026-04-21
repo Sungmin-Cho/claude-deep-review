@@ -73,4 +73,33 @@ assert_success "[ -d .deep-review/.mutation.lock ]" "fresh lock acquired after s
 release_mutation_lock
 teardown_test_repo
 
+echo ""
+echo "=== perform_mutation tests ==="
+
+# Test 8: successful mutation writes state file with committed status + registers i-t-a
+repo=$(setup_test_repo)
+cd "$repo"
+mkdir -p .deep-review
+echo "gitignored" > g1.md
+echo "gitignored2" > g2.md
+perform_mutation "g1.md" "g2.md"
+assert_success "[ -f .deep-review/.pending-mutation.json ]" "state file created"
+status=$(python3 -c 'import json; print(json.load(open(".deep-review/.pending-mutation.json"))["status"])')
+assert_equal "committed" "$status" "status is committed"
+assert_success "is_our_ita_entry g1.md" "g1.md is i-t-a"
+assert_success "is_our_ita_entry g2.md" "g2.md is i-t-a"
+release_mutation_lock
+teardown_test_repo
+
+# Test 9: precondition failure — file already in index → abort
+repo=$(setup_test_repo)
+cd "$repo"
+mkdir -p .deep-review
+echo "preexisting" > existing.md
+git add existing.md
+assert_failure "perform_mutation existing.md" "precondition rejects staged file"
+assert_failure "[ -f .deep-review/.pending-mutation.json ]" "no state file created"
+release_mutation_lock
+teardown_test_repo
+
 test_summary
