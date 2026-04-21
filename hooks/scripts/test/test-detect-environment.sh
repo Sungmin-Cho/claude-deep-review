@@ -43,4 +43,56 @@ TEST_COUNT=$((TEST_COUNT+1))
 teardown_test_repo
 rm -rf "$MOCK_HOME"
 
+# === F2: node_available 테스트 ===
+echo ""
+echo "=== F2 node_available tests ==="
+
+# Test: node_available field emitted in main branch (git + commits)
+repo=$(setup_test_repo)
+cd "$repo"
+output=$(bash "$DETECT_SCRIPT")
+echo "$output" | grep -q "^node_available=" && echo "  ✅ node_available field emitted" \
+  || { echo "  ❌ node_available field missing in main branch"; TEST_FAILURES=$((TEST_FAILURES + 1)); }
+TEST_COUNT=$((TEST_COUNT+1))
+# Actual node presence
+expected_node=$(command -v node >/dev/null 2>&1 && echo "true" || echo "false")
+node_line=$(echo "$output" | grep "^node_available=")
+assert_equal "node_available=$expected_node" "$node_line" "main branch reflects real node presence"
+teardown_test_repo
+
+# Test (CR7): node_available must appear in no-commits branch with real detection
+initial_repo=$(mktemp -d "${TMPDIR:-/tmp}/deep-review-initial.XXXXXX")
+(cd "$initial_repo" && git init -q)
+cd "$initial_repo"
+output=$(bash "$DETECT_SCRIPT")
+node_line=$(echo "$output" | grep "^node_available=")
+assert_equal "node_available=$expected_node" "$node_line" "CR7: no-commits branch uses real detection (not hardcoded)"
+rm -rf "$initial_repo"
+
+# Test (CR7): non-git directory also emits node_available with real detection
+nongit=$(mktemp -d "${TMPDIR:-/tmp}/deep-review-nongit.XXXXXX")
+cd "$nongit"
+output=$(bash "$DETECT_SCRIPT")
+node_line=$(echo "$output" | grep "^node_available=")
+assert_equal "node_available=$expected_node" "$node_line" "CR7: non-git branch uses real detection"
+rm -rf "$nongit"
+
+# === F4: codex_installed deprecation comment ===
+echo ""
+echo "=== F4 deprecation ==="
+
+# Deprecation note must be present in source
+grep -q "DEPRECATED" "$DETECT_SCRIPT" && echo "  ✅ F4 deprecation note present" \
+  || { echo "  ❌ F4 deprecation note missing"; TEST_FAILURES=$((TEST_FAILURES + 1)); }
+TEST_COUNT=$((TEST_COUNT+1))
+
+# codex_installed field still emitted (backward-compat)
+repo=$(setup_test_repo)
+cd "$repo"
+output=$(bash "$DETECT_SCRIPT")
+echo "$output" | grep -q "^codex_installed=" && echo "  ✅ codex_installed still emitted (backward-compat)" \
+  || { echo "  ❌ codex_installed must remain until v1.4.0"; TEST_FAILURES=$((TEST_FAILURES + 1)); }
+TEST_COUNT=$((TEST_COUNT+1))
+teardown_test_repo
+
 test_summary
