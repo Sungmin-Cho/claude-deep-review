@@ -125,7 +125,7 @@ fi
 
 # 시도 3: root commit (커밋이 1개뿐) — empty tree hash 사용
 if [ -z "$review_base" ]; then
-  review_base="4b825dc642cb6eb9a060e54bf899d69f7cb46617"
+  review_base="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
   review_base_method="empty-tree"
 fi
 
