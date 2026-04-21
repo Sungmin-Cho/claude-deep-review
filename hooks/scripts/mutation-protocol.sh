@@ -206,3 +206,51 @@ with open(".deep-review/.pending-mutation.json") as f:
   release_mutation_lock
   return 0
 }
+
+# auto_recover
+#   Entry-point called by /deep-review Stage 0 and /deep-review --respond entry.
+#   Checks for stale state file, performs silent recovery respecting other sessions' locks.
+#   Increments restore_attempts; escalates after 3 failures.
+auto_recover() {
+  [ ! -f "$STATE_FILE" ] && return 0
+
+  # Check lock — if present and fresh, skip (another session active)
+  if [ -d "$LOCK_DIR" ]; then
+    local lock_mtime age
+    lock_mtime=$(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0)
+    age=$(( $(date +%s) - lock_mtime ))
+    if [ "$age" -lt "$LOCK_STALE_SECONDS" ]; then
+      echo "⚠️ Another /deep-review session is active (lock age: ${age}s). Skipping auto-recovery." >&2
+      return 0
+    fi
+    echo "ℹ️ Stale lock detected (${age}s old). Cleaning up." >&2
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+  fi
+
+  # Check restore_attempts
+  local attempts
+  attempts=$(python3 -c 'import json; print(json.load(open(".deep-review/.pending-mutation.json")).get("restore_attempts", 0))')
+  if [ "$attempts" -ge 3 ]; then
+    echo "⚠️ .deep-review/.pending-mutation.json 의 자동 복원이 3회 이상 실패했습니다. 수동 처리를 권장합니다:" >&2
+    echo "   git ls-files --stage   # 현재 i-t-a entry 확인" >&2
+    echo "   git rm --cached <file>  # 수동 복원" >&2
+    echo "   rm .deep-review/.pending-mutation.json  # 카운터 리셋" >&2
+    return 1
+  fi
+
+  # Increment restore_attempts
+  python3 - <<'PY'
+import json, os
+p = ".deep-review/.pending-mutation.json"
+with open(p) as f:
+    data = json.load(f)
+data["restore_attempts"] = data.get("restore_attempts", 0) + 1
+with open(p + ".tmp", "w") as f:
+    json.dump(data, f, indent=2)
+os.replace(p + ".tmp", p)
+PY
+
+  # Attempt restore via shared logic
+  restore_mutation
+  return $?
+}
