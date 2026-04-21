@@ -254,3 +254,62 @@ PY
   restore_mutation
   return $?
 }
+
+# scan_sensitive_files <file> [<file> ...]
+#   Prints paths that match known sensitive-file patterns (case-insensitive).
+#   Uses Python fnmatch because bash 3.2 lacks globstar (**) support.
+#   Patterns cover dotenv, credentials, SSH keys, GCP/Firebase, wrangler, etc.
+scan_sensitive_files() {
+  [ "$#" -eq 0 ] && return 0
+  python3 - "$@" <<'PY'
+import sys, fnmatch
+
+PATTERNS = [
+    # dotenv (nested for monorepos)
+    ".env", ".env.*", ".envrc",
+    "**/.env", "**/.env.*", "**/.envrc",
+    # generic credential names
+    "credentials*", "**/credentials*",
+    "*secret*", "**/*secret*",
+    "*password*", "**/*password*",
+    "*token*", "**/*token*",
+    "bearer_*", "**/bearer_*",
+    # SSH / TLS keys
+    "*.key", "*.pem", "*.pfx", "*.p12", "*.ovpn",
+    "*_rsa", "*_dsa", "*_ecdsa",
+    "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*",
+    # cloud / service accounts
+    "serviceAccount*.json", "**/serviceAccount*.json",
+    "*-service-account*.json", "**/*-service-account*.json",
+    "*-key.json", "**/*-key.json",
+    "api-key*.json", "**/api-key*.json",
+    "firebase-adminsdk*.json", "**/firebase-adminsdk*.json",
+    "wrangler.toml", "wrangler.jsonc",
+    "**/wrangler.toml", "**/wrangler.jsonc",
+    # unix auth
+    ".pgpass", ".netrc", ".htpasswd",
+    "**/.pgpass", "**/.netrc", "**/.htpasswd",
+    # JWT / OAuth
+    "*.jwt", "*.token",
+    "**/*.jwt", "**/*.token",
+]
+
+for f in sys.argv[1:]:
+    fl = f.lower()
+    bn = fl.rsplit("/", 1)[-1]
+    matched = False
+    for p in PATTERNS:
+        pl = p.lower()
+        if p.startswith("**/"):
+            inner = pl[3:]
+            if fnmatch.fnmatch(fl, pl) or fnmatch.fnmatch(bn, inner):
+                matched = True
+                break
+        else:
+            if fnmatch.fnmatch(bn, pl) or fnmatch.fnmatch(fl, pl):
+                matched = True
+                break
+    if matched:
+        print(f)
+PY
+}

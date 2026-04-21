@@ -181,4 +181,47 @@ echo "$output" | grep -q "수동 처리를 권장" && echo "  ✅ escalation mes
 assert_success "[ -f .deep-review/.pending-mutation.json ]" "state file preserved for user action"
 teardown_test_repo
 
+echo ""
+echo "=== scan_sensitive_files tests ==="
+
+# Test 15: basic .env match
+matches=$(scan_sensitive_files "config/.env" "src/main.rs")
+[ "$matches" = "config/.env" ] && echo "  ✅ basic .env detected" \
+  || { echo "  ❌ expected config/.env, got: $matches"; TEST_FAILURES=$((TEST_FAILURES+1)); }
+TEST_COUNT=$((TEST_COUNT+1))
+
+# Test 16: nested .env (monorepo)
+matches=$(scan_sensitive_files "apps/web/.env.local" "services/api/.env.production")
+echo "$matches" | grep -q "apps/web/.env.local" && echo "$matches" | grep -q "services/api/.env.production" \
+  && echo "  ✅ nested .env detected" \
+  || { echo "  ❌ nested .env missed: $matches"; TEST_FAILURES=$((TEST_FAILURES+1)); }
+TEST_COUNT=$((TEST_COUNT+1))
+
+# Test 17: case-insensitive
+matches=$(scan_sensitive_files "SERVICEACCOUNT.JSON" "ID_RSA" ".Env.Local")
+line_count=$(printf '%s\n' "$matches" | grep -c .)
+[ "$line_count" = "3" ] && echo "  ✅ case-insensitive matching (3 files)" \
+  || { echo "  ❌ expected 3 matches, got $line_count: $matches"; TEST_FAILURES=$((TEST_FAILURES+1)); }
+TEST_COUNT=$((TEST_COUNT+1))
+
+# Test 18: benign files pass through
+matches=$(scan_sensitive_files "README.md" "src/main.rs" "docs/design.md")
+[ -z "$matches" ] && echo "  ✅ benign files not matched" \
+  || { echo "  ❌ false positive: $matches"; TEST_FAILURES=$((TEST_FAILURES+1)); }
+TEST_COUNT=$((TEST_COUNT+1))
+
+# Test 19: GCP service account variants
+matches=$(scan_sensitive_files "serviceAccount.json" "firebase-adminsdk-abc.json" "api-key.json")
+line_count=$(printf '%s\n' "$matches" | grep -c .)
+[ "$line_count" = "3" ] && echo "  ✅ GCP/Firebase credentials detected" \
+  || { echo "  ❌ expected 3, got $line_count: $matches"; TEST_FAILURES=$((TEST_FAILURES+1)); }
+TEST_COUNT=$((TEST_COUNT+1))
+
+# Test 20: SSH key variants
+matches=$(scan_sensitive_files "id_rsa" "id_ed25519.pub" "my_server_ecdsa" ".pgpass")
+line_count=$(printf '%s\n' "$matches" | grep -c .)
+[ "$line_count" = "4" ] && echo "  ✅ SSH/auth files detected" \
+  || { echo "  ❌ expected 4, got $line_count: $matches"; TEST_FAILURES=$((TEST_FAILURES+1)); }
+TEST_COUNT=$((TEST_COUNT+1))
+
 test_summary
