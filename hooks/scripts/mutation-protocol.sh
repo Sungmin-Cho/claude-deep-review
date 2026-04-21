@@ -35,3 +35,37 @@ is_our_ita_entry() {
   fi
   return 1
 }
+
+# LOCK_DIR is the path to the mutation lock directory.
+# Atomic `mkdir` is used as POSIX-portable mutual exclusion (no flock dependency).
+LOCK_DIR=".deep-review/.mutation.lock"
+LOCK_STALE_SECONDS=3600  # 1 hour; lock older than this is considered stale
+
+# acquire_mutation_lock
+#   Returns 0 on success (lock acquired), 1 on failure (another session holds lock).
+#   Stale lock (mtime > LOCK_STALE_SECONDS) is auto-cleaned and re-acquired.
+acquire_mutation_lock() {
+  mkdir -p "$(dirname "$LOCK_DIR")"
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    return 0
+  fi
+
+  local lock_mtime age now
+  # macOS BSD stat: -f %m ; GNU Linux stat: -c %Y
+  lock_mtime=$(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0)
+  now=$(date +%s)
+  age=$((now - lock_mtime))
+
+  if [ "$age" -gt "$LOCK_STALE_SECONDS" ]; then
+    rmdir "$LOCK_DIR" 2>/dev/null || return 1
+    mkdir "$LOCK_DIR" 2>/dev/null || return 1
+    return 0
+  fi
+  return 1
+}
+
+# release_mutation_lock
+#   Silently removes the lock. No error if absent.
+release_mutation_lock() {
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+}
