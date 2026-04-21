@@ -102,4 +102,38 @@ assert_failure "[ -f .deep-review/.pending-mutation.json ]" "no state file creat
 release_mutation_lock
 teardown_test_repo
 
+echo ""
+echo "=== restore_mutation tests ==="
+
+# Test 10: restore removes only i-t-a entries, preserves user staging (C4 defense)
+repo=$(setup_test_repo)
+cd "$repo"
+mkdir -p .deep-review
+echo "g1" > g1.md
+echo "g2" > g2.md
+perform_mutation g1.md g2.md
+# Simulate user staging g1.md during review
+echo "user-edit" > g1.md
+git add g1.md  # real stage (mode 100644, real content)
+# Now restore — g1.md should be preserved, g2.md should be restored
+restore_mutation
+g1_stage=$(git ls-files --stage g1.md | awk '{print $1}')
+assert_equal "100644" "$g1_stage" "g1 retained user staging"
+assert_failure "is_our_ita_entry g2.md" "g2 restored (not in index anymore)"
+assert_failure "[ -f .deep-review/.pending-mutation.json ]" "state file removed after restore"
+release_mutation_lock
+teardown_test_repo
+
+# Test 11: restore with only our files succeeds clean
+repo=$(setup_test_repo)
+cd "$repo"
+mkdir -p .deep-review
+echo "g1" > g1.md
+perform_mutation g1.md
+restore_mutation
+assert_failure "git ls-files --cached g1.md" "g1 removed from index"
+assert_failure "[ -f .deep-review/.pending-mutation.json ]" "state file removed"
+release_mutation_lock
+teardown_test_repo
+
 test_summary
