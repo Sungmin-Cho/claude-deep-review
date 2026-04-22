@@ -35,6 +35,15 @@
 
 - **bash 3.2 compatibility**: all new library code in `mutation-protocol.sh` avoids `mapfile`, `globstar`, and bash 4+ features. Tested under macOS `/bin/bash` 3.2.57.
 - **F1 marketplace widening deferred**: the original v1.3.2 plan considered loosening plugin discovery to `~/.claude/plugins/cache/*/codex/*`. This was reverted after a 3rd-round review flagged it as a supply-chain risk (any third-party plugin named `codex` would become trusted executable code). F1 is now tracked in backlog and requires publisher verification before reopening.
+- **4th-round review fixes**: 4 additional bugs surfaced during the final implementation dogfood were fixed before merge:
+  - **FR1**: `perform_mutation` now releases the lock on precondition-failure early-return (was leaking the lock for up to 1 hour).
+  - **FR2**: partial `git add -f -N` failure now triggers inline rollback via `restore_mutation` (was leaving orphan intent-to-add entries).
+  - **FR3**: `auto_recover` distinguishes crashed sessions from active reviews using `status` + `REVIEW_TIMEOUT_SECONDS` (10 min for `status=committed`, 1 h for `status=in-progress`).
+  - **W1**: module-scoped `_MUTATION_LOCK_OWNED` flag prevents a session from accidentally releasing another session's lock.
+
+### Known Limitations
+
+- **Empty file during active review (W2)**: `is_our_ita_entry` cannot distinguish a genuinely new 0-byte file the user stages (e.g., `.gitkeep`) from the protocol's own intent-to-add placeholder (both produce the `:000000 e69de29b...` raw record). Mutation-time precondition prevents this for pre-existing staging; but if the user stages an empty file **during** the review, the restore step may remove it. Workaround: don't stage new empty files while a Case 3 review is in flight. A full fix requires recording pre-mutation index state per file and is tracked in backlog for v1.4.0.
 
 ## [1.3.1] — 2026-04-17
 

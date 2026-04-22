@@ -35,6 +35,15 @@
 
 - **bash 3.2 호환성**: `mutation-protocol.sh` 의 모든 신규 코드는 `mapfile`, `globstar` 및 bash 4+ 전용 기능을 피함. macOS `/bin/bash` 3.2.57 에서 테스트.
 - **F1 marketplace 완화 유보**: v1.3.2 기획 초기에 `~/.claude/plugins/cache/*/codex/*` 로 플러그인 경로 완화를 고려했으나, 3회차 리뷰에서 supply-chain 리스크 (임의 marketplace 의 `codex` 이름 플러그인이 trusted executable 이 됨) 지적으로 유보. F1 은 backlog 이동 — publisher 검증 선행 후에만 재오픈.
+- **4회차 리뷰 수정사항**: 구현 완료 dogfood 에서 발견된 4개 버그를 머지 전 수정:
+  - **FR1**: `perform_mutation` 이 precondition 실패 시 early-return 전에 `release_mutation_lock` 호출 (최대 1시간 lock 누수 문제 해결).
+  - **FR2**: `git add -f -N` 부분 실패 시 `restore_mutation` 을 inline 호출해 partial intent-to-add entry 즉시 정리 (사용자 index 오염 방지).
+  - **FR3**: `auto_recover` 가 `status` + `REVIEW_TIMEOUT_SECONDS` 로 crashed 세션과 active 리뷰를 구분 (`status=committed` 는 10분, `status=in-progress` 는 1시간 기준).
+  - **W1**: module-scoped `_MUTATION_LOCK_OWNED` 플래그로 다른 세션의 lock 을 실수로 해제하는 것을 방지.
+
+### 알려진 제한
+
+- **active 리뷰 중 빈 파일 staging (W2)**: `is_our_ita_entry` 는 사용자가 staging 한 진짜 빈 파일 (`.gitkeep` 등) 과 프로토콜의 intent-to-add placeholder 를 구분할 수 없음 (둘 다 `:000000 e69de29b...` 동일 raw record). Mutation 시점의 precondition 체크가 기존 staging 을 보호하지만, 리뷰 **진행 중** 사용자가 새로 staging 한 빈 파일은 restore 시 제거될 수 있음. 회피: Case 3 리뷰가 돌아가는 동안 새 빈 파일을 staging 하지 말 것. 완전 해결 (파일별 pre-mutation index state 기록) 은 v1.4.0 backlog.
 
 ## [1.3.1] — 2026-04-17
 

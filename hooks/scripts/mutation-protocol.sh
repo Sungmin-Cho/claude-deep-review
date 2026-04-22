@@ -39,14 +39,24 @@ is_our_ita_entry() {
 # LOCK_DIR is the path to the mutation lock directory.
 # Atomic `mkdir` is used as POSIX-portable mutual exclusion (no flock dependency).
 LOCK_DIR=".deep-review/.mutation.lock"
-LOCK_STALE_SECONDS=3600  # 1 hour; lock older than this is considered stale
+LOCK_STALE_SECONDS=3600     # 1 hour; for status=in-progress
+REVIEW_TIMEOUT_SECONDS=600  # 10 min; mid-review window for status=committed
+                            # (Codex review + adversarial + Opus synthesis typically < 5 min;
+                            # 10 min buffer accommodates slow networks / large diffs.)
+
+# W1 (4회차 Opus): module-scoped ownership flag.
+# `release_mutation_lock` and `restore_mutation` only act on locks this shell acquired,
+# preventing accidental release of another concurrent session's lock.
+_MUTATION_LOCK_OWNED=0
 
 # acquire_mutation_lock
-#   Returns 0 on success (lock acquired), 1 on failure (another session holds lock).
+#   Returns 0 on success (lock acquired, sets _MUTATION_LOCK_OWNED=1).
+#   Returns 1 on failure (another session holds lock).
 #   Stale lock (mtime > LOCK_STALE_SECONDS) is auto-cleaned and re-acquired.
 acquire_mutation_lock() {
   mkdir -p "$(dirname "$LOCK_DIR")"
   if mkdir "$LOCK_DIR" 2>/dev/null; then
+    _MUTATION_LOCK_OWNED=1
     return 0
   fi
 
@@ -59,15 +69,19 @@ acquire_mutation_lock() {
   if [ "$age" -gt "$LOCK_STALE_SECONDS" ]; then
     rmdir "$LOCK_DIR" 2>/dev/null || return 1
     mkdir "$LOCK_DIR" 2>/dev/null || return 1
+    _MUTATION_LOCK_OWNED=1
     return 0
   fi
   return 1
 }
 
 # release_mutation_lock
-#   Silently removes the lock. No error if absent.
+#   Silently removes the lock — but ONLY if this shell acquired it.
+#   Protects against another concurrent session's lock being accidentally released (W1).
 release_mutation_lock() {
+  [ "${_MUTATION_LOCK_OWNED:-0}" -eq 1 ] || return 0
   rmdir "$LOCK_DIR" 2>/dev/null || true
+  _MUTATION_LOCK_OWNED=0
 }
 
 STATE_FILE=".deep-review/.pending-mutation.json"
@@ -92,10 +106,13 @@ perform_mutation() {
   fi
 
   # Precondition: no target file may be in index yet
+  # FR1 (4회차 Codex): release lock on early-return failure so the next
+  # `/deep-review` invocation isn't blocked for up to LOCK_STALE_SECONDS.
   local f
   for f in "${files[@]}"; do
     if git ls-files --error-unmatch --cached -- "$f" >/dev/null 2>&1; then
       echo "❌ $f is already in index. Mutation refused to avoid overwriting user work." >&2
+      release_mutation_lock
       return 1
     fi
   done
@@ -126,7 +143,12 @@ json.dump({
 PY
   mv "$STATE_FILE.tmp" "$STATE_FILE"
 
-  # Execute mutation. Partial failure → mark failed, let auto-R clean up later.
+  # Execute mutation. On partial/full failure, clean up IMMEDIATELY in this run
+  # instead of deferring to a future auto-recover call (FR2 — 4회차 Codex adversarial).
+  # Strategy: mark state as "failed", then call restore_mutation which filters via
+  # is_our_ita_entry — only removes i-t-a entries this protocol created, preserving
+  # any user staging that may have existed before. restore_mutation also releases
+  # the lock, so we return cleanly.
   if ! git add -f -N -- "${files[@]}"; then
     python3 - <<'PY'
 import json, os
@@ -138,7 +160,8 @@ with open(p + ".tmp", "w") as f:
     json.dump(data, f, indent=2)
 os.replace(p + ".tmp", p)
 PY
-    echo "⚠️ git add -f -N partial/full failure. state file marked 'failed'; next /deep-review will attempt restore." >&2
+    echo "⚠️ git add -f -N partial/full failure. Rolling back partial entries and releasing lock." >&2
+    restore_mutation
     return 1
   fi
 
@@ -214,17 +237,43 @@ with open(".deep-review/.pending-mutation.json") as f:
 auto_recover() {
   [ ! -f "$STATE_FILE" ] && return 0
 
-  # Check lock — if present and fresh, skip (another session active)
+  # FR3 (4회차 Codex): use state file status + lock age to distinguish
+  # active mid-review from crashed session.
+  #   - status=in-progress + fresh (<1h)       : active, skip
+  #   - status=in-progress + stale (>1h)       : crashed early, recover
+  #   - status=committed   + fresh (<10min)    : mid-review (Codex reviewers running), skip
+  #   - status=committed   + older (>10min)    : crashed post-mutation, recover
+  #   - status=failed      + any age           : partial-failure orphan, recover
+  #
+  # Without PID liveness checks, the 10-minute threshold is a pragmatic cutoff —
+  # typical 3-way reviews complete within ~5 minutes. Users hitting this on
+  # legitimate long reviews can extend REVIEW_TIMEOUT_SECONDS (session-scoped env).
   if [ -d "$LOCK_DIR" ]; then
-    local lock_mtime age
+    local lock_mtime age status
     lock_mtime=$(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0)
     age=$(( $(date +%s) - lock_mtime ))
-    if [ "$age" -lt "$LOCK_STALE_SECONDS" ]; then
-      echo "⚠️ Another /deep-review session is active (lock age: ${age}s). Skipping auto-recovery." >&2
+    status=$(python3 -c 'import json,sys
+try:
+    print(json.load(open(".deep-review/.pending-mutation.json")).get("status",""))
+except Exception:
+    print("")' 2>/dev/null)
+
+    if [ "$status" = "failed" ]; then
+      echo "ℹ️ Detected failed mutation state. Recovering partial entries." >&2
+      rmdir "$LOCK_DIR" 2>/dev/null || true
+      _MUTATION_LOCK_OWNED=1
+    elif [ "$status" = "committed" ] && [ "$age" -gt "$REVIEW_TIMEOUT_SECONDS" ]; then
+      echo "ℹ️ Detected orphan lock from crashed session (status=committed, ${age}s > ${REVIEW_TIMEOUT_SECONDS}s). Recovering." >&2
+      rmdir "$LOCK_DIR" 2>/dev/null || true
+      _MUTATION_LOCK_OWNED=1
+    elif [ "$age" -lt "$LOCK_STALE_SECONDS" ]; then
+      echo "⚠️ Another /deep-review session is active (lock age: ${age}s, status=$status). Skipping auto-recovery." >&2
       return 0
+    else
+      echo "ℹ️ Stale lock detected (${age}s old, status=$status). Cleaning up." >&2
+      rmdir "$LOCK_DIR" 2>/dev/null || true
+      _MUTATION_LOCK_OWNED=1
     fi
-    echo "ℹ️ Stale lock detected (${age}s old). Cleaning up." >&2
-    rmdir "$LOCK_DIR" 2>/dev/null || true
   fi
 
   # Check restore_attempts
