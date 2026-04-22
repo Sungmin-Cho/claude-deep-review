@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# === F2: Node.js 가용성 helper (모든 출력 분기에서 공유) ===
+# CR7 대응: 하드코딩 금지 — 실제 PATH 에서 node 를 탐지해 값 emit.
+emit_node_availability() {
+  local node_available="false"
+  local node_path=""
+  if command -v node >/dev/null 2>&1; then
+    node_available="true"
+    node_path="$(command -v node)"
+  fi
+  echo "node_available=$node_available"
+  echo "node_path=$node_path"
+}
+
 # === 1. Git 리포지터리 여부 ===
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "is_git=false"
@@ -10,7 +23,10 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "codex_companion_path="
   echo "codex_cli=false"
   echo "codex_cli_path="
+  # F4 DEPRECATED: `codex_installed` 필드는 v1.4.0 에서 제거 예정.
+  # 새 소비자는 `codex_plugin` 직접 사용. 현재는 하위호환을 위해 유지.
   echo "codex_installed=false"
+  emit_node_availability
   exit 0
 fi
 
@@ -60,11 +76,13 @@ if ! git rev-parse HEAD >/dev/null 2>&1; then
   fi
   echo "codex_cli=$codex_cli"
   echo "codex_cli_path=$codex_cli_path"
+  # F4 DEPRECATED: `codex_installed` 필드는 v1.4.0 에서 제거 예정.
   if [ "$codex_plugin" = "true" ] || [ "$codex_cli" = "true" ]; then
     echo "codex_installed=true"
   else
     echo "codex_installed=false"
   fi
+  emit_node_availability
   exit 0
 fi
 
@@ -125,7 +143,7 @@ fi
 
 # 시도 3: root commit (커밋이 1개뿐) — empty tree hash 사용
 if [ -z "$review_base" ]; then
-  review_base="4b825dc642cb6eb9a060e54bf899d69f7cb46617"
+  review_base="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
   review_base_method="empty-tree"
 fi
 
@@ -164,9 +182,13 @@ fi
 echo "codex_cli=$codex_cli"
 echo "codex_cli_path=$codex_cli_path"
 
-# 5c. 하위호환
+# 5c. 하위호환 — F4 DEPRECATED: `codex_installed` 필드는 v1.4.0 에서 제거 예정.
+# 새 소비자는 `codex_plugin` 을 직접 사용.
 if [ "$codex_plugin" = "true" ] || [ "$codex_cli" = "true" ]; then
   echo "codex_installed=true"
 else
   echo "codex_installed=false"
 fi
+
+# 5d. F2 — Node.js 가용성 (Codex companion 은 .mjs 이므로 node 필수)
+emit_node_availability

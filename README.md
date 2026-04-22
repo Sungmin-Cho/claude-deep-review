@@ -105,6 +105,22 @@ The agent evaluates 5 criteria:
 
 Report is saved to `.deep-review/reports/{YYYY-MM-DD}-{HHmmss}-review.md` (timestamp prevents same-day overwrite).
 
+### Codex Auto-Exposure Protocol (v1.3.2)
+
+In Case 3 (git repo + Codex plugin installed), `/deep-review` automatically detects gitignored files the user has been editing in the current Claude Code session — typically specs, research notes, or planning docs — and offers to temporarily expose them to Codex for cross-model review.
+
+**Flow:**
+1. Stage 2.1 reflects on the current session's Edit/Write tool calls and cross-references with `git check-ignore`.
+2. Detected files are presented in a single AskUserQuestion prompt with the exact git commands that will run.
+3. On user approval, `perform_mutation` acquires an atomic `mkdir` lock, validates preconditions, records state in `.deep-review/.pending-mutation.json`, and runs `git add -f -N`.
+4. The 3-way review runs with `--scope working-tree`.
+5. On completion, `restore_mutation` filters out any files the user staged for real during review (preserving their work) and removes only the protocol's own intent-to-add entries, then releases the lock.
+6. Sessions that crash mid-mutation are auto-recovered by the next `/deep-review` invocation.
+
+Sensitive patterns (`.env*`, credentials, SSH keys, GCP service accounts, `.pgpass`, `.netrc`, `wrangler.toml`, JWT, and more) are scanned case-insensitively. An all-sensitive set is auto-skipped without prompting.
+
+Implementation lives in `hooks/scripts/mutation-protocol.sh`. See `skills/deep-review-workflow/references/codex-integration.md` for preflight and auth-failure handling.
+
 ## Receiving Review (Stage 5)
 
 When Stage 4 returns `REQUEST_CHANGES`, Deep Review offers three options:
