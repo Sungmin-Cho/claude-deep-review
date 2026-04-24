@@ -256,13 +256,27 @@ verification:
 4. 🟡 Warning (부분 일치) → YAGNI 체크 후 판단
 5. ℹ️ Info → 선택적
 
-### 구현 규칙
+### 구현 규칙 — 그룹 dispatch
 
-1. 한 항목씩 구현한다
-2. 각 항목 구현 후 테스트를 실행한다
-3. 회귀가 발생하면 즉시 중단하고 원인을 파악한다
-4. 모든 🔴 항목 완료 후에야 🟡 항목에 진행한다
-5. 각 심각도 그룹 완료 시 커밋한다
+Phase 6는 심각도 그룹(🔴 → 🟡 → ℹ️)별로 `phase6-implementer` 서브에이전트에 dispatch된다. Main은 판단·검증·기록만 담당한다. 상세는 스펙 `docs/superpowers/specs/2026-04-24-phase6-subagent-delegation-design.md` §5 참조.
+
+**Main의 절차**:
+
+1. **Accepted Items 정렬**: 우선순위 5단계(🔴 전원일치 → 🔴 부분일치 → 🟡 전원일치 → 🟡 부분일치 → ℹ️)로 정렬 후 `item_id` 재부여. 각 항목에 `confidence: agreed | partial` 필드 세팅.
+2. **심각도 그룹 loop** (🔴 → 🟡 → ℹ️):
+   - 그룹에 항목 0건이면 skip.
+   - 그룹별 로그 경로 결정: `{repo}/.deep-review/tmp/phase6-{severity}.log`.
+   - Agent dispatch (2단계 fallback):
+     - 1차: `Agent({ subagent_type: "deep-review:phase6-implementer", prompt: <스펙 §5.1 계약> })`
+     - 1차 실패 시: `Agent({ subagent_type: "phase6-implementer", ... })`
+     - 2차도 실패하면 main fallback (§6.2 강제 fallback 또는 dispatch 거부 분기)
+   - 환경변수 `DEEP_REVIEW_FORCE_FALLBACK=1`이면 dispatch 시도 없이 즉시 main fallback.
+3. **결과 검증**: 반환 메시지의 `Group Result` 블록 파싱 → `git diff --stat`으로 실제 파일 변경 대조 → `log_path`에서 실패 항목의 `ITEM-{id}` 구간 tail Read.
+4. **그룹 커밋 정책**: 전원 PASS 그룹만 **명시적 staging으로 커밋** — 서브에이전트 Group Result의 `files_changed` 목록만 `git add -- <files>`로 추가한 뒤 `git commit` (`git add -A` 금지; Stage 1 민감 파일 방지 규칙과 일관). 부분 실패 그룹은 미커밋, response.md에 "워킹 트리에 passed 항목 수정 남음" 경고 기록.
+5. **회귀 시 중단**: `execution_status: halted_on_regression | error` 또는 `items_failed > 0`이면 다음 그룹 dispatch 안 함.
+6. **Context 여력 안전장치**: dispatch 실패로 fallback 전환 시 남은 미처리 항목이 5건 이상이면 AskUserQuestion으로 "여기까지 / 계속" 선택. "여기까지" 시 남은 항목 `decision: DEFER, defer_reason: "dispatch failure, main context conservation"`.
+
+**서브에이전트의 절차**: `agents/phase6-implementer.md`의 시스템 프롬프트를 단일 소스로 한다. 본 문서는 main 관점만 기술.
 
 ### Response 리포트 생성
 
@@ -273,7 +287,7 @@ verification:
 
 **중요**: PR 코멘트 게시는 구현+테스트 성공 이후에 수행한다. 구현 전에 "Fixed" 등을 게시하면, 실패 시 거짓 답글이 남는다.
 
-각 ACCEPT 항목의 구현+테스트가 성공한 후에만 해당 코멘트에 답글:
+각 ACCEPT 항목 중 **서브에이전트가 PASS로 반환하고 main 검증(`git diff --stat` 대조, 로그 tail 확인)을 통과한 항목**에 대해서만 해당 코멘트에 답글 (스펙 §4.2 W6):
 
 인라인 코멘트:
 ```bash
