@@ -14,8 +14,9 @@
 #   E7. Rename detection — --name-status -M 로 new path 추출
 #   E8. Binary hash — git hash-object 로 binary content 변경 감지
 #   E9. Allowlist bypass block — pre-existing dirty outside path 재수정 감지
+#   E10. Recovery index sync — subagent git add 후 recovery 시 index 도 PRE 로 복원
 #
-# exit 0 = 9개 모두 PASS, exit 1 = 1건 이상 FAIL.
+# exit 0 = 10개 모두 PASS, exit 1 = 1건 이상 FAIL.
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -484,6 +485,58 @@ test_e9_outside_dirty_mutation() {
 }
 
 # ============================================================================
+# E10. Recovery — subagent git add 후 index 도 PRE 상태로 복원
+# ============================================================================
+# 시나리오 (v1.3.4 re-review W4 교정 실증):
+#   1. a.txt=v1 committed, 사용자 WIP: a.txt=v2 (uncommitted, unstaged)
+#   2. Pre-dispatch: baseline copy, PRE_HASH[a.txt]=hash(v2)
+#   3. Subagent: a.txt=v3 + `git add a.txt` (index 에 v3 staged)
+#   4. Recovery:
+#      - `git restore --staged a.txt` → index 가 HEAD (v1) 로
+#      - `cp baseline/a.txt a.txt` → worktree = v2
+#   5. 기대: worktree=v2 (WIP 보존), index=v1 (HEAD), `git diff --cached` empty.
+
+test_e10_recovery_index_sync() {
+  local name="E10"
+  local repo
+  repo=$(mk_tmp_repo)
+  (
+    cd "$repo" || exit 1
+    echo "v1" > a.txt
+    git add a.txt && git commit -q -m "init"
+    echo "v2" > a.txt   # 사용자 WIP, unstaged
+
+    # Pre-dispatch baseline
+    mkdir -p .deep-review/tmp/phase6-baseline
+    cp a.txt .deep-review/tmp/phase6-baseline/a.txt
+    local pre_hash
+    pre_hash=$(git hash-object -- a.txt)
+
+    # Subagent simulation: v3 로 수정 + git add (index 에 staged v3)
+    echo "v3" > a.txt
+    git add -- a.txt
+
+    # Recovery (W4 교정 경로): index 우선 PRE 상태로, 그 다음 worktree 복원
+    # tracked 였던 파일 (PRE_HASH != "absent") → git restore --staged
+    git restore --staged -- a.txt 2>/dev/null || true
+    cp .deep-review/tmp/phase6-baseline/a.txt a.txt
+  ) > "$repo/.out" 2>&1
+
+  local worktree_content index_clean
+  worktree_content=$(cat "$repo/a.txt")
+  # a.txt 의 index 내용과 HEAD 내용 비교
+  index_clean=$(cd "$repo" && git diff --cached --quiet -- a.txt && echo "yes" || echo "no")
+
+  if [[ "$worktree_content" == "v2" && "$index_clean" == "yes" ]]; then
+    e2e_pass "$name" "recovery restored worktree=v2 (WIP) and index=HEAD (subagent git add undone)"
+  else
+    e2e_fail "$name" "worktree='$worktree_content' (expect v2), index_clean='$index_clean' (expect yes)"
+  fi
+
+  cleanup_tmp_repo "$repo"
+}
+
+# ============================================================================
 # 실행
 # ============================================================================
 
@@ -497,6 +550,7 @@ test_e6_log_path_quoting
 test_e7_rename_detection
 test_e8_binary_hash
 test_e9_outside_dirty_mutation
+test_e10_recovery_index_sync
 
 echo "---"
 echo "E2E Total: $E2E_PASS passed, $E2E_FAIL failed"

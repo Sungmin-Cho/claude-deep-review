@@ -332,8 +332,9 @@ JSON 대신 labeled markdown을 선택한 이유:
    - Same-file pre-staged hunk 검출 → AskUserQuestion으로 사용자 확인.
    - `git commit --only -m "fix(review-response): ..." -- "${CHANGED_FILES[@]}"` — **`-m`은 `--` 앞**.
    - **금지**: `git add -A`, `git commit` (no pathspec), `git commit --only -- <paths> -m <msg>`.
-9. **Dirty recovery — per-file content baseline** (→ commands Step 7; E5):
-   - (2) 선택 시: **`git restore --source=HEAD` 사용 금지** (user WIP 파괴). §5.4.1에서 저장한 `.deep-review/tmp/phase6-{severity}-baseline/<path>`에서 `cp`로 복원, PRE에 없던 파일은 삭제.
+9. **Dirty recovery — per-file content baseline + index 동기 복원** (→ commands Step 7; E5, W4):
+   - (2) 선택 시: **`git restore --source=HEAD` 사용 금지** (user WIP 파괴). §5.4.1에서 저장한 `.deep-review/tmp/phase6-{severity}-baseline/<path>`에서 `cp`로 worktree 복원, PRE에 없던 파일은 삭제.
+   - **Index 동기 복원 (W4 교정)**: worktree 복원 전에 각 ALLOWED 경로의 index 를 PRE 상태로 되돌린다. tracked 였던 경로는 `git restore --staged`, untracked 였던 경로는 `git rm --cached --ignore-unmatch` — subagent 가 `git add` / `git mv` 로 index 를 변경했을 가능성을 제거. 사용자가 Phase 6 진입 전 동일 path 에 stage 한 hunk 도 함께 un-stage 되지만, ALLOWED 경로는 Phase 6 전용이라 실제 충돌 위험은 낮고 복원 로그가 response.md 에 남는다.
    - 파일 단위 복원은 binary/text 무관하게 동작.
 10. **Response 리포트** (→ commands §3 "Response 리포트 저장"): 모든 그룹 완료 후 `response-format.md` 형식으로 response.md 작성.
 11. **PR 코멘트 게시** (→ `--source=pr` 경로): **§5.4.3~§5.4.7 검증 통과한 PASS 항목만** `gh api` 로 코멘트 게시.
