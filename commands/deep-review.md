@@ -472,11 +472,20 @@ restore_mutation
 source ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/mutation-protocol.sh
 auto_recover
 
-# Phase 6 tmp 로그 1단계 회전 — 직전 세션 로그는 prev/로 보존, 2회 이전은 자동 소멸
+# Phase 6 tmp artifact 1단계 회전 — 직전 세션은 prev/로 보존, 2회 이전은 자동 소멸.
+# v1.3.4 N2 교정: .log 외에도 TSV (C4) + baseline/ (W4/C5) 디렉토리를 함께 회전.
+mkdir -p .deep-review/tmp/prev
 if compgen -G ".deep-review/tmp/phase6-*.log" > /dev/null 2>&1; then
-  mkdir -p .deep-review/tmp/prev
   rm -f .deep-review/tmp/prev/phase6-*.log 2>/dev/null || true
   mv .deep-review/tmp/phase6-*.log .deep-review/tmp/prev/ 2>/dev/null || true
+fi
+if compgen -G ".deep-review/tmp/phase6-*.tsv" > /dev/null 2>&1; then
+  rm -f .deep-review/tmp/prev/phase6-*.tsv 2>/dev/null || true
+  mv .deep-review/tmp/phase6-*.tsv .deep-review/tmp/prev/ 2>/dev/null || true
+fi
+if compgen -G ".deep-review/tmp/phase6-*-baseline" > /dev/null 2>&1; then
+  rm -rf .deep-review/tmp/prev/phase6-*-baseline 2>/dev/null || true
+  mv .deep-review/tmp/phase6-*-baseline .deep-review/tmp/prev/ 2>/dev/null || true
 fi
 ```
 
