@@ -26,6 +26,7 @@
 - **macOS `/bin/bash` 3.2 호환성** (3차 review C4): Step 3/5/7 이 `declare -A` (bash 4+) 사용 → macOS 기본 shell 에서 `invalid option` exit 2. associative array 를 TSV temp file 로 전면 교체 (`PRE_HASH_FILE`, `PRE_TRACKED_FILE`, `PRE_STAGED_FILE`, `PRE_OUTSIDE_HASH_FILE`). lookup 은 `awk -F'\t'` / `while IFS=$'\t' read`.
 - **Partial-hunk staging 사용자 경고** (3차 review W7 — minimal fix): `git restore --staged` 가 사용자 `git add -p` hunk-selection state 까지 un-stage. Step 3 에 `PRE_STAGED_FILE` 기록, Step 7 에서 해당 경로 목록을 사전 warning + response.md 로그. 완전한 blob-level snapshot 은 v1.3.5 후보.
 - **Spec ↔ agent test-order drift** (3차 review W8): `phase6-delegation-spec.md` 의 테스트 명령 우선순위가 hooks-first 였으나 agent `:46-52` 는 hooks-fallback-only. Spec 을 agent 순서와 동일하게 재작성 + agent 를 normative source 로 명시.
+- **tmp artifact rotation 확장** (4차 review N2): `/deep-review --respond` 의 `.deep-review/tmp/` rotation 이 `.log` 만 prev/로 이동시키고 C4 TSV snapshot (`phase6-*-{pre-hash,pre-tracked,pre-staged,pre-outside-hash}.tsv`) + W4/C5 `phase6-{severity}-baseline/` 디렉토리는 누적 방치됐다. 이제 세 종류 모두 동일 1단계 회전으로 묶여 직전 두 세션 artifact 만 디스크에 유지된다.
 
 ### Known limitations (v1.3.4)
 - Phase 6 dogfood T3 / T4 (release gate §7.5) 미완. 실제 feature 브랜치의 live 리뷰가 필요한 수동 작업으로, 이번 세션 범위를 벗어나 follow-up 세션 태스크로 기록. 프로토콜 회귀 없음 (structural 10 + e2e 11 green) — manual verification 리추얼만 미룸.
