@@ -288,35 +288,51 @@ JSON 대신 labeled markdown을 선택한 이유:
 
 ### 5.4 Main의 후처리 절차 (fail-closed + content-aware delta + allowlist)
 
-각 그룹 dispatch 완료 시 (정식 구현은 `commands/deep-review.md` Step 2.5 단일 소스, 실행 검증은 `hooks/scripts/test/test-phase6-protocol-e2e.sh`):
+각 그룹 dispatch 완료 시 (정식 구현은 `commands/deep-review.md` Step 2.5 단일 소스, 실행 검증은 `hooks/scripts/test/test-phase6-protocol-e2e.sh`).
 
-1. **Pre-dispatch snapshot**:
+**Spec ↔ commands 매핑** (이 §5.4의 11개 sub-item은 commands Step 2.5의 8-step 중 3~7번 step + 후처리(§3)에 분산 배치됨):
+
+| Spec §5.4 | Commands | 주제 |
+|---|---|---|
+| §5.4.1 | Step 3 | Pre-dispatch snapshot (allowlist + baseline) |
+| §5.4.2 | Step 4 + Step 5 preamble | Dispatch + 결과 파싱 |
+| §5.4.3 | Step 5 | Content-aware DELTA |
+| §5.4.4 | Step 5 | Path-set violation |
+| §5.4.5 | Step 5 | Claim 정규화 |
+| §5.4.6 | Step 5 | REVERTED symmetric check |
+| §5.4.7 | Step 5 | 실패 항목 log tail |
+| §5.4.8 | Step 6 | 전원 PASS 그룹 커밋 |
+| §5.4.9 | Step 7 | Dirty recovery |
+| §5.4.10 | commands §3 "Response 리포트 저장" | response.md |
+| §5.4.11 | `--source=pr` 경로 | PR 코멘트 |
+
+1. **Pre-dispatch snapshot** (→ commands Step 3):
    - `ALLOWED` = `target_location` ∪ `modifiable_paths` (comma/newline split + line-range strip).
    - Path-set baseline (violation 검출용): `PRE_MODIFIED`, `PRE_UNTRACKED`, `PRE_STATUS`.
    - Content-aware baseline (`ALLOWED` 각 파일): `PRE_HASH[path] = git hash-object path`, + per-file content를 `.deep-review/tmp/phase6-{severity}-baseline/<path>`에 복사. Dirty recovery의 restore source로 사용 (E5).
-2. Agent dispatch 후 반환 `Group Result` 파싱. `halted_on_regression` | `error` | 파싱 불가 → §5.4.7 Dirty recovery로 분기.
-3. **Content-aware DELTA 산출** (E2 — dirty-tree에서 path-membership 비교는 false-negative):
+2. **Agent dispatch + 결과 파싱** (→ commands Step 4 + Step 5 preamble). 반환 `Group Result`가 `halted_on_regression` | `error` | 파싱 불가 → §5.4.9 Dirty recovery로 분기.
+3. **Content-aware DELTA 산출** (→ commands Step 5; E2 — dirty-tree에서 path-membership 비교는 false-negative):
    - `DELTA = { f ∈ ALLOWED | git hash-object f (POST) != PRE_HASH[f] }`.
-4. **Path-set violation check** (trust boundary):
+4. **Path-set violation check** (→ commands Step 5; trust boundary):
    - `NEW_PATHS = (POST_MODIFIED ∪ POST_UNTRACKED) - (PRE_MODIFIED ∪ PRE_UNTRACKED)`.
    - `VIOLATIONS = NEW_PATHS - ALLOWED`. 비어있지 않으면 `execution_status=error`.
-5. **Claim 정규화 + 비교** (E1 — subagent `files_changed: - path (+A -B)`):
+5. **Claim 정규화 + 비교** (→ commands Step 5; E1 — subagent `files_changed: - path (+A -B)`):
    - `CLAIM = files_changed | sed -E 's/ \(\+[0-9]+ -[0-9]+\)$//'`.
    - `CLAIM != DELTA` → error.
-6. **REVERTED symmetric check**:
+6. **REVERTED symmetric check** (→ commands Step 5):
    - `REVERTED = (PRE_MODIFIED ∪ PRE_UNTRACKED) - (POST_MODIFIED ∪ POST_UNTRACKED)`. 비어있지 않으면 error (서브에이전트 revert).
-7. 실패 항목 `Read(log_path)`로 `ITEM-{id}` 구분자 tail. `log_path` 부재 → `log_unavailable=true`, error.
-8. **전원 PASS 그룹만 커밋 — pathspec-limited**:
+7. **실패 항목 log tail** (→ commands Step 5): `Read(log_path)`로 `ITEM-{id}` 구분자 tail. `log_path` 부재 → `log_unavailable=true`, error.
+8. **전원 PASS 그룹만 커밋 — pathspec-limited** (→ commands Step 6):
    - 신규 untracked(`PRE_HASH[f] == "absent"`) → `git add -- <path>` (NUL-safe 루프, not `xargs`).
    - Pre-staged 경고는 `EXCL=(":(exclude)$f" for f)` 배열 (E3 fix) 로 검출.
    - Same-file pre-staged hunk 검출 → AskUserQuestion으로 사용자 확인.
    - `git commit --only -m "fix(review-response): ..." -- "${CHANGED_FILES[@]}"` — **`-m`은 `--` 앞**.
    - **금지**: `git add -A`, `git commit` (no pathspec), `git commit --only -- <paths> -m <msg>`.
-9. **Dirty recovery — per-file content baseline** (E5):
-   - (2) 선택 시: **`git restore --source=HEAD` 사용 금지** (user WIP 파괴). Step 1에서 저장한 `.deep-review/tmp/phase6-{severity}-baseline/<path>`에서 `cp`로 복원, PRE에 없던 파일은 삭제.
+9. **Dirty recovery — per-file content baseline** (→ commands Step 7; E5):
+   - (2) 선택 시: **`git restore --source=HEAD` 사용 금지** (user WIP 파괴). §5.4.1에서 저장한 `.deep-review/tmp/phase6-{severity}-baseline/<path>`에서 `cp`로 복원, PRE에 없던 파일은 삭제.
    - 파일 단위 복원은 binary/text 무관하게 동작.
-10. 모든 그룹 완료 후 response-format.md 형식으로 response.md 작성.
-11. `--source=pr` 시, **§5.4.3~5.4.7 검증 통과한 PASS 항목만** gh api 코멘트 게시.
+10. **Response 리포트** (→ commands §3 "Response 리포트 저장"): 모든 그룹 완료 후 `response-format.md` 형식으로 response.md 작성.
+11. **PR 코멘트 게시** (→ `--source=pr` 경로): **§5.4.3~§5.4.7 검증 통과한 PASS 항목만** `gh api` 로 코멘트 게시.
 
 **`execution_path` 값 결정표** (W5):
 
