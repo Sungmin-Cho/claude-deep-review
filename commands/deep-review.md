@@ -464,14 +464,23 @@ restore_mutation
 
 ## Steps (대응 모드 — `--respond` 인수)
 
-### 0. 자동 복원
+### 0. 자동 복원 + tmp 회전
 
-리뷰 모드 §0.1 과 동일. 이전 세션의 stale mutation 을 자동 정리한다.
+리뷰 모드 §0.1 과 동일한 mutation 자동 복원 후, Phase 6 tmp 로그를 1단계 회전.
 
 ```bash
 source ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/mutation-protocol.sh
 auto_recover
+
+# Phase 6 tmp 로그 1단계 회전 — 직전 세션 로그는 prev/로 보존, 2회 이전은 자동 소멸
+if compgen -G ".deep-review/tmp/phase6-*.log" > /dev/null 2>&1; then
+  mkdir -p .deep-review/tmp/prev
+  rm -f .deep-review/tmp/prev/phase6-*.log 2>/dev/null || true
+  mv .deep-review/tmp/phase6-*.log .deep-review/tmp/prev/ 2>/dev/null || true
+fi
 ```
+
+회전 근거와 상세 정책은 스펙 §6.9 참조.
 
 ### Prerequisites
 
@@ -502,10 +511,59 @@ auto_recover
 **리포트 확인 (같은 날 덮어쓰기 방지)**:
 리포트 로드 후, 사용자에게 Summary(Verdict, Review Mode, Issues 요약)를 표시하고 "이 리포트에 대응하시겠습니까?" 확인을 받는다. 리포트 파일명은 이제 `{YYYY-MM-DD}-{HHmmss}-review.md` 타임스탬프 기반이므로 덮어쓰기는 발생하지 않지만, 같은 날 여러 리뷰가 있을 경우 사용자가 어떤 리포트에 대응할지 혼동할 수 있다. 확인 단계를 통해 잘못된 리포트에 대응하는 것을 방지한다.
 
-### 2. receiving-review 스킬 실행
+### 2. receiving-review Phase 1~5 (main)
 
-로드된 `receiving-review` 스킬의 Phase 1~6을 실행합니다.
-Recurring findings 분류 및 경고는 스킬 내부 Phase 1(READ)에서 처리됩니다.
+로드된 `receiving-review` 스킬의 Phase 1~5를 main 세션에서 실행합니다.
+- Phase 1~5: READ / UNDERSTAND / VERIFY / EVALUATE / RESPOND — ACCEPT/REJECT/DEFER 판단까지.
+- 각 ACCEPT 항목에 `implementation_guide` 5개 필드(`target_location`/`intent`/`change_shape`/`non_goals`/`acceptance`)를 기록.
+- Accepted Items를 5단계 우선순위(🔴 전원일치 → 🔴 부분일치 → 🟡 전원일치 → 🟡 부분일치 → ℹ️)로 정렬, `confidence: agreed | partial` 필드 세팅.
+- Recurring findings 분류 및 경고는 Phase 1(READ) 내부에서 처리.
+
+### 2.5 Phase 6 — subagent dispatch (심각도 그룹 loop)
+
+Phase 6 구현은 `phase6-implementer` 서브에이전트에 그룹 dispatch. 상세 스펙: `docs/superpowers/specs/2026-04-24-phase6-subagent-delegation-design.md` §3, §5, §6.
+
+**심각도 그룹 loop** (🔴 → 🟡 → ℹ️):
+
+1. 해당 그룹의 ACCEPT 항목이 0건이면 skip.
+2. 로그 경로 결정: `log_path="$(pwd)/.deep-review/tmp/phase6-${severity}.log"` (절대 경로). `mkdir -p .deep-review/tmp`.
+3. **Dispatch 2단계 네임스페이스 fallback**:
+   - 환경변수 `DEEP_REVIEW_FORCE_FALLBACK=1` 이 설정되면 dispatch 건너뛰고 즉시 main fallback 경로로 분기.
+   - 1차: `Agent({ subagent_type: "deep-review:phase6-implementer", prompt: <§5.1 계약> })`
+   - 1차가 "subagent_type not found" 또는 유사 에러 반환 시 2차: `Agent({ subagent_type: "phase6-implementer", prompt: <§5.1 계약> })`
+   - 2차도 실패 또는 permission refusal 등 dispatch 자체 실패 시 → main fallback 분기.
+4. **결과 검증 (dispatch 성공 시)**:
+   - 반환 메시지의 `## Group Result` 블록을 파싱.
+   - `Bash({ command: "git diff --stat" })`로 실제 변경 파일 대조. 서브에이전트 주장 `files_changed`와 불일치 시 response.md `notes`에 경고 기록.
+   - `Read(log_path)` 또는 tail — 실패 항목은 `ITEM-{id}` 구분자로 해당 구간만 확인.
+5. **그룹 커밋**: 전원 PASS(`items_passed == items_total`)일 때만 **명시적 staging**:
+   - 서브에이전트 Group Result의 `files_changed` 목록(또는 main fallback 시 main이 추적한 수정 파일)을 `CHANGED_FILES` 배열로 수집.
+   - `git add -- "${CHANGED_FILES[@]}"` 후 `git diff --cached --name-only`로 스테이징 내역 확인한 뒤 커밋:
+     ```bash
+     git add -- "${CHANGED_FILES[@]}"
+     git diff --cached --name-only   # 검증용
+     git commit -m "fix(review-response): resolve {severity} items from {report_basename}"
+     ```
+   - **`git add -A` 금지** (Stage 1 민감 파일 방지 규칙과 일관). 부분 실패 또는 halted 그룹은 커밋 건너뜀. response.md에 "워킹 트리에 passed 항목 수정 남음" 경고 기록.
+6. **중단 판정**: `execution_status in (halted_on_regression, error)` 또는 `items_failed > 0`이면 다음 그룹 dispatch 안 함. 스킵된 후속 항목은 `decision: DEFER, defer_reason: "halted at {severity} group"`로 기록.
+
+**Main fallback 분기** (dispatch 실패):
+
+1. 경고 출력: `⚠ phase6-implementer dispatch failed ({reason}). Falling back to in-session execution.`
+2. **Context 여력 안전장치** — 남은 미처리 항목 수(현재 그룹 + 후속 그룹) ≥ 5 이면 AskUserQuestion:
+   > (1) 여기까지 — 남은 항목을 DEFER로 기록 후 종료 / (2) 계속 진행 (context 소진 위험).
+3. (1) 선택: 남은 항목 `decision: DEFER, defer_reason: "dispatch failure, main context conservation"`로 기록하고 Step 3으로.
+4. (2) 또는 N < 5: main이 직접 receiving-review Phase 6 로직으로 구현 (한 항목씩, 매 항목 테스트, 회귀 시 즉시 중단).
+5. response.md Summary `Execution path`에 `main_fallback` 또는 `mixed` 기록 (스펙 §5.4 결정표 참조).
+
+**`execution_path` 값 결정**:
+
+| 시나리오 | 값 |
+|---------|-----|
+| 전 그룹 subagent 성공 | `subagent` |
+| 1st dispatch 시도부터 실패 | `main_fallback` |
+| 일부 subagent + 일부 fallback | `mixed` |
+| ACCEPT 0건 | `n/a` |
 
 ### 3. Response 리포트 저장
 
