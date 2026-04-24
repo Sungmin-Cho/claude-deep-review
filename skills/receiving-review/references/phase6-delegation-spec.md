@@ -140,7 +140,7 @@ tools:
   2. 각 항목: Edit → 테스트 실행 → 결과를 `log_path`에 append. 로그 포맷(W9):
      - 항목 시작: `===== ITEM-{id} START {ISO8601-timestamp} =====`
      - 항목 끝: `===== ITEM-{id} END exit={code} =====`
-     - stdout/stderr 합성: `bash -c 'cmd 2>&1 | tee -a "$log_path"'` (단일 append)
+     - stdout/stderr 합성: Main 이 전달한 절대경로를 outer `'...'` single-quote 안에 **literal 치환**하여 `tee -a` 한 번만 append. 정확한 계약(공백/특수문자 경로 escape, `printf '%q'` 금지, `$log_path` 변수 참조 금지)은 `agents/phase6-implementer.md:58-71` 를 단일 소스로 한다 — C2 교정 전의 `bash -c 'cmd 2>&1 \| tee -a "$log_path"'` 패턴은 single-quote 내부에서 `$log_path` 가 빈 문자열로 확장되어 로그 파일 미생성 → group error 로 귀결되므로 **금지**.
      - 백그라운드 실행 금지 — 순서·라인 번호 일관성 보장. (main 재검증은 라인 번호가 아닌 `ITEM-{id}` 문자열 검색으로 수행 가능)
   3. `test_exit_code != 0`이면 해당 그룹 즉시 중단, 이후 항목은 `status: skipped_due_to_halt`
   4. `max_files_per_item` 초과 시 해당 항목 `status: error`로 표시, 다음 항목 진행 여부는 halt 규칙 적용.
