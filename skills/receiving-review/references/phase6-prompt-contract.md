@@ -27,7 +27,7 @@ Phase 6는 `/deep-review --respond`의 6단계 대응 프로토콜 중 실행(IM
 **프로토콜 원칙**:
 - Main은 판단·검증·기록, 서브에이전트는 실행.
 - 서브에이전트 출력은 fail-closed로 검증 (`git hash-object` 기반 content delta, allowlist 강제).
-- 프로토콜의 모든 shell 로직은 `hooks/scripts/test/test-phase6-protocol-e2e.sh` (5 시나리오) + `test-phase6-subagent.sh` (10 구조 체크)로 실증 검증.
+- 프로토콜의 모든 shell 로직은 `hooks/scripts/test/test-phase6-protocol-e2e.sh` (11 시나리오, E1~E11) + `test-phase6-subagent.sh` (10 구조 체크)로 실증 검증.
 
 ---
 
@@ -555,7 +555,7 @@ v1.3.3 agent는 literal 치환만 지시. v1.3.4부터 single-quote wrap 필수.
 | 버전 | 변경 |
 |------|------|
 | v1.3.3 | Phase 6 subagent delegation 최초 release. `implementation_guide` 6 필드 (modifiable_paths 포함). 본 contract의 기준. |
-| v1.3.4 | `log_path` outer single-quote wrap + `'\''` escape 의무화, rename/binary precision (`--name-status -M` + staged∪unstaged 합집합), spec 이동 (본 문서와 함께 shipped), CI 통합 (`.github/workflows/phase6-protocol.yml`). |
+| v1.3.4 | `log_path` outer single-quote wrap + `'\''` escape 의무화 (`printf '%q'` 금지), rename/binary precision (`--name-status -M` + staged∪unstaged 합집합), spec 이동 (본 문서와 함께 shipped), CI 통합 (`.github/workflows/phase6-protocol.yml`), trust-boundary 3종 교정 — allowlist bypass 차단 (`PRE_OUTSIDE_HASH_FILE`/`OUTSIDE_VIOLATIONS`, C3/E9), dirty recovery index 동기 복원 (`git restore --staged`, W4/E10) + tracked-deleted WIP 보존 (`PRE_TRACKED_FILE`, C5/E11), partial-hunk staging 경고 (`PRE_STAGED_FILE`, W7), macOS `/bin/bash` 3.2 호환 (associative array → TSV temp file, C4), test-order 정렬 (spec ↔ agent, W8). |
 
 **Breaking change policy**: `implementation_guide` 필드 추가는 additive. 삭제/rename은 minor version bump + deprecation 주기. 출력 contract 변경도 동일.
 
