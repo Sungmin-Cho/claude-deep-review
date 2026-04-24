@@ -2,6 +2,29 @@
 
 **English** | [한국어](./CHANGELOG.ko.md)
 
+## [1.3.4] — 2026-04-24
+
+Follow-up release that resolves every `Known limitations` item published with 1.3.3 and adds CI coverage. No Phase 1–5 logic changes; subagent model remains `sonnet`; parallel dispatch is still non-goal.
+
+### Added
+- `skills/receiving-review/references/phase6-delegation-spec.md` — the Phase 6 design spec is now a **shipped** on-demand reference. The previous copy under `docs/superpowers/specs/` never shipped because the plugin repo blanket-ignores `docs/`.
+- `hooks/scripts/test/test-phase6-protocol-e2e.sh` — 3 new scenarios: **E6** `log_path` single-quote wrap survives paths with spaces/glob metacharacters; **E7** `git diff --name-status -M` extracts the new path from a staged rename; **E8** `git hash-object` detects content mutation in a binary (NUL-byte) file. Total e2e count 5 → 8.
+- `.github/workflows/phase6-protocol.yml` — CI job running both structural (10) and protocol e2e (8) tests on `ubuntu-latest` **and** `macos-latest` (GNU vs BSD awk/sed compatibility). Triggered on `main` push and on PRs that touch the agent, `commands/deep-review.md`, `skills/receiving-review/**`, the test scripts, or the workflow itself. `permissions: contents: read` (minimum).
+
+### Changed
+- `agents/phase6-implementer.md` — the literal `log_path` substitution pattern now mandates single-quote wrap around the absolute path. Escape rule `'\''` is documented; `printf '%q'` pre-quoting is permitted. Two forbidden patterns are explicitly enumerated: (a) `tee -a "$log_path"` inside single quotes (empty variable expansion), and (b) `tee -a /path with space/log` without quoting (word-split into three arguments).
+- `commands/deep-review.md` Step 2.5 (Phase 6 group loop) — path-set baselines now use `git diff --name-status -M`. An awk post-processor selects the new path from any `R`/`C` rename/copy row, so that Phase 6 claim↔delta comparison does not false-positive on staged renames. Binary files continue to flow through `git hash-object` for DELTA computation — explicitly documented so readers don't infer a hidden branch.
+- `commands/deep-review.md` Step 2.5 — added a "Step ↔ spec §5.4 mapping" table at the top of the group loop. Every step headline (3–8) now carries a `(spec §5.4.X)` back-reference. Spec §5.4 adds the reciprocal `(→ commands Step X)` on every item and a mapping table at the top. Numbering itself is unchanged (drift risk); only cross-references are added.
+- **Tone unification** — three runtime warning strings in `commands/deep-review.md` and `skills/receiving-review/references/phase6-delegation-spec.md` that were still English are now Korean, matching the rest of the review/response UI (`⚠ Phase 6 범위 외에 pre-staged 파일이 감지됐습니다:` and two siblings).
+- **Placeholder convention** — the subagent output template in `agents/phase6-implementer.md` and the Accepted-Items prompt template in `phase6-prompt-contract.md` each gained a one-line preamble declaring `<...>` as "fill with the actual value before emitting" and `{...}` as "type label for the value that replaces it". This closes a long-standing ambiguity that risked subagents echoing the placeholder verbatim.
+
+### Fixed
+- `phase6-delegation-spec.md` §5.4.2 used to reference `§5.4.7 Dirty recovery` but Dirty recovery is at `§5.4.9`. Corrected. Similarly `§5.4.9` referenced "Step 1" when the relevant per-file snapshot originates at `§5.4.1`; updated to the intra-document reference.
+
+### Known limitations (v1.3.4)
+- Phase 6 dogfood T3 / T4 (release gate §7.5) remains pending — both require a live review on a real feature branch. Captured as a follow-up session task; the protocol has not regressed (all 10 + 8 tests green), only the manual verification ritual is deferred.
+- `--qa` flag is still reserved-only (v1.3.4 out-of-scope).
+
 ## [1.3.3] — 2026-04-24
 
 ### Added

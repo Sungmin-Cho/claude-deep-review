@@ -2,6 +2,29 @@
 
 [English](./CHANGELOG.md) | **한국어**
 
+## [1.3.4] — 2026-04-24
+
+1.3.3 릴리스 시 공개한 `Known limitations` 항목을 모두 해소하고 CI 커버리지를 추가한 후속 릴리스. Phase 1~5 로직 변경 없음. 서브에이전트 모델은 `sonnet` 유지. 병렬 dispatch는 non-goal 유지.
+
+### 추가
+- `skills/receiving-review/references/phase6-delegation-spec.md` — Phase 6 설계 스펙을 shipped on-demand reference로 이동. 기존 `docs/superpowers/specs/` 경로는 플러그인 repo의 `docs/` blanket ignore로 인해 사용자에게 전달되지 않았다.
+- `hooks/scripts/test/test-phase6-protocol-e2e.sh` — 3개 시나리오 신설. **E6** `log_path` single-quote wrap이 공백·glob 포함 경로에서도 로그 파일을 정확한 경로에 생성함을 실증. **E7** `git diff --name-status -M` + awk 파이프라인이 staged rename의 new path만 추출. **E8** `git hash-object`가 NUL byte 포함 binary 파일의 내용 변경을 감지. 총 e2e 5 → 8.
+- `.github/workflows/phase6-protocol.yml` — structural(10) + protocol e2e(8) 테스트를 `ubuntu-latest` **및** `macos-latest`에서 자동 실행하는 CI 워크플로(GNU vs BSD awk/sed 호환 검증 포함). `main` push와 agent / `commands/deep-review.md` / `skills/receiving-review/**` / 테스트 스크립트 / workflow 자체를 건드리는 PR에서 트리거. `permissions: contents: read` 최소 권한.
+
+### 변경
+- `agents/phase6-implementer.md` — literal `log_path` 치환 패턴에 **single-quote wrap 의무화**. `'\''` escape 규칙 + `printf '%q'` 허용 명시. 금지 패턴 2개 명시: (a) single-quote 내부의 `tee -a "$log_path"` (빈 변수 확장), (b) quote 없는 `tee -a /path with space/log` (3개 인자로 word-split).
+- `commands/deep-review.md` Step 2.5 (Phase 6 그룹 loop) — path-set baseline을 `git diff --name-status -M` 으로 전환. awk 후처리로 R/C rename/copy 라인에서 new path만 채택 → Phase 6 claim↔delta 비교가 staged rename에서 false-positive를 내지 않음. Binary 파일은 여전히 `git hash-object`를 통해 DELTA에 포함되며 이는 별도 분기 없음 — 명시적으로 문서화하여 숨겨진 로직을 추정하지 않도록.
+- `commands/deep-review.md` Step 2.5 — 그룹 loop 상단에 "Step ↔ spec §5.4 매핑 테이블" 추가. 모든 step 헤더(3~8)에 `(spec §5.4.X)` 역참조. Spec §5.4 각 item에는 `(→ commands Step X)` 상호 참조 + 상단 매핑 테이블. 번호 자체는 재정렬하지 않음 (drift 위험) — 상호 참조만 추가.
+- **톤 통일** — `commands/deep-review.md` 와 `skills/receiving-review/references/phase6-delegation-spec.md` 에 남아 있던 영문 warning 3건을 한국어로 교체 (`⚠ Phase 6 범위 외에 pre-staged 파일이 감지됐습니다:` 등). 리뷰/대응 UI 전반의 한국어 어조와 일관성 확보.
+- **Placeholder 관습 명시화** — `agents/phase6-implementer.md`의 subagent 출력 template과 `phase6-prompt-contract.md`의 Accepted-Items prompt template 서두에 `<...>`는 "실제 값으로 치환해서 내보내야 할 placeholder", `{...}`는 "치환될 값의 타입 라벨"임을 각각 한 줄 선언. 그간 문자 그대로 반환될 위험이 있던 중의성 제거.
+
+### 고침
+- `phase6-delegation-spec.md` §5.4.2가 "§5.4.7 Dirty recovery"를 참조했으나 Dirty recovery는 §5.4.9. 정정. §5.4.9의 "Step 1에서 저장한"도 per-file snapshot이 §5.4.1에서 생성되므로 해당 spec 내부 참조로 교정.
+
+### Known limitations (v1.3.4)
+- Phase 6 dogfood T3 / T4 (release gate §7.5) 미완. 실제 feature 브랜치의 live 리뷰가 필요한 수동 작업으로, 이번 세션 범위를 벗어나 follow-up 세션 태스크로 기록. 프로토콜 회귀 없음 (structural 10 + e2e 8 green) — manual verification 리추얼만 미룸.
+- `--qa` 플래그는 여전히 reserved-only (v1.3.4 out-of-scope).
+
 ## [1.3.3] — 2026-04-24
 
 ### Added
