@@ -569,4 +569,4 @@ v1.3.3 agent는 literal 치환만 지시. v1.3.4부터 single-quote wrap 필수.
 - **설계 배경**: `skills/receiving-review/references/phase6-delegation-spec.md`
 - **검증 테스트**:
   - `hooks/scripts/test/test-phase6-subagent.sh` (10 structural)
-  - `hooks/scripts/test/test-phase6-protocol-e2e.sh` (10 e2e, E1~E10)
+  - `hooks/scripts/test/test-phase6-protocol-e2e.sh` (11 e2e, E1~E11)

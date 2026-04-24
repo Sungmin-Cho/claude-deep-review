@@ -311,8 +311,11 @@ JSON 대신 labeled markdown을 선택한 이유:
    - Path-set baseline (violation 검출용): `PRE_MODIFIED`, `PRE_UNTRACKED`, `PRE_STATUS`.
      - `PRE_MODIFIED`는 `git diff --name-status -M` (unstaged) **와** `git diff --cached --name-status -M` (staged) 의 **합집합**을 awk로 후처리하여 rename(R)/copy(C) 라인의 new path만 채택 (E7). `git mv`는 자동 staged로 분류되므로 `--cached`를 함께 읽지 않으면 subagent가 Bash tool로 연 staged rename을 baseline이 놓치고 `NEW_PATHS`/`REVERTED` 계산이 false-negative가 된다 (v1.3.4 review C1 교정).
      - Binary 파일도 `--name-status`가 path 단위로 나열하고, 아래의 `git hash-object`가 content hash를 반환하므로 DELTA 계산이 text와 동일하게 작동 (E8). 별도 분기 없음.
-   - Content-aware baseline (`ALLOWED` 각 파일): `PRE_HASH[path] = git hash-object path`, + per-file content를 `.deep-review/tmp/phase6-{severity}-baseline/<path>`에 복사. Dirty recovery의 restore source로 사용 (E5).
-   - **Pre-existing outside content snapshot** (C3 교정, E9): `PRE_MODIFIED ∪ PRE_UNTRACKED` 중 ALLOWED 에 없는 경로의 `PRE_OUTSIDE_HASH[path]` 도 저장. path-membership 만으로는 "pre-existing dirty 상태의 non-ALLOWED 경로를 subagent 가 추가 수정하는" 케이스를 감지할 수 없으므로 content hash 로 보강한다.
+   - Content-aware baseline (`ALLOWED` 각 파일): `PRE_HASH_FILE` (`<path>\t<hash>` TSV) 에 기록 + per-file content를 `.deep-review/tmp/phase6-{severity}-baseline/<path>`에 복사. Dirty recovery의 restore source로 사용 (E5).
+   - **Pre-tracking state** (C5 교정, E11): `PRE_TRACKED_FILE` 에 `<path>\t<true|false>` 로 ALLOWED 각 경로의 "Phase 6 진입 시점 git tracked 여부" 기록. Worktree 존재 ≠ tracked 이므로 (예: 사용자가 tracked 파일을 `rm` 한 unstaged-delete WIP) 명시적으로 구분해 recovery 가 원본 상태를 재구성.
+   - **Pre-staged state** (W7 교정): `PRE_STAGED_FILE` 에 ALLOWED 각 경로의 "Phase 6 진입 전부터 staged hunk 존재 여부" (`<path>\t<true|false>`). Recovery 시 사용자 partial-hunk staging 영향 경고용.
+   - **Pre-existing outside content snapshot** (C3 교정, E9): `PRE_MODIFIED ∪ PRE_UNTRACKED` 중 ALLOWED 에 없는 경로의 `PRE_OUTSIDE_HASH_FILE` 도 저장. path-membership 만으로는 "pre-existing dirty 상태의 non-ALLOWED 경로를 subagent 가 추가 수정하는" 케이스를 감지할 수 없으므로 content hash 로 보강한다.
+   - **Bash 3.2 호환** (C4 교정): 위 네 종 snapshot 모두 `declare -A` (associative array, bash 4+) 대신 TSV temp file 사용 — macOS 기본 `/bin/bash` 3.2 에서도 작동.
 2. **Agent dispatch + 결과 파싱** (→ commands Step 4 + Step 5 preamble). 반환 `Group Result`가 `halted_on_regression` | `error` | 파싱 불가 → §5.4.9 Dirty recovery로 분기.
 3. **Content-aware DELTA 산출** (→ commands Step 5; E2 — dirty-tree에서 path-membership 비교는 false-negative):
    - `DELTA = { f ∈ ALLOWED | git hash-object f (POST) != PRE_HASH[f] }`.
@@ -332,9 +335,11 @@ JSON 대신 labeled markdown을 선택한 이유:
    - Same-file pre-staged hunk 검출 → AskUserQuestion으로 사용자 확인.
    - `git commit --only -m "fix(review-response): ..." -- "${CHANGED_FILES[@]}"` — **`-m`은 `--` 앞**.
    - **금지**: `git add -A`, `git commit` (no pathspec), `git commit --only -- <paths> -m <msg>`.
-9. **Dirty recovery — per-file content baseline + index 동기 복원** (→ commands Step 7; E5, W4):
-   - (2) 선택 시: **`git restore --source=HEAD` 사용 금지** (user WIP 파괴). §5.4.1에서 저장한 `.deep-review/tmp/phase6-{severity}-baseline/<path>`에서 `cp`로 worktree 복원, PRE에 없던 파일은 삭제.
-   - **Index 동기 복원 (W4 교정)**: worktree 복원 전에 각 ALLOWED 경로의 index 를 PRE 상태로 되돌린다. tracked 였던 경로는 `git restore --staged`, untracked 였던 경로는 `git rm --cached --ignore-unmatch` — subagent 가 `git add` / `git mv` 로 index 를 변경했을 가능성을 제거. 사용자가 Phase 6 진입 전 동일 path 에 stage 한 hunk 도 함께 un-stage 되지만, ALLOWED 경로는 Phase 6 전용이라 실제 충돌 위험은 낮고 복원 로그가 response.md 에 남는다.
+9. **Dirty recovery — per-file content baseline + index 동기 복원** (→ commands Step 7; E5, W4, C5, W7):
+   - (2) 선택 시: **`git restore --source=HEAD` 사용 금지** (user WIP 파괴). §5.4.1에서 저장한 `.deep-review/tmp/phase6-{severity}-baseline/<path>`에서 `cp`로 worktree 복원.
+   - **Index 동기 복원 (W4) + Tracking state 분기 (C5)**: worktree 복원 전에 `PRE_TRACKED_FILE` 을 iterate. `pre_tracked=true` 면 `git restore --staged` (HEAD 로 index 리셋), `pre_tracked=false` 면 `git rm --cached --ignore-unmatch` (untracked 복원). 이렇게 해야 "tracked-but-deleted WIP" 가 `git rm --cached` 경로로 들어가 staged delete 로 변질되는 v1.3.4 C5 edge case 를 방지 (E11).
+   - **Baseline 존재 여부로 worktree 상태 결정**: baseline 이 있으면 `cp` 로 content 복원. 없으면 PRE 에 worktree 파일이 없었다는 뜻 (tracked-deleted 또는 untracked-absent) — 현재 worktree 에 파일이 있으면 `rm -f` 로 제거 → 원본 "파일 없음" 상태 재구성.
+   - **Partial-hunk staging 경고 (W7)**: `PRE_STAGED_FILE` 에서 had_staged=true 경로 목록을 출력 — `git restore --staged` 가 사용자의 `git add -p` hunk-selection state 까지 un-stage 하므로 response.md 에 기록 + 사용자에게 재-stage 권고. 완전한 staged-blob 단위 복원은 v1.3.5 후보.
    - 파일 단위 복원은 binary/text 무관하게 동작.
 10. **Response 리포트** (→ commands §3 "Response 리포트 저장"): 모든 그룹 완료 후 `response-format.md` 형식으로 response.md 작성.
 11. **PR 코멘트 게시** (→ `--source=pr` 경로): **§5.4.3~§5.4.7 검증 통과한 PASS 항목만** `gh api` 로 코멘트 게시.

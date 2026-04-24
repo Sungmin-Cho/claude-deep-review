@@ -2,7 +2,7 @@
 # test-phase6-protocol-e2e.sh — Phase 6 protocol end-to-end executable tests
 #
 # 임시 git repo에서 Phase 6 main 프로토콜의 핵심 shell 로직을 실제 실행하여
-# 9개 Critical 시나리오를 검증 (E1~E9).
+# 11개 Critical 시나리오를 검증 (E1~E11).
 #
 # 검증 시나리오:
 #   E1. files_changed suffix 정규화 (subagent output "(+A -B)" strip)
@@ -15,8 +15,9 @@
 #   E8. Binary hash — git hash-object 로 binary content 변경 감지
 #   E9. Allowlist bypass block — pre-existing dirty outside path 재수정 감지
 #   E10. Recovery index sync — subagent git add 후 recovery 시 index 도 PRE 로 복원
+#   E11. Recovery preserves tracked-but-deleted WIP — pre_tracked=true + baseline absent
 #
-# exit 0 = 10개 모두 PASS, exit 1 = 1건 이상 FAIL.
+# exit 0 = 11개 모두 PASS, exit 1 = 1건 이상 FAIL.
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -540,6 +541,79 @@ test_e10_recovery_index_sync() {
   cleanup_tmp_repo "$repo"
 }
 
+
+# ============================================================================
+# E11. Recovery preserves tracked-but-deleted WIP state (pre_tracked=true + no baseline)
+# ============================================================================
+# 시나리오 (v1.3.4 3차 review C5 교정 실증):
+#   1. a.txt committed (v1), 사용자 WIP: rm a.txt (unstaged delete, git status " D a.txt")
+#   2. Pre-dispatch: PRE_TRACKED_FILE 에 "a.txt\ttrue", baseline 은 없음 (worktree 에 파일 없으므로)
+#   3. Subagent: echo v2 > a.txt + git add a.txt
+#   4. Recovery (C5):
+#      - pre_tracked=true → git restore --staged (index → HEAD v1)
+#      - baseline 없음 + worktree 에 파일 존재 → rm -f (worktree 삭제)
+#   5. 기대: git status = " D a.txt" (unstaged delete — 사용자 원본 WIP)
+#
+# 2차 W4 fix 의 단순 "PRE_HASH=absent → git rm --cached" 로직은 이 경로에서
+# "D  a.txt" (staged delete) 로 오염 — C5 교정이 PRE_TRACKED 분기로 해결.
+
+test_e11_recovery_preserves_deleted_tracked() {
+  local name="E11"
+  local repo
+  repo=$(mk_tmp_repo)
+  (
+    cd "$repo" || exit 1
+    echo "v1" > a.txt
+    git add a.txt && git commit -q -m "init"
+    rm a.txt   # 사용자 WIP: unstaged delete
+
+    # Pre-dispatch: PRE_TRACKED 저장 (worktree 존재 여부와 무관하게 ls-files 로 판정)
+    mkdir -p .deep-review/tmp/phase6-baseline
+    local pre_tracked_file=".deep-review/tmp/phase6-pre-tracked.tsv"
+    : > "$pre_tracked_file"
+    if git ls-files --error-unmatch -- a.txt >/dev/null 2>&1; then
+      printf '%s\t%s\n' "a.txt" "true" >> "$pre_tracked_file"
+    else
+      printf '%s\t%s\n' "a.txt" "false" >> "$pre_tracked_file"
+    fi
+    # baseline: 파일이 없으므로 cp 생략
+
+    # Subagent: recreate + git add
+    echo "v2" > a.txt
+    git add a.txt
+
+    # Recovery (C5 교정 경로)
+    while IFS=$'\t' read -r f pre_tracked; do
+      [[ -z "$f" ]] && continue
+      if [[ "$pre_tracked" == "true" ]]; then
+        git restore --staged -- "$f" 2>/dev/null || true
+      else
+        git rm --cached --ignore-unmatch -- "$f" >/dev/null 2>&1 || true
+      fi
+      baseline=".deep-review/tmp/phase6-baseline/$f"
+      if [[ -f "$baseline" ]]; then
+        mkdir -p "$(dirname "$f")"
+        cp -p "$baseline" "$f"
+      else
+        [[ -f "$f" ]] && rm -f "$f"
+      fi
+    done < "$pre_tracked_file"
+
+    git status --porcelain -- a.txt
+  ) > "$repo/.out" 2>&1
+
+  local status_out
+  status_out=$(cat "$repo/.out")
+  # expected: " D a.txt" (unstaged delete — 사용자 원본 WIP state)
+  if [[ "$status_out" == " D a.txt" ]]; then
+    e2e_pass "$name" "tracked-but-deleted WIP (unstaged delete) preserved through recovery"
+  else
+    e2e_fail "$name" "expected ' D a.txt', got '$status_out'"
+  fi
+
+  cleanup_tmp_repo "$repo"
+}
+
 # ============================================================================
 # 실행
 # ============================================================================
@@ -555,6 +629,7 @@ test_e7_rename_detection
 test_e8_binary_hash
 test_e9_outside_dirty_mutation
 test_e10_recovery_index_sync
+test_e11_recovery_preserves_deleted_tracked
 
 echo "---"
 echo "E2E Total: $E2E_PASS passed, $E2E_FAIL failed"
