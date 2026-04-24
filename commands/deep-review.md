@@ -678,11 +678,18 @@ entropy:
 .deep-review/recurring-findings.json
 .deep-review/.pending-mutation.json
 .deep-review/.mutation.lock/
+.deep-review/tmp/
 ```
 
 **커밋 정책**:
 - **Tracked (팀 공유)**: `rules.yaml`, `contracts/`, `journeys/` — 프로젝트 지식 자산
-- **Untracked (머신별)**: `config.yaml` (runtime 상태), `reports/`, `responses/` (세션별 출력), `entropy-log.jsonl`, `recurring-findings.json` (증적), `.pending-mutation.json` (mutation state, 세션 생명주기), `.mutation.lock/` (mutex lock dir)
+- **Untracked (머신별)**:
+  - `config.yaml` — runtime 상태
+  - `reports/`, `responses/` — 세션별 출력
+  - `entropy-log.jsonl`, `recurring-findings.json` — 증적
+  - `.pending-mutation.json` — mutation state (세션 생명주기)
+  - `.mutation.lock/` — mutex lock dir
+  - `tmp/` — Phase 6 subagent 로그 (1단계 회전, 직전 세션은 `tmp/prev/`)
 - 사용자가 팀에서 recurring 패턴을 공유하려면 `recurring-findings.json`만 선택적으로 tracked 가능
 
 ### 9. 완료 메시지
