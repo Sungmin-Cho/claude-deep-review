@@ -360,8 +360,10 @@ test_e7_rename_detection() {
       git -c core.quotepath=false diff --cached --name-status -M; }
   ) > "$repo2/.out" 2>&1
 
-  if grep -qE '^R[0-9]+\ta.txt\tb.txt' "$repo2/.out"; then
-    echo "  (verified negative: raw --name-status -M contains 'R100\ta.txt\tb.txt' — awk R/C branch is required to select new path)"
+  # Portability: GNU grep -E 는 `\t` 를 literal backslash-t 로 해석하지만
+  # BSD grep (macOS) 는 tab 으로 해석 → awk -F'\t' 로 구분해 양쪽에서 동일 동작.
+  if awk -F'\t' '$1 ~ /^R[0-9]+$/ && $2 == "a.txt" && $3 == "b.txt" { found=1 } END { exit !found }' "$repo2/.out"; then
+    echo "  (verified negative: raw --name-status -M contains 'R100<TAB>a.txt<TAB>b.txt' — awk R/C branch is required to select new path)"
   else
     e2e_fail "$name-neg" "raw --name-status -M should contain R-line with old→new but did not; awk R/C branch contract cannot be proven"
   fi
