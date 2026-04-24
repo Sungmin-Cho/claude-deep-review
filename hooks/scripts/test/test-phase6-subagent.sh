@@ -130,6 +130,15 @@ else
   fail 9 "execution_path values missing:$missing"
 fi
 
+# 10. 'Execution path' (공백+대문자 backtick 변형) 금지 — 스펙 §4.2 snake_case 원칙
+# (대상: commands/, skills/, agents/ — docs/와 .deep-review/reports는 리뷰 기록 자유)
+offenders=$(grep -rnE '`Execution path`' "$ROOT/commands" "$ROOT/skills" "$ROOT/agents" 2>/dev/null || true)
+if [[ -z "$offenders" ]]; then
+  pass 10 "no 'Execution path' (capitalized backtick variant) in commands/skills/agents"
+else
+  fail 10 "forbidden 'Execution path' variant found:\n$offenders"
+fi
+
 echo "---"
 echo "Total: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
