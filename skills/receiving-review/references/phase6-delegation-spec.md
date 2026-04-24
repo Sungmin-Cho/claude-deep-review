@@ -359,7 +359,7 @@ JSON 대신 labeled markdown을 선택한 이유:
 - 반환 메시지에 `Group Result` 블록이 없거나 파싱 불가
 
 **처리 절차**:
-1. Main에 경고 출력: `⚠ phase6-implementer dispatch failed ({reason}). Falling back to in-session execution.`
+1. Main에 경고 출력: `⚠ phase6-implementer dispatch 실패 ({reason}). 세션 내 fallback 실행으로 전환합니다.`
 2. **Context 여력 안전장치** (중간 그룹에서 실패한 경우만): 남은 미처리 항목(현재 그룹 + 후속 그룹)이 **5건 이상**이면 AskUserQuestion:
    > "서브에이전트 dispatch 실패로 나머지 {N}건을 main 세션에서 직접 처리해야 합니다. main context가 부족할 수 있습니다. 어떻게 할까요?
    > (1) 이번 실행은 여기까지 — 남은 항목을 DEFER로 기록하고 종료 (다음 세션에서 재시도)
