@@ -361,6 +361,8 @@ test_e7_rename_detection() {
 
   if grep -qE '^R[0-9]+\ta.txt\tb.txt' "$repo2/.out"; then
     echo "  (verified negative: raw --name-status -M contains 'R100\ta.txt\tb.txt' — awk R/C branch is required to select new path)"
+  else
+    e2e_fail "$name-neg" "raw --name-status -M should contain R-line with old→new but did not; awk R/C branch contract cannot be proven"
   fi
   cleanup_tmp_repo "$repo2"
 
@@ -419,6 +421,8 @@ test_e8_binary_hash() {
 
   if grep -q "__SAME_HASH__" "$repo2/.out"; then
     echo "  (verified negative: identical binary content yields identical hash → excluded from DELTA)"
+  else
+    e2e_fail "$name-neg" "identical overwrite should yield identical hash; contract differentiation cannot be proven"
   fi
   cleanup_tmp_repo "$repo2"
 
