@@ -256,13 +256,44 @@ verification:
 4. 🟡 Warning (부분 일치) → YAGNI 체크 후 판단
 5. ℹ️ Info → 선택적
 
-### 구현 규칙
+### 구현 규칙 — 그룹 dispatch
 
-1. 한 항목씩 구현한다
-2. 각 항목 구현 후 테스트를 실행한다
-3. 회귀가 발생하면 즉시 중단하고 원인을 파악한다
-4. 모든 🔴 항목 완료 후에야 🟡 항목에 진행한다
-5. 각 심각도 그룹 완료 시 커밋한다
+Phase 6는 심각도 그룹(🔴 → 🟡 → ℹ️)별로 `phase6-implementer` 서브에이전트에 dispatch된다. Main은 판단·검증·기록만 담당한다. 상세는 스펙 `docs/superpowers/specs/2026-04-24-phase6-subagent-delegation-design.md` §5 참조.
+
+**Main의 절차**: 정식 구현은 `commands/deep-review.md`의 `--respond` Step 2.5를 단일 소스로 한다. 실행 가능 검증은 `hooks/scripts/test/test-phase6-protocol-e2e.sh` (E1~E5). 본 문서는 스킬 로드 시점의 요약이며 상충 시 **`commands/deep-review.md`가 우선**한다.
+
+1. **Accepted Items 정렬**: 우선순위 5단계(🔴 전원일치 → 🔴 부분일치 → 🟡 전원일치 → 🟡 부분일치 → ℹ️)로 정렬 후 `item_id` 재부여. 각 항목에 `confidence: agreed | partial` 필드 세팅.
+2. **심각도 그룹 loop** (🔴 → 🟡 → ℹ️):
+   - 그룹에 항목 0건이면 skip.
+   - 그룹별 로그 경로: `{repo}/.deep-review/tmp/phase6-{severity}.log`.
+   - **Pre-dispatch snapshot**:
+     - `ALLOWED` = 그룹의 `target_location` ∪ `modifiable_paths` (comma/newline 분리, line-range strip).
+     - Path set baseline: `PRE_MODIFIED`, `PRE_UNTRACKED`, `PRE_STATUS`.
+     - **Content-aware baseline**: `ALLOWED` 각 파일의 `git hash-object` (→ `PRE_HASH`) + per-file content를 `.deep-review/tmp/phase6-{severity}-baseline/<path>`에 복사 (E2, E5).
+   - Agent dispatch (2단계 네임스페이스 fallback):
+     - 1차: `Agent({ subagent_type: "deep-review:phase6-implementer", prompt: <스펙 §5.1 계약> })`
+     - 1차 실패 시: `Agent({ subagent_type: "phase6-implementer", ... })`
+     - 2차도 실패 / `DEEP_REVIEW_FORCE_FALLBACK=1` → Dirty recovery로 분기.
+3. **결과 검증 — fail-closed + content-aware delta + allowlist**:
+   - 반환에 `Group Result` 블록이 없거나 파싱 불가능 → Dirty recovery.
+   - **Content-aware DELTA** (E2): `ALLOWED` 각 경로의 post-hash가 `PRE_HASH`와 다르면 `DELTA`에 포함. path-membership 비교는 dirty-tree에서 false-negative 발생.
+   - **Path-set violation** (trust boundary): `POST_MODIFIED/POST_UNTRACKED`에서 `PRE_*`를 뺀 `NEW_PATHS`가 `ALLOWED` 외부이면 `execution_status=error`.
+   - **Claim 정규화 + 비교** (E1): 서브에이전트 `files_changed` 출력 `path (+A -B)`에서 suffix를 `sed -E 's/ \(\+[0-9]+ -[0-9]+\)$//'` 로 strip 후 `DELTA`와 비교. 불일치 시 error.
+   - **REVERTED check**: `PRE_ALL`에 있었는데 `POST_ALL`에 없는 경로 → 서브에이전트가 revert한 것 → error.
+   - `log_path` 부재 → `log_unavailable=true`, error.
+4. **그룹 커밋 — pathspec-limited (E3 fix)**: 전원 PASS AND 검증 통과 시에만:
+   - 신규 untracked (PRE_HASH == "absent" 또는 미등록) 파일만 명시적 `git add -- <path>` (NUL-safe 루프).
+   - **`:(exclude)` pathspec은 for 루프로 배열 빌드** — `":(exclude)${CHANGED_FILES[@]}"`는 첫 요소에만 prefix 붙는 bash 버그 (E3).
+   - Pre-staged 경고: 다른 파일 스테이징 + 같은 파일의 pre-staged hunk 둘 다 검출. 후자는 `--only`가 섞어 커밋하므로 AskUserQuestion으로 사용자 확인.
+   - **`git commit --only -m "..." -- "${CHANGED_FILES[@]}"`** — `-m`은 `--` **앞에**.
+   - **금지**: `git add -A`, `git commit` (pathspec 없이), `git commit --only -- <paths> -m <msg>`.
+5. **Dirty recovery — per-file content baseline** (E5): 사용자 선택
+   - (1) 유지하고 main 계속 (권장 안 함)
+   - (2) `ALLOWED` 경로를 Step 2의 baseline snapshot에서 복원 (**`git restore --source=HEAD` 사용 금지** — pre-existing WIP 파괴). Step 2에서 저장한 per-file 복사를 `cp` 로 복원, PRE에 없던 파일은 삭제.
+   - (3) 중단, 사용자 수동 판단.
+6. **Context 여력 안전장치**: main fallback 시 남은 항목 ≥ 5 이면 DEFER 제안.
+
+**서브에이전트의 절차**: `agents/phase6-implementer.md` 시스템 프롬프트 단일 소스.
 
 ### Response 리포트 생성
 
@@ -273,7 +304,7 @@ verification:
 
 **중요**: PR 코멘트 게시는 구현+테스트 성공 이후에 수행한다. 구현 전에 "Fixed" 등을 게시하면, 실패 시 거짓 답글이 남는다.
 
-각 ACCEPT 항목의 구현+테스트가 성공한 후에만 해당 코멘트에 답글:
+각 ACCEPT 항목 중 **서브에이전트가 PASS로 반환하고 main 검증(content-aware DELTA = suffix-stripped CLAIM, allowlist 내부, REVERTED 없음, `log_path` 가용)을 통과한 항목**에 대해서만 해당 코멘트에 답글 (스펙 §4.2 W6):
 
 인라인 코멘트:
 ```bash

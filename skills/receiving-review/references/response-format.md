@@ -24,6 +24,7 @@ mkdir -p .deep-review/responses
 - **Source Review**: {리포트 파일 경로 또는 PR URL}
 - **Original Verdict**: {APPROVE | REQUEST_CHANGES | CONCERN}
 - **Items**: {수락 N건, 반박 N건, 보류 N건}
+- **execution_path**: {subagent | main_fallback | mixed | n/a}
 
 ## Item Responses
 
@@ -35,6 +36,8 @@ mkdir -p .deep-review/responses
   - files_read: `{파일:라인범위}`
   - grep_results: `{함수/패턴}` — {N} call sites
   - test_status: {테스트 상태 요약}
+  - test_log: `.deep-review/tmp/phase6-{severity}.log:{item_id}`  # Phase 6 subagent 실행 시. ephemeral — 다음 `--respond` 시 `tmp/prev/`로 회전
+  - log_unavailable: {true | false}  # Phase 6 subagent가 log_path에 쓰지 못한 경우 true (스펙 §6.7)
   - git_context: {필요 시 blame 결과}
 - **Action**: {수정 내용 요약 + 위치} | {반박 사유} | {보류 사유}
 - **Test**: {테스트 명령어} → {PASS | FAIL}
@@ -115,3 +118,16 @@ PR 코멘트 게시(`gh api .../replies`)는 rate limit / 네트워크 오류 / 
 ```markdown
 - **Source**: PR comment (@{author}, #{comment_id})
 ```
+
+---
+
+## `execution_path` 값 정의
+
+| 값 | 의미 |
+|----|------|
+| `subagent` | Phase 6 전 그룹을 `phase6-implementer` 서브에이전트가 성공적으로 처리 |
+| `main_fallback` | 첫 dispatch 시도부터 실패하여 모든 그룹을 main이 직접 수행 |
+| `mixed` | 일부 그룹은 subagent, 일부는 main fallback (중간 그룹에서 dispatch 실패 시) |
+| `n/a` | ACCEPT 항목 0건으로 Phase 6 전체 skip |
+
+결정 절차는 `commands/deep-review.md`의 `--respond` Steps 2.5(Phase 6 subagent dispatch) 및 스펙 §5.4 결정표 참조.

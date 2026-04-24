@@ -464,14 +464,23 @@ restore_mutation
 
 ## Steps (대응 모드 — `--respond` 인수)
 
-### 0. 자동 복원
+### 0. 자동 복원 + tmp 회전
 
-리뷰 모드 §0.1 과 동일. 이전 세션의 stale mutation 을 자동 정리한다.
+리뷰 모드 §0.1 과 동일한 mutation 자동 복원 후, Phase 6 tmp 로그를 1단계 회전.
 
 ```bash
 source ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/mutation-protocol.sh
 auto_recover
+
+# Phase 6 tmp 로그 1단계 회전 — 직전 세션 로그는 prev/로 보존, 2회 이전은 자동 소멸
+if compgen -G ".deep-review/tmp/phase6-*.log" > /dev/null 2>&1; then
+  mkdir -p .deep-review/tmp/prev
+  rm -f .deep-review/tmp/prev/phase6-*.log 2>/dev/null || true
+  mv .deep-review/tmp/phase6-*.log .deep-review/tmp/prev/ 2>/dev/null || true
+fi
 ```
+
+회전 근거와 상세 정책은 스펙 §6.9 참조.
 
 ### Prerequisites
 
@@ -502,10 +511,191 @@ auto_recover
 **리포트 확인 (같은 날 덮어쓰기 방지)**:
 리포트 로드 후, 사용자에게 Summary(Verdict, Review Mode, Issues 요약)를 표시하고 "이 리포트에 대응하시겠습니까?" 확인을 받는다. 리포트 파일명은 이제 `{YYYY-MM-DD}-{HHmmss}-review.md` 타임스탬프 기반이므로 덮어쓰기는 발생하지 않지만, 같은 날 여러 리뷰가 있을 경우 사용자가 어떤 리포트에 대응할지 혼동할 수 있다. 확인 단계를 통해 잘못된 리포트에 대응하는 것을 방지한다.
 
-### 2. receiving-review 스킬 실행
+### 2. receiving-review Phase 1~5 (main)
 
-로드된 `receiving-review` 스킬의 Phase 1~6을 실행합니다.
-Recurring findings 분류 및 경고는 스킬 내부 Phase 1(READ)에서 처리됩니다.
+로드된 `receiving-review` 스킬의 Phase 1~5를 main 세션에서 실행합니다.
+- Phase 1~5: READ / UNDERSTAND / VERIFY / EVALUATE / RESPOND — ACCEPT/REJECT/DEFER 판단까지.
+- 각 ACCEPT 항목에 `implementation_guide` 6개 필드(`target_location`/`modifiable_paths`/`intent`/`change_shape`/`non_goals`/`acceptance`)를 기록.
+- Accepted Items를 5단계 우선순위(🔴 전원일치 → 🔴 부분일치 → 🟡 전원일치 → 🟡 부분일치 → ℹ️)로 정렬, `confidence: agreed | partial` 필드 세팅.
+- Recurring findings 분류 및 경고는 Phase 1(READ) 내부에서 처리.
+
+### 2.5 Phase 6 — subagent dispatch (심각도 그룹 loop)
+
+Phase 6 구현은 `phase6-implementer` 서브에이전트에 그룹 dispatch. 상세 스펙: `docs/superpowers/specs/2026-04-24-phase6-subagent-delegation-design.md` §3, §5, §6.
+
+**심각도 그룹 loop** (🔴 → 🟡 → ℹ️):
+
+**실행 가능한 e2e 테스트**: 아래 각 Step의 핵심 shell 로직은 `hooks/scripts/test/test-phase6-protocol-e2e.sh`의 5개 테스트(E1~E5)에서 실증 검증됨. pseudocode가 문서로 drift하지 않도록 **CI에서 e2e도 함께 실행**.
+
+1. 해당 그룹의 ACCEPT 항목이 0건이면 skip.
+2. 로그 경로 결정: `log_path="$(pwd)/.deep-review/tmp/phase6-${severity}.log"` (절대 경로). `mkdir -p .deep-review/tmp`.
+3. **Pre-dispatch snapshot** — allowlist + content-aware baseline:
+   ```bash
+   # Allowlist = target_location 경로 union modifiable_paths (스펙 §5.1 계약)
+   # TARGET_LOCATIONS_OF_GROUP, MODIFIABLE_PATHS_OF_GROUP = Accepted Items 파싱 결과
+   # target_location은 "src/a.ts:45-60" 형식 또는 comma-separated 다중 경로 허용 — line-range strip
+   ALLOWED=$(printf '%s\n' "${TARGET_LOCATIONS_OF_GROUP[@]}" "${MODIFIABLE_PATHS_OF_GROUP[@]}" \
+     | tr ',' '\n' \
+     | sed -E 's/:[0-9][0-9,\-]*\s*$//; s/^[[:space:]]+//; s/[[:space:]]+$//' \
+     | sort -u | sed '/^$/d')
+
+   # Path set baseline (violation 검출용)
+   PRE_MODIFIED=$(git -c core.quotepath=false diff --name-only | sort -u)
+   PRE_UNTRACKED=$(git -c core.quotepath=false ls-files --others --exclude-standard | sort -u)
+   PRE_STATUS=$(git -c core.quotepath=false status --porcelain=v1 -uall)
+
+   # Content snapshot — ALLOWED 각 파일에 대해 per-file 복사 (Dirty recovery 용)
+   mkdir -p ".deep-review/tmp/phase6-${severity}-baseline"
+   declare -A PRE_HASH=()
+   while IFS= read -r f; do
+     [[ -z "$f" ]] && continue
+     if [[ -f "$f" ]]; then
+       PRE_HASH[$f]=$(git hash-object -- "$f")
+       # per-file baseline copy (preserves user WIP content)
+       mkdir -p ".deep-review/tmp/phase6-${severity}-baseline/$(dirname "$f")"
+       cp -p "$f" ".deep-review/tmp/phase6-${severity}-baseline/$f"
+     else
+       PRE_HASH[$f]="absent"
+     fi
+   done <<< "$ALLOWED"
+   ```
+4. **Dispatch 2단계 네임스페이스 fallback**:
+   - 환경변수 `DEEP_REVIEW_FORCE_FALLBACK=1` 이 설정되면 dispatch 건너뛰고 즉시 main fallback 경로로 분기 (단, baseline 보존 상태).
+   - 1차: `Agent({ subagent_type: "deep-review:phase6-implementer", prompt: <§5.1 계약> })`
+   - 1차가 "subagent_type not found" 또는 유사 에러 반환 시 2차: `Agent({ subagent_type: "phase6-implementer", prompt: <§5.1 계약> })`
+   - 2차도 실패 또는 permission refusal 등 dispatch 자체 실패 시 → main fallback 분기.
+5. **결과 검증 (dispatch 성공 시) — fail-closed + content-aware delta + allowlist**:
+   - 반환 메시지에 `## Group Result` 블록이 **없거나 파싱 불가능**하면 dispatch 실패로 재분류 → Step 7 "Dirty recovery"로 분기.
+   - **Content-aware DELTA** (E2 검증): ALLOWED 각 경로의 hash를 post-dispatch와 비교. content 변경된 경로만 포함:
+     ```bash
+     DELTA=()
+     for f in "${!PRE_HASH[@]}"; do
+       post=$([[ -f "$f" ]] && git hash-object -- "$f" || echo "absent")
+       [[ "$post" != "${PRE_HASH[$f]}" ]] && DELTA+=("$f")
+     done
+     ```
+   - **Path-set violation** — ALLOWED 외부 경로가 수정/생성됐는지 별도 체크 (trust boundary):
+     ```bash
+     POST_MODIFIED=$(git -c core.quotepath=false diff --name-only | sort -u)
+     POST_UNTRACKED=$(git -c core.quotepath=false ls-files --others --exclude-standard | sort -u)
+     NEW_PATHS=$(printf '%s\n%s\n' \
+       "$(comm -13 <(echo "$PRE_MODIFIED") <(echo "$POST_MODIFIED"))" \
+       "$(comm -13 <(echo "$PRE_UNTRACKED") <(echo "$POST_UNTRACKED"))" \
+       | sort -u | sed '/^$/d')
+     VIOLATIONS=$(comm -23 <(echo "$NEW_PATHS") <(echo "$ALLOWED"))
+     [[ -n "$VIOLATIONS" ]] && { execution_status=error; error_reason="outside allowlist: $VIOLATIONS"; }
+     ```
+   - **서브에이전트 claim 정규화 + delta 일치 검증** (E1 검증):
+     ```bash
+     # subagent emits "path/to/file (+A -B)" — suffix strip before compare
+     CLAIM=$(printf '%s\n' "${CHANGED_FILES_CLAIM_RAW[@]}" \
+       | sed -E 's/ \(\+[0-9]+ -[0-9]+\)$//' \
+       | sort -u)
+     DELTA_SORTED=$(printf '%s\n' "${DELTA[@]}" | sort -u)
+     if [[ "$CLAIM" != "$DELTA_SORTED" ]]; then
+       execution_status=error
+       error_reason="files_changed claim != content-aware delta"
+     fi
+     ```
+   - **REVERTED symmetric check** — 서브에이전트가 기존 파일 revert 시 감지:
+     ```bash
+     # PRE_ALL에 있었는데 POST_ALL에서 사라진 파일 (content-aware가 DELTA에 안 잡음)
+     REVERTED=$(comm -23 \
+       <(printf '%s\n' "$PRE_MODIFIED" "$PRE_UNTRACKED" | sort -u | sed '/^$/d') \
+       <(printf '%s\n' "$POST_MODIFIED" "$POST_UNTRACKED" | sort -u | sed '/^$/d'))
+     [[ -n "$REVERTED" ]] && { execution_status=error; error_reason="subagent reverted pre-existing changes: $REVERTED"; }
+     ```
+   - `log_path` 존재 가드:
+     ```bash
+     [[ ! -f "$log_path" ]] && { log_unavailable=true; execution_status=error; }
+     ```
+   - 실패 항목은 `Read(log_path)` — `ITEM-{id}` 구분자로 구간 확인.
+   - **검증 통과 시**: `CHANGED_FILES=("${DELTA[@]}")` 확정.
+6. **그룹 커밋 — pathspec-limited**: 전원 PASS AND Step 5 검증 통과 시에만:
+   - 빈 배열 가드: `[[ ${#CHANGED_FILES[@]} -eq 0 ]]`면 이상 상태 → `execution_status=error`.
+   - **Untracked 신규 파일 명시적 add** (NUL-safe, E5-adjacent):
+     ```bash
+     while IFS= read -r f; do
+       [[ -z "$f" ]] && continue
+       # 신규 untracked 파일 (PRE에 없었음) 에만 git add
+       if [[ -z "${PRE_HASH[$f]+x}" || "${PRE_HASH[$f]}" == "absent" ]]; then
+         git add -- "$f"
+       fi
+     done < <(printf '%s\n' "${CHANGED_FILES[@]}")
+     ```
+   - **Pre-staged 경고** (E3 fix — 올바른 `:(exclude)` 확장):
+     ```bash
+     # EXCL 배열을 for 루프로 구성 (":(exclude)${arr[@]}"는 첫 요소에만 prefix 붙는 버그 회피)
+     EXCL=()
+     for f in "${CHANGED_FILES[@]}"; do EXCL+=(":(exclude)$f"); done
+     if ! git diff --cached --quiet -- . "${EXCL[@]}" 2>/dev/null; then
+       echo "⚠ Pre-staged files detected outside Phase 6 scope:"
+       git -c core.quotepath=false diff --cached --name-only -- . "${EXCL[@]}" || true
+       echo "→ These files remain staged in the index but are NOT included in this commit (git commit --only semantics)."
+     fi
+     ```
+   - **Same-file pre-staged hunk 경고** — `git commit --only path`는 path 전체를 커밋하므로 사용자가 미리 staged한 hunk가 같은 path에 있으면 auto-commit에 섞임:
+     ```bash
+     SAMEFILE_PRESTAGED=()
+     for f in "${CHANGED_FILES[@]}"; do
+       if git diff --cached --quiet -- "$f" 2>/dev/null; then :; else
+         SAMEFILE_PRESTAGED+=("$f")
+       fi
+     done
+     if [[ ${#SAMEFILE_PRESTAGED[@]} -gt 0 ]]; then
+       echo "⚠ Files in CHANGED_FILES also have pre-staged hunks — auto-commit will include BOTH pre-staged and Phase 6 changes:"
+       printf '  %s\n' "${SAMEFILE_PRESTAGED[@]}"
+       # AskUserQuestion: continue (merge) / abort (skip commit, user 수동 판단)
+     fi
+     ```
+   - **커밋** — `-m`은 `--` **앞에**:
+     ```bash
+     git commit --only -m "fix(review-response): resolve {severity} items from {report_basename}" -- "${CHANGED_FILES[@]}"
+     ```
+   - **금지**: `git add -A`, `git commit` (pathspec 없이), `git commit --only -- <paths> -m <msg>` (`-m`이 pathspec으로 파싱됨).
+   - 부분 실패/halted/error 그룹은 커밋 건너뜀. response.md에 "워킹 트리에 passed 항목 수정 남음" 경고 기록.
+7. **Dirty recovery — per-file content baseline** (E5 검증):
+   - `git status --porcelain=v1 -uall` 로 POST_STATUS 수집, `PRE_STATUS != POST_STATUS` 이면 dirty 상태 남음.
+   - AskUserQuestion:
+     > "서브에이전트가 dirty 상태로 중단됐습니다. 어떻게 할까요?
+     > (1) 유지하고 main 계속 (partial edits 위에 쌓음 — 권장 안 함)
+     > (2) baseline으로 restore (**per-file content snapshot 사용** — 사용자 WIP 보존)
+     > (3) 중단, 사용자 수동 판단"
+   - (2) 선택 시 — **`git restore --source=HEAD` 사용 금지** (pre-existing WIP 파괴). 대신 Step 3에서 저장한 per-file baseline을 복원:
+     ```bash
+     # ALLOWED 경로만 baseline content로 복원 (사용자의 non-ALLOWED dirty는 건드리지 않음)
+     while IFS= read -r f; do
+       [[ -z "$f" ]] && continue
+       baseline=".deep-review/tmp/phase6-${severity}-baseline/$f"
+       if [[ -f "$baseline" ]]; then
+         mkdir -p "$(dirname "$f")"
+         cp -p "$baseline" "$f"
+       elif [[ "${PRE_HASH[$f]}" == "absent" && -f "$f" ]]; then
+         # PRE에 없던 파일 (서브에이전트가 생성) → 삭제
+         rm -f "$f"
+       fi
+     done <<< "$ALLOWED"
+     ```
+   - (3) 선택 시 response.md에 현재 상태 snapshot 기록 후 종료.
+8. **중단 판정**: `execution_status in (halted_on_regression, error)` 또는 `items_failed > 0`이면 다음 그룹 dispatch 안 함. 스킵된 후속 항목은 `decision: DEFER, defer_reason: "halted at {severity} group"`로 기록.
+
+**Main fallback 분기** (dispatch 실패):
+
+1. 경고 출력: `⚠ phase6-implementer dispatch failed ({reason}). Falling back to in-session execution.`
+2. **Context 여력 안전장치** — 남은 미처리 항목 수(현재 그룹 + 후속 그룹) ≥ 5 이면 AskUserQuestion:
+   > (1) 여기까지 — 남은 항목을 DEFER로 기록 후 종료 / (2) 계속 진행 (context 소진 위험).
+3. (1) 선택: 남은 항목 `decision: DEFER, defer_reason: "dispatch failure, main context conservation"`로 기록하고 Step 3으로.
+4. (2) 또는 N < 5: main이 직접 receiving-review Phase 6 로직으로 구현 (한 항목씩, 매 항목 테스트, 회귀 시 즉시 중단).
+5. response.md Summary `execution_path` 필드에 `main_fallback` 또는 `mixed` 기록 (스펙 §5.4 결정표 참조).
+
+**`execution_path` 값 결정**:
+
+| 시나리오 | 값 |
+|---------|-----|
+| 전 그룹 subagent 성공 | `subagent` |
+| 1st dispatch 시도부터 실패 | `main_fallback` |
+| 일부 subagent + 일부 fallback | `mixed` |
+| ACCEPT 0건 | `n/a` |
 
 ### 3. Response 리포트 저장
 
@@ -620,11 +810,18 @@ entropy:
 .deep-review/recurring-findings.json
 .deep-review/.pending-mutation.json
 .deep-review/.mutation.lock/
+.deep-review/tmp/
 ```
 
 **커밋 정책**:
 - **Tracked (팀 공유)**: `rules.yaml`, `contracts/`, `journeys/` — 프로젝트 지식 자산
-- **Untracked (머신별)**: `config.yaml` (runtime 상태), `reports/`, `responses/` (세션별 출력), `entropy-log.jsonl`, `recurring-findings.json` (증적), `.pending-mutation.json` (mutation state, 세션 생명주기), `.mutation.lock/` (mutex lock dir)
+- **Untracked (머신별)**:
+  - `config.yaml` — runtime 상태
+  - `reports/`, `responses/` — 세션별 출력
+  - `entropy-log.jsonl`, `recurring-findings.json` — 증적
+  - `.pending-mutation.json` — mutation state (세션 생명주기)
+  - `.mutation.lock/` — mutex lock dir
+  - `tmp/` — Phase 6 subagent 로그 (1단계 회전, 직전 세션은 `tmp/prev/`)
 - 사용자가 팀에서 recurring 패턴을 공유하려면 `recurring-findings.json`만 선택적으로 tracked 가능
 
 ### 9. 완료 메시지

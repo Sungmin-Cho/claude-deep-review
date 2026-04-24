@@ -2,6 +2,39 @@
 
 [English](./CHANGELOG.md) | **한국어**
 
+## [1.3.3] — 2026-04-24
+
+### Added
+- `agents/phase6-implementer.md` — Phase 6 구현 전용 서브에이전트(`model: sonnet`). `/deep-review --respond`에서 자동 dispatch.
+- `hooks/scripts/test/test-phase6-subagent.sh` — Phase 6 위임 구조 회귀 방지 검증 스크립트 (10개 체크 — `Execution path` 대소문자 회귀 가드 포함).
+- `hooks/scripts/test/test-phase6-protocol-e2e.sh` — 실행 가능한 end-to-end 테스트 (5개 시나리오). 임시 git repo에서 main 검증 로직을 실제 실행하여 suffix 정규화, `git hash-object` content-aware delta, `:(exclude)` pathspec 배열, companion files allowlist, per-file content baseline WIP 보존을 각각 실증.
+- `implementation_guide.modifiable_paths` — Phase 5 accepted-item 계약에 신규 필드. Main이 Phase 6 allowlist에 companion 파일(test/fixture/helper)을 union으로 포함하여 acceptance 충족에 필요한 정상 multi-file 수정을 차단하지 않음.
+
+### Changed
+- `/deep-review --respond` Phase 6 실행이 심각도 그룹별로 `phase6-implementer` 서브에이전트에 위임된다 (기본 경로). Dispatch 실패 시 main 세션이 graceful fallback으로 직접 수행.
+- `.deep-review/responses/*-response.md`의 Summary에 `execution_path` 필드(`subagent | main_fallback | mixed | n/a`)와 per-item `log_unavailable` 플래그 추가.
+- Phase 6 테스트 로그를 `.deep-review/tmp/phase6-{severity}.log`에 저장 (ephemeral, 1단계 회전 — 직전 세션 로그는 `tmp/prev/`).
+- 사용자 프로젝트용 `.gitignore` 권장 블록(`/deep-review init` Step 8)에 `.deep-review/tmp/` 라인 추가.
+- **Fail-closed main 검증** (이전 non-blocking warning 대체):
+  - `files_changed` claim을 suffix strip(`sed -E 's/ \(\+[0-9]+ -[0-9]+\)$//'`)으로 정규화 후 비교.
+  - `DELTA`를 path-membership이 아닌 `git hash-object` content snapshot 기반으로 재정의 — dirty-tree 워크플로(staged/unstaged/mixed) 완전 지원.
+  - `VIOLATIONS = NEW_PATHS - ALLOWED` 와 `REVERTED = PRE_ALL - POST_ALL` 둘 다 `execution_status=error`로 라우팅, commit·PR posting 억제.
+  - 로그 파일 부재 → `log_unavailable=true`, error.
+- **그룹 커밋**을 `git commit --only -m "..." -- "${CHANGED_FILES[@]}"` (flag가 `--` 앞에 있어 메시지가 pathspec으로 파싱되지 않음)로 수행. Untracked 신규 파일은 먼저 `git add`. Pre-staged hunk는 for 루프로 빌드한 `:(exclude)` pathspec 배열로 감지(bash 확장 버그 회피).
+- **Dirty recovery**는 Step 3에서 `.deep-review/tmp/phase6-{severity}-baseline/`에 저장한 per-file content snapshot으로 복원. `git restore --source=HEAD`는 pre-existing 사용자 WIP를 파괴하므로 **명시적 금지**.
+- `receiving-review/references/response-protocol.md`의 Phase 6 섹션은 이제 요약이며 `commands/deep-review.md`를 authoritative source로 선언 (drift-proof).
+
+### Behavior notes
+- 심각도 그룹 내 부분 실패 시 해당 그룹 기록 후 이후 그룹 스킵. 부분 실패 그룹은 **커밋되지 않으며**, passed 항목의 워킹 트리 수정은 사용자 검토를 위해 유지.
+- Dispatch 실패로 main fallback 전환 시 남은 항목이 5건 이상이면 AskUserQuestion으로 "여기까지 / 계속" 선택 (context 여력 안전장치).
+- 서브에이전트가 malformed/error로 반환하고 workspace가 dirty하면 main이 사용자에게 확인(keep / restore-from-baseline / abort) 후에만 진행.
+- `DEEP_REVIEW_FORCE_FALLBACK=1` 환경변수로 강제 fallback 경로 진입 가능 (dogfood / 테스트용).
+
+### Known limitations (v1.3.3)
+- 공백/glob 문자가 포함된 `log_path`는 agent의 literal 치환에서 shell quoting이 필요할 수 있음 (v1.3.4 follow-up).
+- Rename/binary 파일 처리는 default `git diff` 동작에 의존. `--name-status` 기반 precision은 v1.3.4 후보.
+- 설계 스펙은 `docs/`에 있고 플러그인 repo가 이 디렉토리를 blanket ignore하므로 ship되지 않음. 런타임 authoritative 참조는 `commands/deep-review.md` + `skills/receiving-review/references/response-protocol.md`.
+
 ## [1.3.2] — 2026-04-21
 
 ### 추가

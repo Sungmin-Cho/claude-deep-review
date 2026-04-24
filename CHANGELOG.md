@@ -2,6 +2,39 @@
 
 **English** | [한국어](./CHANGELOG.ko.md)
 
+## [1.3.3] — 2026-04-24
+
+### Added
+- `agents/phase6-implementer.md` — dedicated Phase 6 implementation subagent (`model: sonnet`), auto-dispatched by `/deep-review --respond`.
+- `hooks/scripts/test/test-phase6-subagent.sh` — structural regression check for Phase 6 delegation (10 assertions including `Execution path` capitalization guard).
+- `hooks/scripts/test/test-phase6-protocol-e2e.sh` — executable end-to-end tests (5 scenarios) that validate main-session verification logic against real git state: suffix normalization, content-aware delta via `git hash-object`, `:(exclude)` pathspec array, allowlist with companion files, and WIP-preserving restore via per-file content baseline.
+- `implementation_guide.modifiable_paths` — new field in the Phase 5 accepted-item contract. Main expands the Phase 6 allowlist to include companion files (tests, fixtures, helpers) that the acceptance criteria legitimately need.
+
+### Changed
+- `/deep-review --respond` Phase 6 is now delegated to `phase6-implementer` subagent per severity group (default path). Main session gracefully falls back to in-session execution on dispatch failure.
+- `.deep-review/responses/*-response.md` Summary gains an `execution_path` field (`subagent | main_fallback | mixed | n/a`) and per-item `log_unavailable` flag.
+- Phase 6 test logs land in `.deep-review/tmp/phase6-{severity}.log` (ephemeral, 1-generation rotation into `tmp/prev/`).
+- `/deep-review init` Step 8 `.gitignore` suggestion now includes `.deep-review/tmp/`.
+- **Fail-closed main verification** (replaces earlier non-blocking warning):
+  - `files_changed` claim is normalized via suffix strip (`sed -E 's/ \(\+[0-9]+ -[0-9]+\)$//'`) before comparison.
+  - `DELTA` is computed from `git hash-object` content snapshots per path (not from path membership), so dirty-tree workflows are first-class supported.
+  - `VIOLATIONS = NEW_PATHS - ALLOWED` and `REVERTED = PRE_ALL - POST_ALL` both route to `execution_status=error` with commit and PR-posting suppressed.
+  - Missing log file → `log_unavailable=true`, error.
+- **Group commit** uses `git commit --only -m "..." -- "${CHANGED_FILES[@]}"` — flag before `--` so the message is not parsed as pathspec; untracked files are `git add`-ed first; pre-staged hunks in excluded paths trigger a non-blocking warning (the `:(exclude)` pathspec array is built with an explicit `for` loop to avoid a subtle bash expansion bug).
+- **Dirty recovery** restores from per-file content snapshots saved in `.deep-review/tmp/phase6-{severity}-baseline/` during the Step 3 pre-dispatch pass. `git restore --source=HEAD` is explicitly forbidden because it discards pre-existing user WIP.
+- `receiving-review/references/response-protocol.md` Phase 6 section is now a summary that declares `commands/deep-review.md` as the authoritative source (drift-proof).
+
+### Behavior notes
+- Within a severity group, a partial failure halts remaining groups. The partially-failed group is **not committed**; passed-item edits remain in the working tree for user review.
+- When dispatch fails mid-run and ≥5 items remain, the main session prompts to DEFER the rest (context conservation).
+- On malformed/error subagent returns with a dirty workspace, main asks the user before doing anything (keep / restore-from-baseline / abort).
+- `DEEP_REVIEW_FORCE_FALLBACK=1` env var forces the fallback path for testing/dogfood.
+
+### Known limitations (v1.3.3)
+- `log_path` containing spaces or glob characters may need shell quoting in the agent's literal substitution (follow-up in v1.3.4).
+- Rename/binary file handling relies on default `git diff` behavior; `--name-status` precision is a v1.3.4 candidate.
+- The design spec lives under `docs/` which the plugin repo blanket-ignores; it is not shipped. Authoritative runtime references are `commands/deep-review.md` and `skills/receiving-review/references/response-protocol.md`.
+
 ## [1.3.2] — 2026-04-21
 
 ### Added
