@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test-phase6-subagent.sh — Phase 6 subagent delegation 구조 회귀 검증
-# exit 0 = 9개 체크 모두 PASS, exit 1 = 1건 이상 FAIL.
+# exit 0 = 10개 체크 모두 PASS, exit 1 = 1건 이상 FAIL.
 
 set -u
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"

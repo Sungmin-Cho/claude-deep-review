@@ -2,6 +2,37 @@
 
 [English](./CHANGELOG.md) | **한국어**
 
+## [1.3.4] — 2026-04-24
+
+1.3.3 릴리스 시 공개한 `Known limitations` 항목을 모두 해소하고 CI 커버리지를 추가한 후속 릴리스. Phase 1~5 로직 변경 없음. 서브에이전트 모델은 `sonnet` 유지. 병렬 dispatch는 non-goal 유지.
+
+### 추가
+- `skills/receiving-review/references/phase6-delegation-spec.md` — Phase 6 설계 스펙을 shipped on-demand reference로 이동. 기존 `docs/superpowers/specs/` 경로는 플러그인 repo의 `docs/` blanket ignore로 인해 사용자에게 전달되지 않았다.
+- `hooks/scripts/test/test-phase6-protocol-e2e.sh` — 6개 시나리오 신설. **E6** `log_path` single-quote wrap이 공백·glob 포함 경로에서도 로그 파일을 정확한 경로에 생성함을 실증. **E7** `git diff --name-status -M` + awk 파이프라인이 staged rename의 new path만 추출 (staged ∪ unstaged 합집합 포함). **E8** `git hash-object`가 NUL byte 포함 binary 파일의 내용 변경을 감지. **E9** pre-existing dirty outside 경로 재수정이 content-hash snapshot 으로 감지됨 (allowlist bypass 차단). **E10** recovery 가 subagent `git add` 후 worktree + index 양쪽을 PRE 로 복원. **E11** recovery 가 tracked-but-deleted WIP (` D` 상태) 를 그대로 보존. 총 e2e 5 → 11.
+- `.github/workflows/phase6-protocol.yml` — structural(10) + protocol e2e(11) 테스트를 `ubuntu-latest` **및** `macos-latest`에서 자동 실행하는 CI 워크플로(GNU vs BSD awk/sed 호환 검증 포함). `main` push와 agent / `commands/deep-review.md` / `skills/receiving-review/**` / 테스트 스크립트 / workflow 자체를 건드리는 PR에서 트리거. `permissions: contents: read` 최소 권한.
+
+### 변경
+- `agents/phase6-implementer.md` — literal `log_path` 치환 패턴에 **single-quote wrap 의무화**. `'\''` escape 규칙 명시. `printf '%q'` 는 single-quote wrap 맥락 안에서 **금지** (출력의 backslash 가 literal 로 남아 `/my\ repo/...` 같은 잘못된 경로 생성). 추가 금지 패턴: (a) single-quote 내부의 `tee -a "$log_path"` (빈 변수 확장), (b) quote 없는 `tee -a /path with space/log` (3개 인자로 word-split).
+- `commands/deep-review.md` Step 2.5 (Phase 6 그룹 loop) — path-set baseline을 `git diff --name-status -M` (unstaged) **와** `git diff --cached --name-status -M` (staged) **의 합집합**으로 수집한 뒤 awk 후처리로 R/C rename/copy 라인의 new path만 채택. `git mv`는 자동 staged로 분류되므로 `--cached`를 함께 읽지 않으면 subagent가 Bash tool로 연 staged rename을 baseline이 놓쳐 trust-boundary gap이 된다 — 이를 막기 위한 구조. Binary 파일은 여전히 `git hash-object`를 통해 DELTA에 포함되며 이는 별도 분기 없음 — 명시적으로 문서화하여 숨겨진 로직을 추정하지 않도록.
+- `commands/deep-review.md` Step 2.5 — 그룹 loop 상단에 "Step ↔ spec §5.4 매핑 테이블" 추가. 모든 step 헤더(3~8)에 `(spec §5.4.X)` 역참조. Spec §5.4 각 item에는 `(→ commands Step X)` 상호 참조 + 상단 매핑 테이블. 번호 자체는 재정렬하지 않음 (drift 위험) — 상호 참조만 추가.
+- **톤 통일** — `commands/deep-review.md` 와 `skills/receiving-review/references/phase6-delegation-spec.md` 에 남아 있던 영문 warning 3건을 한국어로 교체 (`⚠ Phase 6 범위 외에 pre-staged 파일이 감지됐습니다:` 등). 리뷰/대응 UI 전반의 한국어 어조와 일관성 확보.
+- **Placeholder 관습 명시화** — `agents/phase6-implementer.md`의 subagent 출력 template과 `phase6-prompt-contract.md`의 Accepted-Items prompt template 서두에 `<...>`는 "실제 값으로 치환해서 내보내야 할 placeholder", `{...}`는 "치환될 값의 타입 라벨"임을 각각 한 줄 선언. 그간 문자 그대로 반환될 위험이 있던 중의성 제거.
+
+### 고침
+- `phase6-delegation-spec.md` §5.4.2가 "§5.4.7 Dirty recovery"를 참조했으나 Dirty recovery는 §5.4.9. 정정. §5.4.9의 "Step 1에서 저장한"도 per-file snapshot이 §5.4.1에서 생성되므로 해당 spec 내부 참조로 교정.
+- **Trust-boundary — pre-dirty outside path 경로 오염 차단** (3차 review C3): Step 5 검증이 ALLOWED 한정 DELTA 와 path-membership 만 보던 탓에, 이미 dirty 였던 non-ALLOWED 경로를 subagent 가 재수정해도 감지 못함. Step 3 에 `PRE_OUTSIDE_HASH_FILE` snapshot, Step 5 에 `OUTSIDE_VIOLATIONS` 계산 추가. E9 실증.
+- **Trust-boundary — dirty recovery 가 index 를 복원 안 함** (3차 review W4): recovery 가 worktree 만 cp 복원 → subagent `git add`/`git mv` 효과 잔존. Step 7 에 pathspec-local `git restore --staged` / `git rm --cached --ignore-unmatch` 추가. E10 실증.
+- **Recovery — tracked-but-deleted WIP 보존** (3차 review C5): `PRE_HASH==absent` 가 "원래 untracked" 와 "tracked 였으나 WIP-deleted" 를 뭉쳐 recovery 후 ` D` → `D ` (unstaged-delete → staged-delete) 로 변질. Step 3 에 `PRE_TRACKED_FILE` (via `git ls-files --error-unmatch`), Step 7 에서 pre_tracked 분기로 해결. E11 실증.
+- **macOS `/bin/bash` 3.2 호환성** (3차 review C4): Step 3/5/7 이 `declare -A` (bash 4+) 사용 → macOS 기본 shell 에서 `invalid option` exit 2. associative array 를 TSV temp file 로 전면 교체 (`PRE_HASH_FILE`, `PRE_TRACKED_FILE`, `PRE_STAGED_FILE`, `PRE_OUTSIDE_HASH_FILE`). lookup 은 `awk -F'\t'` / `while IFS=$'\t' read`.
+- **Partial-hunk staging 사용자 경고** (3차 review W7 — minimal fix): `git restore --staged` 가 사용자 `git add -p` hunk-selection state 까지 un-stage. Step 3 에 `PRE_STAGED_FILE` 기록, Step 7 에서 해당 경로 목록을 사전 warning + response.md 로그. 완전한 blob-level snapshot 은 v1.3.5 후보.
+- **Spec ↔ agent test-order drift** (3차 review W8): `phase6-delegation-spec.md` 의 테스트 명령 우선순위가 hooks-first 였으나 agent `:46-52` 는 hooks-fallback-only. Spec 을 agent 순서와 동일하게 재작성 + agent 를 normative source 로 명시.
+- **tmp artifact rotation 확장** (4차 review N2): `/deep-review --respond` 의 `.deep-review/tmp/` rotation 이 `.log` 만 prev/로 이동시키고 C4 TSV snapshot (`phase6-*-{pre-hash,pre-tracked,pre-staged,pre-outside-hash}.tsv`) + W4/C5 `phase6-{severity}-baseline/` 디렉토리는 누적 방치됐다. 이제 세 종류 모두 동일 1단계 회전으로 묶여 직전 두 세션 artifact 만 디스크에 유지된다.
+
+### Known limitations (v1.3.4)
+- Phase 6 dogfood T3 / T4 (release gate §7.5) 미완. 실제 feature 브랜치의 live 리뷰가 필요한 수동 작업으로, 이번 세션 범위를 벗어나 follow-up 세션 태스크로 기록. 프로토콜 회귀 없음 (structural 10 + e2e 11 green) — manual verification 리추얼만 미룸.
+- `git add -p` partial-hunk staging 의 완전한 blob-level 복원은 미구현 (v1.3.5 후보). 현재는 영향받는 경로 warning + response.md 기록으로 bounded — 사용자가 `git add -p` 를 재실행해 복구.
+- `--qa` 플래그는 여전히 reserved-only (v1.3.4 out-of-scope).
+
 ## [1.3.3] — 2026-04-24
 
 ### Added

@@ -1,0 +1,43 @@
+name: Phase 6 Protocol Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'agents/phase6-implementer.md'
+      - 'commands/deep-review.md'
+      - 'skills/receiving-review/**'
+      - 'hooks/scripts/test/test-phase6-*.sh'
+      - '.github/workflows/phase6-protocol.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    name: tests (${{ matrix.os }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PyYAML (strict structural parse)
+        run: python3 -m pip install --upgrade pip pyyaml
+
+      - name: Show bash version
+        run: bash --version
+
+      - name: Structural tests
+        run: bash hooks/scripts/test/test-phase6-subagent.sh
+
+      - name: Protocol e2e tests
+        run: bash hooks/scripts/test/test-phase6-protocol-e2e.sh
