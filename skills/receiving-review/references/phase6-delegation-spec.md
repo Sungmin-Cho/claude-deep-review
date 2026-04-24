@@ -145,13 +145,13 @@ tools:
   3. `test_exit_code != 0`이면 해당 그룹 즉시 중단, 이후 항목은 `status: skipped_due_to_halt`
   4. `max_files_per_item` 초과 시 해당 항목 `status: error`로 표시, 다음 항목 진행 여부는 halt 규칙 적용.
      **기준**: "서브에이전트가 실제로 Edit한 **고유 파일** 수"(같은 파일 여러 번 수정은 1회로 카운트). `file_refs`가 10개 이상이면 main이 Phase 5에서 해당 항목을 DEFER로 분류하여 Phase 6 dispatch 대상에서 제외 가능. 기본값 10은 하드코딩이며, 향후 릴리스에서 config.yaml로 조정 가능하도록 열어둔다.
-- 테스트 명령 탐지 절차 (첫 항목 시작 전, 우선순위):
-  1. **escape hatch (최우선)**: `.deep-review/config.yaml`에 `test_command` 필드가 있으면 그 값을 그대로 사용
-  2. `hooks/scripts/test/test-*.sh` 디렉토리가 존재하면 해당 디렉토리의 모든 `.sh`를 순차 실행
-  3. `package.json` scripts.test → `npm test` 또는 `pnpm test` (lockfile로 판단)
-  4. `pyproject.toml` [tool.pytest.*] → `pytest`
-  5. `Cargo.toml` → `cargo test`
-  6. `Makefile` test target → `make test`
+- 테스트 명령 탐지 절차 (첫 항목 시작 전, 우선순위) — **주 프로젝트 러너 우선, hooks smoke 는 보조**. `agents/phase6-implementer.md:46-52` 가 normative source; 본 목록은 그 복사본 (W8 교정: v1.3.3 에서 순서가 반전돼 있던 drift 해소):
+  1. **escape hatch (최우선)**: `.deep-review/config.yaml`의 `test_command` 필드 존재 시 그대로 사용 (사용자 명시 지정).
+  2. `package.json` scripts.test → `npm test` 또는 `pnpm test` (lockfile 로 구분).
+  3. `pyproject.toml [tool.pytest.*]` → `pytest`.
+  4. `Cargo.toml` → `cargo test`.
+  5. `Makefile` test target → `make test`.
+  6. 주 러너 모두 부재 시에만 fallback: `hooks/scripts/test/test-*.sh` 존재하면 전체 실행. 주 러너가 **있으면 hooks 는 실행하지 않음** (smoke test 가 실제 스위트를 숨기지 않도록).
   7. 그 외: `execution_status: error`, `error_reason: "no test command detected"`로 즉시 반환. 사용자는 (1)의 escape hatch로 수동 지정 가능.
 - 출력 계약 (§5.2)
 - Prompt Injection 면역 조항 (code-reviewer.md의 조항을 참고)
