@@ -260,23 +260,34 @@ verification:
 
 Phase 6는 심각도 그룹(🔴 → 🟡 → ℹ️)별로 `phase6-implementer` 서브에이전트에 dispatch된다. Main은 판단·검증·기록만 담당한다. 상세는 스펙 `docs/superpowers/specs/2026-04-24-phase6-subagent-delegation-design.md` §5 참조.
 
-**Main의 절차**:
+**Main의 절차**: 정식 구현은 `commands/deep-review.md`의 `--respond` Step 2.5를 단일 소스로 한다. 본 문서는 스킬 로드 시점의 요약만 제공한다. 이하 요약과 실제 커맨드 문서가 상충하면 **`commands/deep-review.md`가 우선**한다.
 
 1. **Accepted Items 정렬**: 우선순위 5단계(🔴 전원일치 → 🔴 부분일치 → 🟡 전원일치 → 🟡 부분일치 → ℹ️)로 정렬 후 `item_id` 재부여. 각 항목에 `confidence: agreed | partial` 필드 세팅.
 2. **심각도 그룹 loop** (🔴 → 🟡 → ℹ️):
    - 그룹에 항목 0건이면 skip.
-   - 그룹별 로그 경로 결정: `{repo}/.deep-review/tmp/phase6-{severity}.log`.
-   - Agent dispatch (2단계 fallback):
+   - 그룹별 로그 경로: `{repo}/.deep-review/tmp/phase6-{severity}.log`.
+   - **Pre-dispatch snapshot**: 워크스페이스 baseline(PRE_MODIFIED/PRE_UNTRACKED/PRE_STATUS) + allowlist(ALLOWED = 이 그룹의 `target_location` 경로 union).
+   - Agent dispatch (2단계 네임스페이스 fallback):
      - 1차: `Agent({ subagent_type: "deep-review:phase6-implementer", prompt: <스펙 §5.1 계약> })`
      - 1차 실패 시: `Agent({ subagent_type: "phase6-implementer", ... })`
-     - 2차도 실패하면 main fallback (§6.2 강제 fallback 또는 dispatch 거부 분기)
-   - 환경변수 `DEEP_REVIEW_FORCE_FALLBACK=1`이면 dispatch 시도 없이 즉시 main fallback.
-3. **결과 검증**: 반환 메시지의 `Group Result` 블록 파싱 → `git diff --stat`으로 실제 파일 변경 대조 → `log_path`에서 실패 항목의 `ITEM-{id}` 구간 tail Read.
-4. **그룹 커밋 정책**: 전원 PASS 그룹만 **명시적 staging으로 커밋** — 서브에이전트 Group Result의 `files_changed` 목록만 `git add -- <files>`로 추가한 뒤 `git commit` (`git add -A` 금지; Stage 1 민감 파일 방지 규칙과 일관). 부분 실패 그룹은 미커밋, response.md에 "워킹 트리에 passed 항목 수정 남음" 경고 기록.
-5. **회귀 시 중단**: `execution_status: halted_on_regression | error` 또는 `items_failed > 0`이면 다음 그룹 dispatch 안 함.
-6. **Context 여력 안전장치**: dispatch 실패로 fallback 전환 시 남은 미처리 항목이 5건 이상이면 AskUserQuestion으로 "여기까지 / 계속" 선택. "여기까지" 시 남은 항목 `decision: DEFER, defer_reason: "dispatch failure, main context conservation"`.
+     - 2차도 실패 / 환경변수 `DEEP_REVIEW_FORCE_FALLBACK=1` → Dirty recovery로 분기.
+3. **결과 검증 — fail-closed + delta + allowlist**:
+   - 반환에 `Group Result` 블록이 없거나 파싱 불가능 → Dirty recovery 분기.
+   - `POST_ALL - PRE_ALL = DELTA` (이 그룹이 실제로 바꾼 set).
+   - `CLAIM(files_changed) != DELTA` → `execution_status=error`, commit·PR posting 억제.
+   - `DELTA` 내 경로가 `ALLOWED` 외부 → `execution_status=error` (trust boundary 위반).
+   - `log_path` 부재 → `log_unavailable=true`, error 처리.
+   - 실패 항목은 `Read(log_path)` — `ITEM-{id}` 구분자로 구간 확인.
+4. **그룹 커밋 — pathspec-limited (fail-closed)**: 전원 PASS AND 검증 통과 시에만:
+   - 신규 untracked 파일만 `git add -- <paths>` 후:
+   - **`git commit --only -m "..." -- "${CHANGED_FILES[@]}"`** (— `-m`은 `--` 앞에 와야 pathspec 오인 방지).
+   - `git commit --only`는 pre-staged 인덱스를 건드리지 않음 (참고: 사용자 WIP staged 파일 보존). 경고만 출력.
+   - **금지**: `git add -A`, `git commit` (pathspec 없이), `git commit --only -- <paths> -m <msg>` (`-m`이 pathspec으로 파싱됨).
+   - 부분 실패/halted/error 그룹은 커밋 건너뜀.
+5. **Dirty recovery**: 서브에이전트 실패·파싱 불가 등으로 dirty 상태 남으면 AskUserQuestion — (1) 유지하고 main 계속, (2) `git restore` + `git clean`으로 baseline 복원 후 main 계속, (3) 중단.
+6. **Context 여력 안전장치**: main fallback 시점 남은 항목 ≥ 5 이면 DEFER 제안 (details in `commands/deep-review.md`).
 
-**서브에이전트의 절차**: `agents/phase6-implementer.md`의 시스템 프롬프트를 단일 소스로 한다. 본 문서는 main 관점만 기술.
+**서브에이전트의 절차**: `agents/phase6-implementer.md`의 시스템 프롬프트를 단일 소스로 한다.
 
 ### Response 리포트 생성
 
@@ -287,7 +298,7 @@ Phase 6는 심각도 그룹(🔴 → 🟡 → ℹ️)별로 `phase6-implementer`
 
 **중요**: PR 코멘트 게시는 구현+테스트 성공 이후에 수행한다. 구현 전에 "Fixed" 등을 게시하면, 실패 시 거짓 답글이 남는다.
 
-각 ACCEPT 항목 중 **서브에이전트가 PASS로 반환하고 main 검증(`git diff --stat` 대조, 로그 tail 확인)을 통과한 항목**에 대해서만 해당 코멘트에 답글 (스펙 §4.2 W6):
+각 ACCEPT 항목 중 **서브에이전트가 PASS로 반환하고 main 검증(pre/post dispatch snapshot delta = claim, allowlist 내부, `log_path` 가용)을 통과한 항목**에 대해서만 해당 코멘트에 답글 (스펙 §4.2 W6):
 
 인라인 코멘트:
 ```bash
