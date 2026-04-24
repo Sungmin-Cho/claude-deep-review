@@ -521,11 +521,11 @@ fi
 
 ### 2.5 Phase 6 — subagent dispatch (심각도 그룹 loop)
 
-Phase 6 구현은 `phase6-implementer` 서브에이전트에 그룹 dispatch. 상세 스펙: `docs/superpowers/specs/2026-04-24-phase6-subagent-delegation-design.md` §3, §5, §6.
+Phase 6 구현은 `phase6-implementer` 서브에이전트에 그룹 dispatch. 상세 스펙: `skills/receiving-review/references/phase6-delegation-spec.md` §3, §5, §6.
 
 **심각도 그룹 loop** (🔴 → 🟡 → ℹ️):
 
-**실행 가능한 e2e 테스트**: 아래 각 Step의 핵심 shell 로직은 `hooks/scripts/test/test-phase6-protocol-e2e.sh`의 5개 테스트(E1~E5)에서 실증 검증됨. pseudocode가 문서로 drift하지 않도록 **CI에서 e2e도 함께 실행**.
+**실행 가능한 e2e 테스트**: 아래 각 Step의 핵심 shell 로직은 `hooks/scripts/test/test-phase6-protocol-e2e.sh`의 6개 테스트(E1~E6)에서 실증 검증됨. pseudocode가 문서로 drift하지 않도록 **CI에서 e2e도 함께 실행**.
 
 1. 해당 그룹의 ACCEPT 항목이 0건이면 skip.
 2. 로그 경로 결정: `log_path="$(pwd)/.deep-review/tmp/phase6-${severity}.log"` (절대 경로). `mkdir -p .deep-review/tmp`.

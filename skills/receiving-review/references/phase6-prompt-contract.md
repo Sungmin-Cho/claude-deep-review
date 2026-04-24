@@ -1,7 +1,7 @@
 # Phase 6 Prompt Contract
 
 Phase 6 main ↔ `phase6-implementer` subagent 간 prompt 계약의 정식 reference.
-설계 배경은 `phase6-delegation-spec.md` §5 참조 (또는 v1.3.3 기준 `docs/superpowers/specs/2026-04-24-phase6-subagent-delegation-design.md`). 본 문서는 **실제 prompt 텍스트**와 **정확한 필드 형식**의 운영 카탈로그.
+설계 배경은 `skills/receiving-review/references/phase6-delegation-spec.md` §5 참조. 본 문서는 **실제 prompt 텍스트**와 **정확한 필드 형식**의 운영 카탈로그.
 
 ## 목차
 
@@ -525,7 +525,7 @@ v1.3.3 agent는 literal 치환만 지시. v1.3.4부터 single-quote wrap 필수.
 - **Authoritative main 절차**: `commands/deep-review.md` `--respond` Step 2.5
 - **Subagent system prompt**: `agents/phase6-implementer.md` (단일 소스)
 - **Response 리포트 형식**: `skills/receiving-review/references/response-format.md`
-- **설계 배경**: `skills/receiving-review/references/phase6-delegation-spec.md` (v1.3.4 이동 예정; v1.3.3은 `docs/superpowers/specs/`에 local)
+- **설계 배경**: `skills/receiving-review/references/phase6-delegation-spec.md`
 - **검증 테스트**:
   - `hooks/scripts/test/test-phase6-subagent.sh` (10 structural)
-  - `hooks/scripts/test/test-phase6-protocol-e2e.sh` (5 e2e)
+  - `hooks/scripts/test/test-phase6-protocol-e2e.sh` (6 e2e, E1~E6)
