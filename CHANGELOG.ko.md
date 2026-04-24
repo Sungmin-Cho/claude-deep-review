@@ -13,7 +13,7 @@
 
 ### 변경
 - `agents/phase6-implementer.md` — literal `log_path` 치환 패턴에 **single-quote wrap 의무화**. `'\''` escape 규칙 + `printf '%q'` 허용 명시. 금지 패턴 2개 명시: (a) single-quote 내부의 `tee -a "$log_path"` (빈 변수 확장), (b) quote 없는 `tee -a /path with space/log` (3개 인자로 word-split).
-- `commands/deep-review.md` Step 2.5 (Phase 6 그룹 loop) — path-set baseline을 `git diff --name-status -M` 으로 전환. awk 후처리로 R/C rename/copy 라인에서 new path만 채택 → Phase 6 claim↔delta 비교가 staged rename에서 false-positive를 내지 않음. Binary 파일은 여전히 `git hash-object`를 통해 DELTA에 포함되며 이는 별도 분기 없음 — 명시적으로 문서화하여 숨겨진 로직을 추정하지 않도록.
+- `commands/deep-review.md` Step 2.5 (Phase 6 그룹 loop) — path-set baseline을 `git diff --name-status -M` (unstaged) **와** `git diff --cached --name-status -M` (staged) **의 합집합**으로 수집한 뒤 awk 후처리로 R/C rename/copy 라인의 new path만 채택. `git mv`는 자동 staged로 분류되므로 `--cached`를 함께 읽지 않으면 subagent가 Bash tool로 연 staged rename을 baseline이 놓쳐 trust-boundary gap이 된다 — 이를 막기 위한 구조. Binary 파일은 여전히 `git hash-object`를 통해 DELTA에 포함되며 이는 별도 분기 없음 — 명시적으로 문서화하여 숨겨진 로직을 추정하지 않도록.
 - `commands/deep-review.md` Step 2.5 — 그룹 loop 상단에 "Step ↔ spec §5.4 매핑 테이블" 추가. 모든 step 헤더(3~8)에 `(spec §5.4.X)` 역참조. Spec §5.4 각 item에는 `(→ commands Step X)` 상호 참조 + 상단 매핑 테이블. 번호 자체는 재정렬하지 않음 (drift 위험) — 상호 참조만 추가.
 - **톤 통일** — `commands/deep-review.md` 와 `skills/receiving-review/references/phase6-delegation-spec.md` 에 남아 있던 영문 warning 3건을 한국어로 교체 (`⚠ Phase 6 범위 외에 pre-staged 파일이 감지됐습니다:` 등). 리뷰/대응 UI 전반의 한국어 어조와 일관성 확보.
 - **Placeholder 관습 명시화** — `agents/phase6-implementer.md`의 subagent 출력 template과 `phase6-prompt-contract.md`의 Accepted-Items prompt template 서두에 `<...>`는 "실제 값으로 치환해서 내보내야 할 placeholder", `{...}`는 "치환될 값의 타입 라벨"임을 각각 한 줄 선언. 그간 문자 그대로 반환될 위험이 있던 중의성 제거.

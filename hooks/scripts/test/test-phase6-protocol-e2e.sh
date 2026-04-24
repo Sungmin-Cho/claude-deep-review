@@ -320,21 +320,47 @@ test_e7_rename_detection() {
     cd "$repo" || exit 1
     echo "v1" > a.txt
     git add a.txt && git commit -q -m "init"
-    git mv a.txt b.txt
-    # commands Step 3의 PRE_MODIFIED 정규화 로직 재현 (staged 대상 --cached)
-    git -c core.quotepath=false diff --cached --name-status -M | awk -F'\t' '
-      $1 ~ /^[RC]/ { print $3; next }
-      $1 != "" { print $2 }
-    ' | sort -u
+    git mv a.txt b.txt   # git mv는 자동 staged. unstaged diff에는 안 보임.
+
+    # commands Step 3/5의 PRE_MODIFIED/POST_MODIFIED 정규화 로직 재현.
+    # staged + unstaged 합집합 — production과 동일 명령 조합 (C1 교정).
+    { git -c core.quotepath=false diff --name-status -M;
+      git -c core.quotepath=false diff --cached --name-status -M; } \
+    | awk -F'\t' '
+        $1 ~ /^[RC]/ { print $3; next }
+        $1 != "" { print $2 }
+      ' | sort -u
   ) > "$repo/.out" 2>&1
 
   local detected
   detected=$(grep -v "^$" "$repo/.out" | head -1)
-  if [[ "$detected" == "b.txt" ]]; then
-    e2e_pass "$name" "--name-status -M extracted new path 'b.txt' from rename"
+  local count
+  count=$(grep -cv "^$" "$repo/.out")
+
+  # 정확히 'b.txt' 1개만 출력되어야 — 'a.txt' (old path)도 섞이면 계약 위반
+  if [[ "$detected" == "b.txt" && "$count" == "1" ]]; then
+    e2e_pass "$name" "staged rename 'git mv' detected as new path 'b.txt' via --cached union (staged + unstaged)"
   else
-    e2e_fail "$name" "expected 'b.txt', got '$detected'"
+    e2e_fail "$name" "expected 1 line 'b.txt', got count=$count first='$detected'"
   fi
+
+  # Negative: awk R/C 분기 제거 시 old path 'a.txt'도 포함되는지 확인 (계약 차별성)
+  local repo2
+  repo2=$(mk_tmp_repo)
+  (
+    cd "$repo2" || exit 1
+    echo "v1" > a.txt
+    git add a.txt && git commit -q -m "init"
+    git mv a.txt b.txt
+    # awk 미적용 raw 출력
+    { git -c core.quotepath=false diff --name-status -M;
+      git -c core.quotepath=false diff --cached --name-status -M; }
+  ) > "$repo2/.out" 2>&1
+
+  if grep -qE '^R[0-9]+\ta.txt\tb.txt' "$repo2/.out"; then
+    echo "  (verified negative: raw --name-status -M contains 'R100\ta.txt\tb.txt' — awk R/C branch is required to select new path)"
+  fi
+  cleanup_tmp_repo "$repo2"
 
   cleanup_tmp_repo "$repo"
 }
