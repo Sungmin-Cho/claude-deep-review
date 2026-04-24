@@ -515,7 +515,7 @@ fi
 
 로드된 `receiving-review` 스킬의 Phase 1~5를 main 세션에서 실행합니다.
 - Phase 1~5: READ / UNDERSTAND / VERIFY / EVALUATE / RESPOND — ACCEPT/REJECT/DEFER 판단까지.
-- 각 ACCEPT 항목에 `implementation_guide` 5개 필드(`target_location`/`intent`/`change_shape`/`non_goals`/`acceptance`)를 기록.
+- 각 ACCEPT 항목에 `implementation_guide` 6개 필드(`target_location`/`modifiable_paths`/`intent`/`change_shape`/`non_goals`/`acceptance`)를 기록.
 - Accepted Items를 5단계 우선순위(🔴 전원일치 → 🔴 부분일치 → 🟡 전원일치 → 🟡 부분일치 → ℹ️)로 정렬, `confidence: agreed | partial` 필드 세팅.
 - Recurring findings 분류 및 경고는 Phase 1(READ) 내부에서 처리.
 
