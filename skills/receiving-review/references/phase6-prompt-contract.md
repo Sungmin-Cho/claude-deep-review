@@ -382,8 +382,13 @@ ALLOWED=$(printf '%s\n' "${TARGET_LOCATIONS_OF_GROUP[@]}" "${MODIFIABLE_PATHS_OF
   | sed -E 's/:[0-9][0-9,\-]*\s*$//; s/^[[:space:]]+//; s/[[:space:]]+$//' \
   | sort -u | sed '/^$/d')
 
-# Path-set baseline
-PRE_MODIFIED=$(git -c core.quotepath=false diff --name-only | sort -u)
+# Path-set baseline (v1.3.4: staged ∪ unstaged 합집합 + awk R/C 분기)
+PRE_MODIFIED=$( { git -c core.quotepath=false diff --name-status -M;
+                  git -c core.quotepath=false diff --cached --name-status -M; } \
+  | awk -F'\t' '
+      $1 ~ /^[RC]/ { print $3; next }
+      $1 != "" { print $2 }
+    ' | sort -u)
 PRE_UNTRACKED=$(git -c core.quotepath=false ls-files --others --exclude-standard | sort -u)
 PRE_STATUS=$(git -c core.quotepath=false status --porcelain=v1 -uall)
 
@@ -400,6 +405,19 @@ while IFS= read -r f; do
     PRE_HASH[$f]="absent"
   fi
 done <<< "$ALLOWED"
+
+# Pre-existing outside content snapshot (v1.3.4 C3 교정 — allowlist bypass 차단)
+declare -A PRE_OUTSIDE_HASH=()
+PRE_ALL=$(printf '%s\n%s\n' "$PRE_MODIFIED" "$PRE_UNTRACKED" | sort -u | sed '/^$/d')
+while IFS= read -r f; do
+  [[ -z "$f" ]] && continue
+  grep -Fxq "$f" <<< "$ALLOWED" && continue
+  if [[ -f "$f" ]]; then
+    PRE_OUTSIDE_HASH[$f]=$(git hash-object -- "$f")
+  else
+    PRE_OUTSIDE_HASH[$f]="absent"
+  fi
+done <<< "$PRE_ALL"
 ```
 
 ### 4.4 반환 검증 (fail-closed)
@@ -413,13 +431,31 @@ for f in "${!PRE_HASH[@]}"; do
   [[ "$post" != "${PRE_HASH[$f]}" ]] && DELTA+=("$f")
 done
 
-# 3. Allowlist violation
-POST_MODIFIED=$(git -c core.quotepath=false diff --name-only | sort -u)
+# 3. Allowlist violation (v1.3.4: staged ∪ unstaged 합집합 + awk R/C 분기)
+POST_MODIFIED=$( { git -c core.quotepath=false diff --name-status -M;
+                   git -c core.quotepath=false diff --cached --name-status -M; } \
+  | awk -F'\t' '
+      $1 ~ /^[RC]/ { print $3; next }
+      $1 != "" { print $2 }
+    ' | sort -u)
 POST_UNTRACKED=$(git -c core.quotepath=false ls-files --others --exclude-standard | sort -u)
-NEW_PATHS=$(comm -13 <(echo "$PRE_MODIFIED$'\n'$PRE_UNTRACKED" | sort -u) \
-                      <(echo "$POST_MODIFIED$'\n'$POST_UNTRACKED" | sort -u))
+NEW_PATHS=$(printf '%s\n%s\n' \
+  "$(comm -13 <(echo "$PRE_MODIFIED") <(echo "$POST_MODIFIED"))" \
+  "$(comm -13 <(echo "$PRE_UNTRACKED") <(echo "$POST_UNTRACKED"))" \
+  | sort -u | sed '/^$/d')
 VIOLATIONS=$(comm -23 <(echo "$NEW_PATHS") <(echo "$ALLOWED"))
 [[ -n "$VIOLATIONS" ]] && { execution_status=error; error_reason="outside allowlist: $VIOLATIONS"; }
+
+# 3a. Pre-existing outside content check (v1.3.4 C3 교정)
+OUTSIDE_VIOLATIONS=()
+for f in "${!PRE_OUTSIDE_HASH[@]}"; do
+  post=$([[ -f "$f" ]] && git hash-object -- "$f" || echo "absent")
+  [[ "$post" != "${PRE_OUTSIDE_HASH[$f]}" ]] && OUTSIDE_VIOLATIONS+=("$f")
+done
+if [[ ${#OUTSIDE_VIOLATIONS[@]} -gt 0 ]]; then
+  execution_status=error
+  error_reason="pre-existing outside paths mutated by subagent: ${OUTSIDE_VIOLATIONS[*]}"
+fi
 
 # 4. CLAIM suffix-strip + 비교
 CLAIM=$(printf '%s\n' "${CHANGED_FILES_CLAIM_RAW[@]}" \
@@ -428,8 +464,9 @@ DELTA_SORTED=$(printf '%s\n' "${DELTA[@]}" | sort -u)
 [[ "$CLAIM" != "$DELTA_SORTED" ]] && { execution_status=error; error_reason="claim != delta"; }
 
 # 5. REVERTED check
-REVERTED=$(comm -23 <(echo "$PRE_MODIFIED$'\n'$PRE_UNTRACKED" | sort -u | sed '/^$/d') \
-                     <(echo "$POST_MODIFIED$'\n'$POST_UNTRACKED" | sort -u | sed '/^$/d'))
+REVERTED=$(comm -23 \
+  <(printf '%s\n' "$PRE_MODIFIED" "$PRE_UNTRACKED" | sort -u | sed '/^$/d') \
+  <(printf '%s\n' "$POST_MODIFIED" "$POST_UNTRACKED" | sort -u | sed '/^$/d'))
 [[ -n "$REVERTED" ]] && { execution_status=error; error_reason="reverted: $REVERTED"; }
 
 # 6. log_path 존재
