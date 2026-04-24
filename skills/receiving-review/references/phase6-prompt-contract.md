@@ -392,30 +392,51 @@ PRE_MODIFIED=$( { git -c core.quotepath=false diff --name-status -M;
 PRE_UNTRACKED=$(git -c core.quotepath=false ls-files --others --exclude-standard | sort -u)
 PRE_STATUS=$(git -c core.quotepath=false status --porcelain=v1 -uall)
 
-# Content-aware baseline (ALLOWED 각 파일)
+# Content-aware baseline + tracking/staging state (ALLOWED 각 파일)
+# v1.3.4 C4 교정: bash 3.2 호환을 위해 associative array 대신 TSV temp file 사용
+# (macOS 기본 `/bin/bash` 3.2 에서 `declare -A` 는 invalid option).
 mkdir -p ".deep-review/tmp/phase6-${severity}-baseline"
-declare -A PRE_HASH=()
+PRE_HASH_FILE=".deep-review/tmp/phase6-${severity}-pre-hash.tsv"
+PRE_TRACKED_FILE=".deep-review/tmp/phase6-${severity}-pre-tracked.tsv"  # C5 교정
+PRE_STAGED_FILE=".deep-review/tmp/phase6-${severity}-pre-staged.tsv"    # W7 교정
+: > "$PRE_HASH_FILE"
+: > "$PRE_TRACKED_FILE"
+: > "$PRE_STAGED_FILE"
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
+  # C5: tracking 여부를 명시 저장 (worktree 존재 ≠ tracked).
+  if git ls-files --error-unmatch -- "$f" >/dev/null 2>&1; then
+    printf '%s\ttrue\n'  "$f" >> "$PRE_TRACKED_FILE"
+  else
+    printf '%s\tfalse\n' "$f" >> "$PRE_TRACKED_FILE"
+  fi
+  # W7: pre-existing staged hunk 여부 (recovery 시 warning 용).
+  if git diff --cached --quiet -- "$f" 2>/dev/null; then
+    printf '%s\tfalse\n' "$f" >> "$PRE_STAGED_FILE"
+  else
+    printf '%s\ttrue\n'  "$f" >> "$PRE_STAGED_FILE"
+  fi
+  # Content hash + baseline copy (tracked/untracked 무관).
   if [[ -f "$f" ]]; then
-    PRE_HASH[$f]=$(git hash-object -- "$f")
+    printf '%s\t%s\n' "$f" "$(git hash-object -- "$f")" >> "$PRE_HASH_FILE"
     mkdir -p ".deep-review/tmp/phase6-${severity}-baseline/$(dirname "$f")"
     cp -p "$f" ".deep-review/tmp/phase6-${severity}-baseline/$f"
   else
-    PRE_HASH[$f]="absent"
+    printf '%s\tabsent\n' "$f" >> "$PRE_HASH_FILE"
   fi
 done <<< "$ALLOWED"
 
 # Pre-existing outside content snapshot (v1.3.4 C3 교정 — allowlist bypass 차단)
-declare -A PRE_OUTSIDE_HASH=()
+PRE_OUTSIDE_HASH_FILE=".deep-review/tmp/phase6-${severity}-pre-outside-hash.tsv"
+: > "$PRE_OUTSIDE_HASH_FILE"
 PRE_ALL=$(printf '%s\n%s\n' "$PRE_MODIFIED" "$PRE_UNTRACKED" | sort -u | sed '/^$/d')
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
   grep -Fxq "$f" <<< "$ALLOWED" && continue
   if [[ -f "$f" ]]; then
-    PRE_OUTSIDE_HASH[$f]=$(git hash-object -- "$f")
+    printf '%s\t%s\n' "$f" "$(git hash-object -- "$f")" >> "$PRE_OUTSIDE_HASH_FILE"
   else
-    PRE_OUTSIDE_HASH[$f]="absent"
+    printf '%s\tabsent\n' "$f" >> "$PRE_OUTSIDE_HASH_FILE"
   fi
 done <<< "$PRE_ALL"
 ```
@@ -424,12 +445,13 @@ done <<< "$PRE_ALL"
 
 ```bash
 # 1. Group Result 파싱 불가 → Dirty recovery (§4.6)
-# 2. Content-aware DELTA
+# 2. Content-aware DELTA (v1.3.4 C4: bash 3.2 호환 TSV iterate)
 DELTA=()
-for f in "${!PRE_HASH[@]}"; do
+while IFS=$'\t' read -r f pre_hash; do
+  [[ -z "$f" ]] && continue
   post=$([[ -f "$f" ]] && git hash-object -- "$f" || echo "absent")
-  [[ "$post" != "${PRE_HASH[$f]}" ]] && DELTA+=("$f")
-done
+  [[ "$post" != "$pre_hash" ]] && DELTA+=("$f")
+done < "$PRE_HASH_FILE"
 
 # 3. Allowlist violation (v1.3.4: staged ∪ unstaged 합집합 + awk R/C 분기)
 POST_MODIFIED=$( { git -c core.quotepath=false diff --name-status -M;
@@ -446,12 +468,13 @@ NEW_PATHS=$(printf '%s\n%s\n' \
 VIOLATIONS=$(comm -23 <(echo "$NEW_PATHS") <(echo "$ALLOWED"))
 [[ -n "$VIOLATIONS" ]] && { execution_status=error; error_reason="outside allowlist: $VIOLATIONS"; }
 
-# 3a. Pre-existing outside content check (v1.3.4 C3 교정)
+# 3a. Pre-existing outside content check (v1.3.4 C3 교정, C4 TSV iterate)
 OUTSIDE_VIOLATIONS=()
-for f in "${!PRE_OUTSIDE_HASH[@]}"; do
+while IFS=$'\t' read -r f pre_hash; do
+  [[ -z "$f" ]] && continue
   post=$([[ -f "$f" ]] && git hash-object -- "$f" || echo "absent")
-  [[ "$post" != "${PRE_OUTSIDE_HASH[$f]}" ]] && OUTSIDE_VIOLATIONS+=("$f")
-done
+  [[ "$post" != "$pre_hash" ]] && OUTSIDE_VIOLATIONS+=("$f")
+done < "$PRE_OUTSIDE_HASH_FILE"
 if [[ ${#OUTSIDE_VIOLATIONS[@]} -gt 0 ]]; then
   execution_status=error
   error_reason="pre-existing outside paths mutated by subagent: ${OUTSIDE_VIOLATIONS[*]}"
@@ -478,10 +501,11 @@ REVERTED=$(comm -23 \
 전원 PASS AND 검증 통과 시에만:
 
 ```bash
-# Untracked 신규 파일 명시적 add
+# Untracked 신규 파일 명시적 add (v1.3.4 C4: TSV lookup)
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
-  if [[ -z "${PRE_HASH[$f]+x}" || "${PRE_HASH[$f]}" == "absent" ]]; then
+  pre_hash=$(awk -F'\t' -v p="$f" '$1 == p { print $2; exit }' "$PRE_HASH_FILE")
+  if [[ -z "$pre_hash" || "$pre_hash" == "absent" ]]; then
     git add -- "$f"
   fi
 done < <(printf '%s\n' "${CHANGED_FILES[@]}")
@@ -504,18 +528,41 @@ git commit --only \
 ### 4.6 Dirty recovery (per-file content baseline)
 
 ```bash
-# (2) 선택 시 — ALLOWED 경로만 baseline에서 복원, 사용자 non-ALLOWED WIP 보존
-while IFS= read -r f; do
+# (2) 선택 시 — ALLOWED 경로만 baseline + PRE tracking state 기반 복원.
+# v1.3.4 W4/C5/W7/C4 통합.
+
+# W7: Phase 6 진입 전부터 staged hunk 가 있던 ALLOWED 경로를 사용자에게 경고.
+PRE_STAGED_ALLOWED=()
+while IFS=$'\t' read -r f had_staged; do
   [[ -z "$f" ]] && continue
+  [[ "$had_staged" == "true" ]] && PRE_STAGED_ALLOWED+=("$f")
+done < "$PRE_STAGED_FILE"
+if [[ ${#PRE_STAGED_ALLOWED[@]} -gt 0 ]]; then
+  echo "⚠ 다음 ALLOWED 경로는 Phase 6 진입 전부터 staged hunk 가 있었습니다 — recovery 시 함께 un-stage 됩니다:"
+  printf '  %s\n' "${PRE_STAGED_ALLOWED[@]}"
+  echo "→ response.md 복원 로그에 기록. 복구하려면 'git add' 또는 'git add -p' 로 재-stage 하세요."
+fi
+
+# C5: pre_tracked 기반 index 복원 + baseline 기반 worktree 복원.
+while IFS=$'\t' read -r f pre_tracked; do
+  [[ -z "$f" ]] && continue
+  if [[ "$pre_tracked" == "true" ]]; then
+    # tracked 였던 경로: index 를 HEAD 로 되돌림 (unstaged-delete WIP 재구성 가능).
+    git restore --staged -- "$f" 2>/dev/null || true
+  else
+    # untracked 였던 경로: subagent 가 add 한 경우 index 에서 제거.
+    git rm --cached --ignore-unmatch -- "$f" >/dev/null 2>&1 || true
+  fi
   baseline=".deep-review/tmp/phase6-${severity}-baseline/$f"
   if [[ -f "$baseline" ]]; then
     mkdir -p "$(dirname "$f")"
     cp -p "$baseline" "$f"
-  elif [[ "${PRE_HASH[$f]}" == "absent" && -f "$f" ]]; then
-    rm -f "$f"
+  else
+    # baseline 없음 → PRE 에 worktree 파일 없었음 (tracked-deleted 또는 untracked-absent).
+    [[ -f "$f" ]] && rm -f "$f"
   fi
-done <<< "$ALLOWED"
-# git restore --source=HEAD 사용 금지 — pre-existing WIP 파괴.
+done < "$PRE_TRACKED_FILE"
+# git restore --source=HEAD 사용 금지 — pre-existing non-ALLOWED WIP 파괴.
 ```
 
 ---
