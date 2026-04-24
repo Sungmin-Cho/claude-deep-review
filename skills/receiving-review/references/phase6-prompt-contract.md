@@ -501,9 +501,11 @@ response-format.md의 Evidence 블록에 `log_unavailable: true` 명시. `test_l
 
 Dispatch 건너뛰고 즉시 main fallback 경로. Pre-dispatch snapshot은 수행됐어도 사용되지 않음 (main이 직접 Phase 6 로직 수행).
 
-### 5.5 Rename/binary 파일 (v1.3.3: best effort, v1.3.4: precision 개선 예정)
+### 5.5 Rename/binary 파일 (v1.3.3: best effort, v1.3.4: `--name-status -M` + staged∪unstaged 합집합)
 
-현재 `git diff --name-only`는 rename detection 기본 ON, binary도 path만 출력. 대부분 시나리오는 OK. v1.3.4에서 `--name-status` 전환 예정.
+v1.3.3: `git diff --name-only`는 rename detection 기본 ON, binary도 path만 출력. 대부분 시나리오는 OK (그러나 `git mv` 같은 staged rename은 `--cached` 없이 놓침).
+
+v1.3.4 부터: PRE/POST baseline을 `git diff --name-status -M` (unstaged) + `git diff --cached --name-status -M` (staged) 합집합으로 수집하고 awk 후처리로 R/C 라인의 new path만 채택 (E7). Binary는 `git hash-object`가 content hash를 반환하므로 DELTA에 자연스럽게 포함 (E8).
 
 ### 5.6 `log_path` 공백·특수문자 (v1.3.4)
 
@@ -516,7 +518,7 @@ v1.3.3 agent는 literal 치환만 지시. v1.3.4부터 single-quote wrap 필수.
 | 버전 | 변경 |
 |------|------|
 | v1.3.3 | Phase 6 subagent delegation 최초 release. `implementation_guide` 6 필드 (modifiable_paths 포함). 본 contract의 기준. |
-| v1.3.4 (계획) | `log_path` shell quoting, rename/binary precision, spec 이동 (본 문서와 함께 shipped). |
+| v1.3.4 | `log_path` outer single-quote wrap + `'\''` escape 의무화, rename/binary precision (`--name-status -M` + staged∪unstaged 합집합), spec 이동 (본 문서와 함께 shipped), CI 통합 (`.github/workflows/phase6-protocol.yml`). |
 
 **Breaking change policy**: `implementation_guide` 필드 추가는 additive. 삭제/rename은 minor version bump + deprecation 주기. 출력 contract 변경도 동일.
 
