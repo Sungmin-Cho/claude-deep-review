@@ -10,8 +10,9 @@
 #   E3. :(exclude) bash 확장 버그 회피 (multi-file CHANGED_FILES)
 #   E4. Allowlist + modifiable_paths — companion files 허용
 #   E5. Dirty recovery — pre-existing user WIP 보존
+#   E6. log_path shell quoting — 공백/특수문자 경로 생존
 #
-# exit 0 = 5개 모두 PASS, exit 1 = 1건 이상 FAIL.
+# exit 0 = 6개 모두 PASS, exit 1 = 1건 이상 FAIL.
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -246,6 +247,63 @@ test_e5_restore_preserves_wip() {
 }
 
 # ============================================================================
+# E6. log_path shell quoting — 공백/특수문자 경로 생존
+# ============================================================================
+# 시나리오:
+#   1. 공백 포함 log_path: "<repo>/my log dir/phase6-critical.log"
+#   2. Agent가 literal + single-quote wrap 패턴으로 tee 실행 → 경로 보존
+#   3. 같은 경로에 unquoted로 전달 시 tee가 path를 split → 의도한 파일 미생성 (negative)
+#
+# 실행 의미론 검증: 최종 bash 명령이 path를 single-quoted arg로 받아야 한다.
+
+test_e6_log_path_quoting() {
+  local name="E6"
+  local repo
+  repo=$(mk_tmp_repo)
+  (
+    cd "$repo" || exit 1
+    mkdir -p "my log dir"
+    local log_path="$repo/my log dir/phase6-critical.log"
+
+    # Agent 패턴 재현: log_path를 single-quote로 감싸 literal substitute.
+    # Bash parameter substitution으로 경로 내 `'`를 `'\''`로 이스케이프
+    # (이 테스트의 path엔 없지만 agent 계약의 일반 규칙과 정합).
+    local escaped="${log_path//\'/\'\\\'\'}"
+    bash -c "echo 'START' 2>&1 | tee -a '$escaped'" >/dev/null
+    bash -c "echo 'END'   2>&1 | tee -a '$escaped'" >/dev/null
+  ) > "$repo/.out" 2>&1
+
+  if [[ -f "$repo/my log dir/phase6-critical.log" ]]; then
+    local line_count
+    line_count=$(wc -l < "$repo/my log dir/phase6-critical.log" | tr -d ' ')
+    if [[ "$line_count" == "2" ]]; then
+      e2e_pass "$name" "single-quote wrap preserved log_path with spaces"
+    else
+      e2e_fail "$name" "log file created but line count=$line_count (expected 2)"
+    fi
+  else
+    e2e_fail "$name" "log file not created at '$repo/my log dir/phase6-critical.log'"
+  fi
+
+  # Negative: unquoted path → tee가 3개 인자로 split, 의도한 파일 미생성
+  local repo2
+  repo2=$(mk_tmp_repo)
+  (
+    cd "$repo2" || exit 1
+    mkdir -p "my log dir"
+    local log_path="$repo2/my log dir/phase6-critical.log"
+    bash -c "echo hi 2>&1 | tee -a $log_path" >/dev/null 2>&1 || true
+  ) > "$repo2/.out" 2>&1
+
+  if [[ ! -f "$repo2/my log dir/phase6-critical.log" ]]; then
+    echo "  (verified negative: unquoted path did not create intended file under 'my log dir/')"
+  fi
+  cleanup_tmp_repo "$repo2"
+
+  cleanup_tmp_repo "$repo"
+}
+
+# ============================================================================
 # 실행
 # ============================================================================
 
@@ -255,6 +313,7 @@ test_e2_content_aware_delta
 test_e3_exclude_expansion
 test_e4_allowlist_companion
 test_e5_restore_preserves_wip
+test_e6_log_path_quoting
 
 echo "---"
 echo "E2E Total: $E2E_PASS passed, $E2E_FAIL failed"
