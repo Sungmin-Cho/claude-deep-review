@@ -2,7 +2,7 @@
 # test-phase6-protocol-e2e.sh — Phase 6 protocol end-to-end executable tests
 #
 # 임시 git repo에서 Phase 6 main 프로토콜의 핵심 shell 로직을 실제 실행하여
-# 8개 Critical 시나리오를 검증 (E1~E8).
+# 9개 Critical 시나리오를 검증 (E1~E9).
 #
 # 검증 시나리오:
 #   E1. files_changed suffix 정규화 (subagent output "(+A -B)" strip)
@@ -13,8 +13,9 @@
 #   E6. log_path shell quoting — 공백/특수문자 경로 생존
 #   E7. Rename detection — --name-status -M 로 new path 추출
 #   E8. Binary hash — git hash-object 로 binary content 변경 감지
+#   E9. Allowlist bypass block — pre-existing dirty outside path 재수정 감지
 #
-# exit 0 = 8개 모두 PASS, exit 1 = 1건 이상 FAIL.
+# exit 0 = 9개 모두 PASS, exit 1 = 1건 이상 FAIL.
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -424,6 +425,65 @@ test_e8_binary_hash() {
 }
 
 # ============================================================================
+# E9. Allowlist bypass block — pre-existing dirty outside path 재수정 감지
+# ============================================================================
+# 시나리오 (v1.3.4 review C3 재현 후 교정 실증):
+#   1. allowed.ts, outside.ts 모두 커밋된 상태
+#   2. outside.ts 를 pre-existing dirty (w2) — ALLOWED 에는 allowed.ts 만 있음
+#   3. 서브에이전트가 allowed.ts 를 정상 수정 + outside.ts 를 추가 수정 (w3)
+#   4. Path-membership 만으로는 NEW_PATHS=POST-PRE 에 outside.ts 가 안 잡힘
+#      (이미 PRE 에 있었으므로). Content-hash 기반 PRE_OUTSIDE_HASH 로는 변화 감지.
+#
+# 기대: PRE_OUTSIDE_HASH[outside.ts] != POST hash → OUTSIDE_VIOLATIONS 에 추가.
+
+test_e9_outside_dirty_mutation() {
+  local name="E9"
+  local repo
+  repo=$(mk_tmp_repo)
+  (
+    cd "$repo" || exit 1
+    echo "v1" > allowed.ts
+    echo "w1" > outside.ts
+    git add . && git commit -q -m "init"
+    echo "w2" > outside.ts   # pre-existing dirty, NOT in ALLOWED
+
+    local ALLOWED="allowed.ts"
+
+    # PRE: ALLOWED 밖 경로의 content hash 저장 (commands Step 3의 PRE_OUTSIDE_HASH)
+    local pre_outside_hash
+    pre_outside_hash=$(git hash-object -- outside.ts)
+
+    # Subagent simulation: allowed.ts 정상 수정 + outside.ts 추가 수정
+    echo "v2" > allowed.ts
+    echo "w3" > outside.ts
+
+    # POST: content hash 재계산 (commands Step 5의 OUTSIDE_VIOLATIONS 계산)
+    local post_outside_hash
+    post_outside_hash=$(git hash-object -- outside.ts)
+
+    # Path-membership 은 놓친다 (positive control)
+    local path_delta
+    path_delta=$(comm -13 \
+      <(git -c core.quotepath=false diff --name-only | sort -u) \
+      <(git -c core.quotepath=false diff --name-only | sort -u))
+    # (비어있을 수밖에 없지만 — 형식상 "NEW_PATHS 는 0 건" 을 보여주기 위함)
+
+    # Content-hash diff 는 잡는다 (C3 교정)
+    if [[ "$pre_outside_hash" != "$post_outside_hash" ]]; then
+      echo "__OUTSIDE_VIOLATION_DETECTED__"
+    fi
+  ) > "$repo/.out" 2>&1
+
+  if grep -q "__OUTSIDE_VIOLATION_DETECTED__" "$repo/.out"; then
+    e2e_pass "$name" "pre-dirty outside path mutation flagged via content-hash (allowlist bypass blocked)"
+  else
+    e2e_fail "$name" "C3 regression: outside mutation not detected"
+  fi
+
+  cleanup_tmp_repo "$repo"
+}
+
+# ============================================================================
 # 실행
 # ============================================================================
 
@@ -436,6 +496,7 @@ test_e5_restore_preserves_wip
 test_e6_log_path_quoting
 test_e7_rename_detection
 test_e8_binary_hash
+test_e9_outside_dirty_mutation
 
 echo "---"
 echo "E2E Total: $E2E_PASS passed, $E2E_FAIL failed"

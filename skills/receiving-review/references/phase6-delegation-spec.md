@@ -312,12 +312,14 @@ JSON 대신 labeled markdown을 선택한 이유:
      - `PRE_MODIFIED`는 `git diff --name-status -M` (unstaged) **와** `git diff --cached --name-status -M` (staged) 의 **합집합**을 awk로 후처리하여 rename(R)/copy(C) 라인의 new path만 채택 (E7). `git mv`는 자동 staged로 분류되므로 `--cached`를 함께 읽지 않으면 subagent가 Bash tool로 연 staged rename을 baseline이 놓치고 `NEW_PATHS`/`REVERTED` 계산이 false-negative가 된다 (v1.3.4 review C1 교정).
      - Binary 파일도 `--name-status`가 path 단위로 나열하고, 아래의 `git hash-object`가 content hash를 반환하므로 DELTA 계산이 text와 동일하게 작동 (E8). 별도 분기 없음.
    - Content-aware baseline (`ALLOWED` 각 파일): `PRE_HASH[path] = git hash-object path`, + per-file content를 `.deep-review/tmp/phase6-{severity}-baseline/<path>`에 복사. Dirty recovery의 restore source로 사용 (E5).
+   - **Pre-existing outside content snapshot** (C3 교정, E9): `PRE_MODIFIED ∪ PRE_UNTRACKED` 중 ALLOWED 에 없는 경로의 `PRE_OUTSIDE_HASH[path]` 도 저장. path-membership 만으로는 "pre-existing dirty 상태의 non-ALLOWED 경로를 subagent 가 추가 수정하는" 케이스를 감지할 수 없으므로 content hash 로 보강한다.
 2. **Agent dispatch + 결과 파싱** (→ commands Step 4 + Step 5 preamble). 반환 `Group Result`가 `halted_on_regression` | `error` | 파싱 불가 → §5.4.9 Dirty recovery로 분기.
 3. **Content-aware DELTA 산출** (→ commands Step 5; E2 — dirty-tree에서 path-membership 비교는 false-negative):
    - `DELTA = { f ∈ ALLOWED | git hash-object f (POST) != PRE_HASH[f] }`.
 4. **Path-set violation check** (→ commands Step 5; trust boundary):
    - `NEW_PATHS = (POST_MODIFIED ∪ POST_UNTRACKED) - (PRE_MODIFIED ∪ PRE_UNTRACKED)`.
    - `VIOLATIONS = NEW_PATHS - ALLOWED`. 비어있지 않으면 `execution_status=error`.
+   - **Pre-existing outside content check** (C3, E9): 각 `PRE_OUTSIDE_HASH[path]` 에 대해 POST hash 를 비교. 변경 시 `OUTSIDE_VIOLATIONS` 에 추가하고 `execution_status=error`, `error_reason="pre-existing outside paths mutated by subagent"`. path-set 비교만으로는 놓치는 allowlist bypass 를 막는다.
 5. **Claim 정규화 + 비교** (→ commands Step 5; E1 — subagent `files_changed: - path (+A -B)`):
    - `CLAIM = files_changed | sed -E 's/ \(\+[0-9]+ -[0-9]+\)$//'`.
    - `CLAIM != DELTA` → error.

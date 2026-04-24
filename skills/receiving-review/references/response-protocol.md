@@ -260,7 +260,7 @@ verification:
 
 Phase 6는 심각도 그룹(🔴 → 🟡 → ℹ️)별로 `phase6-implementer` 서브에이전트에 dispatch된다. Main은 판단·검증·기록만 담당한다. 상세는 스펙 `skills/receiving-review/references/phase6-delegation-spec.md` §5 참조.
 
-**Main의 절차**: 정식 구현은 `commands/deep-review.md`의 `--respond` Step 2.5를 단일 소스로 한다. 실행 가능 검증은 `hooks/scripts/test/test-phase6-protocol-e2e.sh` (E1~E8). 본 문서는 스킬 로드 시점의 요약이며 상충 시 **`commands/deep-review.md`가 우선**한다.
+**Main의 절차**: 정식 구현은 `commands/deep-review.md`의 `--respond` Step 2.5를 단일 소스로 한다. 실행 가능 검증은 `hooks/scripts/test/test-phase6-protocol-e2e.sh` (E1~E9). 본 문서는 스킬 로드 시점의 요약이며 상충 시 **`commands/deep-review.md`가 우선**한다.
 
 1. **Accepted Items 정렬**: 우선순위 5단계(🔴 전원일치 → 🔴 부분일치 → 🟡 전원일치 → 🟡 부분일치 → ℹ️)로 정렬 후 `item_id` 재부여. 각 항목에 `confidence: agreed | partial` 필드 세팅.
 2. **심각도 그룹 loop** (🔴 → 🟡 → ℹ️):
