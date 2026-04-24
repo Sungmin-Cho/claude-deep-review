@@ -2,6 +2,23 @@
 
 **English** | [한국어](./CHANGELOG.ko.md)
 
+## [1.3.3] — 2026-04-24
+
+### Added
+- `agents/phase6-implementer.md` — dedicated Phase 6 implementation subagent (`model: sonnet`), auto-dispatched by `/deep-review --respond`.
+- `hooks/scripts/test/test-phase6-subagent.sh` — structural regression check for Phase 6 delegation (9 assertions).
+
+### Changed
+- `/deep-review --respond` Phase 6 is now delegated to `phase6-implementer` subagent per severity group (default path). Main session gracefully falls back to in-session execution on dispatch failure.
+- `.deep-review/responses/*-response.md` Summary gains an `execution_path` field (`subagent | main_fallback | mixed | n/a`).
+- Phase 6 test logs land in `.deep-review/tmp/phase6-{severity}.log` (ephemeral, 1-generation rotation into `tmp/prev/`).
+- `/deep-review init` Step 8 `.gitignore` suggestion now includes `.deep-review/tmp/`.
+
+### Behavior notes
+- Within a severity group, a partial failure halts remaining groups. The partially-failed group is **not committed**; passed-item edits remain in the working tree for user review.
+- When dispatch fails mid-run and ≥5 items remain, the main session prompts to DEFER the rest (context conservation).
+- `DEEP_REVIEW_FORCE_FALLBACK=1` env var forces the fallback path for testing/dogfood.
+
 ## [1.3.2] — 2026-04-21
 
 ### Added

@@ -2,6 +2,23 @@
 
 [English](./CHANGELOG.md) | **한국어**
 
+## [1.3.3] — 2026-04-24
+
+### Added
+- `agents/phase6-implementer.md` — Phase 6 구현 전용 서브에이전트(`model: sonnet`). `/deep-review --respond`에서 자동 dispatch.
+- `hooks/scripts/test/test-phase6-subagent.sh` — Phase 6 위임 구조 회귀 방지 검증 스크립트 (9개 체크).
+
+### Changed
+- `/deep-review --respond` Phase 6 실행이 심각도 그룹별로 `phase6-implementer` 서브에이전트에 위임된다 (기본 경로). Dispatch 실패 시 main 세션이 graceful fallback으로 직접 수행.
+- `.deep-review/responses/*-response.md`의 Summary에 `execution_path` 필드 추가 (`subagent | main_fallback | mixed | n/a`).
+- Phase 6 테스트 로그를 `.deep-review/tmp/phase6-{severity}.log`에 저장 (ephemeral, 1단계 회전 — 직전 세션 로그는 `tmp/prev/`).
+- 사용자 프로젝트용 `.gitignore` 권장 블록(`/deep-review init` Step 8)에 `.deep-review/tmp/` 라인 추가.
+
+### Behavior notes
+- 심각도 그룹 내 부분 실패 시 해당 그룹 기록 후 이후 그룹 스킵. 부분 실패 그룹은 **커밋되지 않으며**, passed 항목의 워킹 트리 수정은 사용자 검토를 위해 유지.
+- Dispatch 실패로 main fallback 전환 시 남은 항목이 5건 이상이면 AskUserQuestion으로 "여기까지 / 계속" 선택 (context 여력 안전장치).
+- `DEEP_REVIEW_FORCE_FALLBACK=1` 환경변수로 강제 fallback 경로 진입 가능 (dogfood / 테스트용).
+
 ## [1.3.2] — 2026-04-21
 
 ### 추가
