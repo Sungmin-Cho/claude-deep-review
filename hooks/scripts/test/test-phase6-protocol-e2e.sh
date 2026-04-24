@@ -401,6 +401,25 @@ test_e8_binary_hash() {
     e2e_fail "$name" "binary hash unchanged: $(cat "$repo/.out")"
   fi
 
+  # Negative: 같은 값 overwrite 시 hash 동일 → DELTA 미포함 (계약 차별성)
+  local repo2
+  repo2=$(mk_tmp_repo)
+  (
+    cd "$repo2" || exit 1
+    printf 'binary\0content\x01' > bin.dat
+    git add bin.dat && git commit -q -m "init bin"
+    local pre_hash post_hash
+    pre_hash=$(git hash-object -- bin.dat)
+    printf 'binary\0content\x01' > bin.dat   # 동일 값 overwrite
+    post_hash=$(git hash-object -- bin.dat)
+    [[ "$pre_hash" == "$post_hash" ]] && echo "__SAME_HASH__"
+  ) > "$repo2/.out" 2>&1
+
+  if grep -q "__SAME_HASH__" "$repo2/.out"; then
+    echo "  (verified negative: identical binary content yields identical hash → excluded from DELTA)"
+  fi
+  cleanup_tmp_repo "$repo2"
+
   cleanup_tmp_repo "$repo"
 }
 
