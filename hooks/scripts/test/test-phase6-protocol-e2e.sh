@@ -2,7 +2,7 @@
 # test-phase6-protocol-e2e.sh — Phase 6 protocol end-to-end executable tests
 #
 # 임시 git repo에서 Phase 6 main 프로토콜의 핵심 shell 로직을 실제 실행하여
-# 5개 Critical 시나리오를 검증.
+# 8개 Critical 시나리오를 검증 (E1~E8).
 #
 # 검증 시나리오:
 #   E1. files_changed suffix 정규화 (subagent output "(+A -B)" strip)
