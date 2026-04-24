@@ -11,8 +11,10 @@
 #   E4. Allowlist + modifiable_paths — companion files 허용
 #   E5. Dirty recovery — pre-existing user WIP 보존
 #   E6. log_path shell quoting — 공백/특수문자 경로 생존
+#   E7. Rename detection — --name-status -M 로 new path 추출
+#   E8. Binary hash — git hash-object 로 binary content 변경 감지
 #
-# exit 0 = 6개 모두 PASS, exit 1 = 1건 이상 FAIL.
+# exit 0 = 8개 모두 PASS, exit 1 = 1건 이상 FAIL.
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -304,6 +306,79 @@ test_e6_log_path_quoting() {
 }
 
 # ============================================================================
+# E7. Rename detection — --name-status -M 로 new path 추출
+# ============================================================================
+# 기대: staged rename (git mv) 시 --name-status -M 결과의 R status 라인에서
+# new path가 정상 추출. PRE_MODIFIED 정규화 awk 로직이 old path 대신 new path를
+# 채택해야 함.
+
+test_e7_rename_detection() {
+  local name="E7"
+  local repo
+  repo=$(mk_tmp_repo)
+  (
+    cd "$repo" || exit 1
+    echo "v1" > a.txt
+    git add a.txt && git commit -q -m "init"
+    git mv a.txt b.txt
+    # commands Step 3의 PRE_MODIFIED 정규화 로직 재현 (staged 대상 --cached)
+    git -c core.quotepath=false diff --cached --name-status -M | awk -F'\t' '
+      $1 ~ /^[RC]/ { print $3; next }
+      $1 != "" { print $2 }
+    ' | sort -u
+  ) > "$repo/.out" 2>&1
+
+  local detected
+  detected=$(grep -v "^$" "$repo/.out" | head -1)
+  if [[ "$detected" == "b.txt" ]]; then
+    e2e_pass "$name" "--name-status -M extracted new path 'b.txt' from rename"
+  else
+    e2e_fail "$name" "expected 'b.txt', got '$detected'"
+  fi
+
+  cleanup_tmp_repo "$repo"
+}
+
+# ============================================================================
+# E8. Binary content hash
+# ============================================================================
+# 기대: binary 파일(NUL byte 포함)도 git hash-object가 content hash를 반환하므로
+# 내용 변경 시 PRE/POST hash 차이 → DELTA 검출 흐름이 그대로 동작.
+
+test_e8_binary_hash() {
+  local name="E8"
+  local repo
+  repo=$(mk_tmp_repo)
+  (
+    cd "$repo" || exit 1
+    # NUL byte + non-printable 포함 binary
+    printf 'binary\0content\x01' > bin.dat
+    git add bin.dat && git commit -q -m "init bin"
+    local pre_hash
+    pre_hash=$(git hash-object -- bin.dat)
+
+    # 내용 변경
+    printf 'binary\0content\x02' > bin.dat
+    local post_hash
+    post_hash=$(git hash-object -- bin.dat)
+
+    if [[ "$pre_hash" != "$post_hash" ]]; then
+      echo "__BINARY_HASH_CHANGED__"
+    else
+      echo "__UNCHANGED__ pre=$pre_hash post=$post_hash"
+    fi
+  ) > "$repo/.out" 2>&1
+
+  if grep -q "__BINARY_HASH_CHANGED__" "$repo/.out"; then
+    e2e_pass "$name" "git hash-object detected binary content mutation"
+  else
+    e2e_fail "$name" "binary hash unchanged: $(cat "$repo/.out")"
+  fi
+
+  cleanup_tmp_repo "$repo"
+}
+
+# ============================================================================
 # 실행
 # ============================================================================
 
@@ -314,6 +389,8 @@ test_e3_exclude_expansion
 test_e4_allowlist_companion
 test_e5_restore_preserves_wip
 test_e6_log_path_quoting
+test_e7_rename_detection
+test_e8_binary_hash
 
 echo "---"
 echo "E2E Total: $E2E_PASS passed, $E2E_FAIL failed"

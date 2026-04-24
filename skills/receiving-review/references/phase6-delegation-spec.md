@@ -309,6 +309,8 @@ JSON 대신 labeled markdown을 선택한 이유:
 1. **Pre-dispatch snapshot** (→ commands Step 3):
    - `ALLOWED` = `target_location` ∪ `modifiable_paths` (comma/newline split + line-range strip).
    - Path-set baseline (violation 검출용): `PRE_MODIFIED`, `PRE_UNTRACKED`, `PRE_STATUS`.
+     - `PRE_MODIFIED`는 `git diff --name-status -M`로 수집하여 rename(R)/copy(C) 라인의 new path만 채택 (E7) — unstaged rename은 일반적으로 delete+untracked로 분해되므로 주로 staged rename에 적용.
+     - Binary 파일도 `--name-status`가 path 단위로 나열하고, 아래의 `git hash-object`가 content hash를 반환하므로 DELTA 계산이 text와 동일하게 작동 (E8). 별도 분기 없음.
    - Content-aware baseline (`ALLOWED` 각 파일): `PRE_HASH[path] = git hash-object path`, + per-file content를 `.deep-review/tmp/phase6-{severity}-baseline/<path>`에 복사. Dirty recovery의 restore source로 사용 (E5).
 2. **Agent dispatch + 결과 파싱** (→ commands Step 4 + Step 5 preamble). 반환 `Group Result`가 `halted_on_regression` | `error` | 파싱 불가 → §5.4.9 Dirty recovery로 분기.
 3. **Content-aware DELTA 산출** (→ commands Step 5; E2 — dirty-tree에서 path-membership 비교는 false-negative):
