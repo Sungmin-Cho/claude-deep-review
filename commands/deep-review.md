@@ -334,6 +334,16 @@ focus_text 생성:
 - contract가 있으면: criteria 목록 추가
 - 둘 다 없으면: "코드 품질, 버그, 아키텍처 문제를 집중 검토"
 
+**Config / hook / parser-driven changes (구현 리뷰 가이드):**
+
+When reviewing implementation that includes config snippets, hook scripts, or
+parser-driven syntax, do not stop at "spec text is internally consistent". Test
+the snippet against the actual parser/runtime path that will consume it. A
+spec-side regression often hides until parser-level execution.
+
+(Lesson from deep-wiki v1.2.1 cycle-3 — config syntax mismatch missed by
+spec-only review.)
+
 **Codex 플러그인 미설치 시 (codex_plugin=false):**
 - `.deep-review/config.yaml`의 `codex_notified` 확인
 - false이면 1회 안내:
