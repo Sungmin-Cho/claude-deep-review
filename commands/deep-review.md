@@ -473,7 +473,7 @@ restore_mutation
 
    **chain 의무 (handoff §3.3 mirror)**: §3 Receipt health_report 주입 단계에서 발견된 deep-work session-receipt 가 envelope-wrapped 라면 그 `envelope.run_id` 를 `--source-session-receipt <path>` 로 helper 에 전달한다 — helper 가 strict 3-way identity check (producer=deep-work, artifact_kind=session-receipt, schema.name match) 후 `parent_run_id` 로 자동 chain. legacy session-receipt 또는 foreign envelope 이면 path 만 source_artifacts 에 들어가고 chain 은 set 되지 않는다.
 
-   **Bash snippet** (markdown agent prompt — Bash tool 호출 간 env var 이 persist 되지 않으므로 자기-완결적):
+   **Bash snippet** (markdown agent prompt — self-contained: Bash tool 호출 간 env var 이 persist 되지 않으므로 stage 간 변수 공유 가정 금지. session-receipt 경로는 본 snippet 안에서 재탐색 — deep-evolve round-1 C1 / round-2 R2-3 교훈):
 
    ```bash
    set -euo pipefail
@@ -488,20 +488,47 @@ restore_mutation
    #   { "updated_at": "...", "taxonomy_version": "1.0", "findings": [...] }
    # (LLM 일괄 분류 결과를 jq 또는 직접 JSON 파일 작성)
 
-   # parent_run_id chain — Stage 3 receipt-loader 가 SOURCE_SESSION_RECEIPT 를
-   # set 했으면 helper 에 전달. envelope identity 는 helper 측에서 strict 검증.
+   # parent_run_id chain — 본 snippet 안에서 deep-work session-receipt 재탐색.
+   # SOURCE_SESSION_RECEIPT 환경변수로 caller override 가능 (있으면 우선).
+   # 없으면 .deep-work/sessions/<sid>/session-receipt.json (또는 .deep-work/<sid>/...)
+   # 의 가장 최근 파일을 자동 선택. helper 가 strict 3-way identity check 로
+   # foreign envelope / legacy 를 path-only 로 격리하므로 재탐색 결과가 잘못된 파일을
+   # 가리키더라도 silent chain 오염은 발생하지 않는다 (corrupt-payload defense).
+   SESSION_RECEIPT="${SOURCE_SESSION_RECEIPT:-}"
+   if [ -z "$SESSION_RECEIPT" ]; then
+     # 가장 최근 세션의 session-receipt.json (또는 legacy receipt.json) 1개 선택.
+     # 파일명/디렉토리에 timestamp prefix (e.g. 2026-05-08T01-30-00) 가 들어있다는
+     # 컨벤션 가정 — lex sort 로 reverse 후 1번째 = 최신. macOS BSD 와 Linux GNU
+     # 모두에서 동작 (stat -f vs stat -c 회피).
+     candidate=""
+     for d in "$PROJECT_ROOT/.deep-work/sessions" "$PROJECT_ROOT/.deep-work"; do
+       [ -d "$d" ] || continue
+       found=$(find "$d" -maxdepth 3 \( -name 'session-receipt.json' -o -name 'receipt.json' \) -type f 2>/dev/null \
+         | sort -r | head -1)
+       if [ -n "$found" ]; then candidate="$found"; break; fi
+     done
+     SESSION_RECEIPT="$candidate"
+   fi
+
    WRAP_ARGS=(--payload-file "$PAYLOAD_TMP" --output "$OUTPUT_PATH")
-   if [ -n "${SOURCE_SESSION_RECEIPT:-}" ] && [ -f "$SOURCE_SESSION_RECEIPT" ]; then
-     WRAP_ARGS+=(--source-session-receipt "$SOURCE_SESSION_RECEIPT")
+   if [ -n "$SESSION_RECEIPT" ] && [ -f "$SESSION_RECEIPT" ]; then
+     WRAP_ARGS+=(--source-session-receipt "$SESSION_RECEIPT")
    fi
 
    # Multi-source 추적 — review report markdown 들도 source_artifacts 에 기록
-   # (path-only; envelope detect 안 됨 → run_id 없음)
+   # (path-only; envelope detect 안 됨 → run_id 없음). 최근 N=20 개로 제한해
+   # source_artifacts 폭증 방지.
    shopt -s nullglob
-   for r in "$PROJECT_ROOT"/.deep-review/reports/*.md; do
-     [ -f "$r" ] && WRAP_ARGS+=(--source-artifact "$r")
-   done
+   reports=("$PROJECT_ROOT"/.deep-review/reports/*.md)
    shopt -u nullglob
+   if [ ${#reports[@]} -gt 0 ]; then
+     # 파일명 정렬 후 최근 20 개만 (timestamp prefix YYYY-MM-DD-HHMMSS 가정)
+     IFS=$'\n' sorted=($(printf '%s\n' "${reports[@]}" | sort -r | head -20))
+     unset IFS
+     for r in "${sorted[@]}"; do
+       WRAP_ARGS+=(--source-artifact "$r")
+     done
+   fi
 
    # Gated cleanup: helper 성공 시에만 PAYLOAD_TMP 제거. 실패 시 보존 → 재실행 가능
    # (deep-work round-1 C2 lesson — 이전 버전은 unconditional rm 으로 silent loss 발생).
@@ -512,6 +539,7 @@ restore_mutation
      exit 1
    fi
    ```
+
 
    결과 파일 모양 (envelope shape — 자세한 명세는 `claude-deep-suite/docs/envelope-migration.md` §1):
 
