@@ -4,6 +4,8 @@
 
 An independent Evaluator plugin for AI coding agents — cross-model code review with Codex integration and Sprint Contract support.
 
+> **v1.4.0** — `.deep-review/recurring-findings.json` is now emitted as an M3 cross-plugin envelope (cf. [`claude-deep-suite/docs/envelope-migration.md`](https://github.com/Sungmin-Cho/claude-deep-suite/blob/main/docs/envelope-migration.md)). Stage 3 receipt loader is envelope-aware and chains the consumed deep-work session-receipt's `run_id` into `recurring-findings.envelope.parent_run_id` (handoff §3.3). See [CHANGELOG](./CHANGELOG.md) for the full migration note. 5/6 plugins of M3 Phase 2.
+
 ## The Problem
 
 AI coding agents have a fundamental blind spot: they review their own work.

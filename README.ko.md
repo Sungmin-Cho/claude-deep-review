@@ -4,6 +4,8 @@
 
 AI 코딩 에이전트의 작업을 독립적으로 평가하는 Evaluator 플러그인 — Codex 연동 교차 모델 코드 리뷰와 Sprint Contract 지원.
 
+> **v1.4.0** — `.deep-review/recurring-findings.json` 이 M3 cross-plugin envelope 으로 emit (cf. [`claude-deep-suite/docs/envelope-migration.md`](https://github.com/Sungmin-Cho/claude-deep-suite/blob/main/docs/envelope-migration.md)). Stage 3 receipt loader 는 envelope-aware 이며 소비된 deep-work session-receipt 의 `run_id` 를 `recurring-findings.envelope.parent_run_id` 로 chain (handoff §3.3). 자세한 마이그레이션 노트는 [CHANGELOG](./CHANGELOG.ko.md) 참고. M3 Phase 2 의 5/6.
+
 ## 문제
 
 AI 코딩 에이전트에는 구조적인 맹점이 있습니다: 자신이 작성한 코드를 스스로 리뷰합니다.

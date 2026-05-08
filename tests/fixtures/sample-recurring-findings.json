@@ -1,0 +1,77 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Sungmin-Cho/claude-deep-suite/main/schemas/artifact-envelope.schema.json",
+  "schema_version": "1.0",
+  "envelope": {
+    "producer": "deep-review",
+    "producer_version": "1.4.0",
+    "artifact_kind": "recurring-findings",
+    "run_id": "01JTKR9CD3EFGHJKMNPQRSTVWX",
+    "session_id": "2026-05-08T11-30-00",
+    "parent_run_id": "01JTK00000000000000000000Z",
+    "generated_at": "2026-05-08T11:30:42.123Z",
+    "schema": { "name": "recurring-findings", "version": "1.0" },
+    "git": {
+      "head": "abc1234",
+      "branch": "feat/m3-envelope-adoption",
+      "dirty": false
+    },
+    "provenance": {
+      "source_artifacts": [
+        { "path": ".deep-work/2026-05-08T11-30-00/session-receipt.json", "run_id": "01JTK00000000000000000000Z" },
+        { "path": ".deep-review/reports/2026-05-08-110000-review.md" },
+        { "path": ".deep-review/reports/2026-05-07-200000-review.md" },
+        { "path": ".deep-review/reports/2026-05-06-150000-review.md" }
+      ],
+      "tool_versions": { "node": "v20.11.0" }
+    }
+  },
+  "payload": {
+    "updated_at": "2026-05-08T11:30:42.123Z",
+    "taxonomy_version": "1.0",
+    "findings": [
+      {
+        "category": "error-handling",
+        "severity": "critical",
+        "occurrences": 5,
+        "example_files": [
+          "src/api/handlers.ts:42",
+          "src/api/handlers.ts:117",
+          "src/services/payment.ts:88"
+        ],
+        "description": "try/catch 블록이 빠져있어 예외가 silent fail. Promise rejection 도 unhandled.",
+        "source_reports": [
+          "2026-05-08-110000-review.md",
+          "2026-05-07-200000-review.md",
+          "2026-05-06-150000-review.md"
+        ]
+      },
+      {
+        "category": "test-coverage",
+        "severity": "warning",
+        "occurrences": 4,
+        "example_files": [
+          "src/lib/parser.ts:55",
+          "src/utils/validate.ts:23"
+        ],
+        "description": "경계값 테스트 누락 — 빈 입력, 최대 길이 초과, 음수 인덱스",
+        "source_reports": [
+          "2026-05-08-110000-review.md",
+          "2026-05-07-200000-review.md"
+        ]
+      },
+      {
+        "category": "type-safety",
+        "severity": "warning",
+        "occurrences": 3,
+        "example_files": [
+          "src/api/dto.ts:12"
+        ],
+        "description": "any 타입 사용 — 런타임 타입 검증 없음",
+        "source_reports": [
+          "2026-05-07-200000-review.md",
+          "2026-05-06-150000-review.md"
+        ]
+      }
+    ]
+  }
+}
