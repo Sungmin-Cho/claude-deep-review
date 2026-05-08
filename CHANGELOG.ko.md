@@ -25,7 +25,7 @@ M3 Phase 2 envelope adoption (handoff §3 절차). `.deep-review/recurring-findi
 
 ### 호환성 / 마이그레이션
 - Pre-1.4.0 consumer 가 legacy 최상위 `findings[]` shape 으로 read 하던 경우, producer 도 pre-1.4.0 인 한 그대로 동작. Envelope wrap 은 payload 자체에 대해 **breaking change 가 아님** — `payload.findings`, `payload.taxonomy_version`, `payload.updated_at` 가 같은 shape 보존. Envelope-aware unwrap 을 이미 채택한 consumer (M3 PR 시점의 deep-evolve, deep-work) 는 unwrap 결과가 동일 shape 이라 그대로 동작. Pre-envelope consumer 가 1.4.0 emit 에서 최상위 `findings[]` 를 read 하려 하면 그 키가 없으므로 envelope-aware read 또는 `payload.findings` 직접 접근으로 업그레이드 필요.
-- 6-month 마이그레이션 윈도우 (handoff §6 — T+0 = 첫 plugin merge 2026-05-07) 가 consumer plugin 의 envelope unwrap 채택 시간 제공. Phase 3 에서 suite repo 의 payload-registry 교체 + adoption ledger 갱신 + dashboard cutover 가 일괄 진행 예정.
+- 6-month 마이그레이션 윈도우 (handoff §6) 가 consumer plugin 의 envelope unwrap 채택 시간 제공. T+0 timer 시작점 기록 + `claude-deep-suite/docs/envelope-migration.md` §6.1 의 deep-review 행 갱신은 본 PR 에서 **의도적으로 하지 않음** — Phase 2 §1 정책이 모든 suite-repo 변경 (marketplace.json SHA bump, payload-registry 교체, adoption ledger 갱신, dashboard cutover) 을 6 번째 plugin merge 후 Phase 3 일괄 처리에 예약.
 
 ## [1.3.4] — 2026-04-24
 

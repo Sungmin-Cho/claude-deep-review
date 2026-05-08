@@ -21,13 +21,15 @@
  *   - generated_at is RFC 3339.
  *   - git.head matches /^[a-f0-9]{7,40}$/, git.dirty ∈ {true,false,'unknown'}.
  *   - provenance.source_artifacts[].path non-empty, run_id (if present) is
- *     a non-empty string. Suite envelope schema does NOT enforce ULID format
- *     on `source_artifacts[].run_id` — external producers may use other run_id
- *     conventions, and identity-gated chain extraction at the writer layer
- *     (wrap-recurring-findings-envelope.js#tryReadEnvelopeRunId) is what
- *     guarantees correctness for envelope-wrapped sources. Codex Round-1 Q3/Q10
- *     lesson: docstring previously claimed ULID validation but the implementation
- *     matched the suite spec (typeof string). Comment now matches behaviour.
+ *     a string (no length or format constraint imposed at suite-schema level
+ *     either — `schemas/artifact-envelope.schema.json` declares `run_id:
+ *     {type: string}` without `minLength` or `pattern`). External producers
+ *     may use non-ULID run_id conventions; identity-gated chain extraction at
+ *     the writer layer (wrap-recurring-findings-envelope.js#tryReadEnvelopeRunId)
+ *     enforces ULID format on the trusted parent_run_id chain. Codex Round-1
+ *     Q3/Q10 lesson: docstring previously claimed ULID validation but the
+ *     implementation matched the suite spec (typeof string). Round-2 wording
+ *     refined to match suite schema's lack of length constraint as well.
  *   - provenance.tool_versions container is object (not array).
  *   - provenance.tool_versions values are string OR (object && !array).
  *   - payload is non-null, non-array object (minimal — domain shape lives in

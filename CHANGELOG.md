@@ -25,7 +25,7 @@ M3 Phase 2 envelope adoption (handoff §3 procedure). `.deep-review/recurring-fi
 
 ### Compatibility / migration
 - Pre-1.4.0 consumers reading the legacy top-level `findings[]` shape continue to work IF the producer is also pre-1.4.0. The envelope wrap is **not** a breaking change for the payload itself — `payload.findings`, `payload.taxonomy_version`, and `payload.updated_at` keep the same shape. Consumers that have already adopted envelope-aware unwrap (deep-evolve, deep-work as of M3 PRs) Just Work because their unwrap returns the same shape. Pre-envelope consumers that try to read `findings[]` from a 1.4.0 emit will see no top-level `findings` key — they need to upgrade to envelope-aware read OR access `payload.findings` directly.
-- The 6-month migration window (handoff §6 — T+0 = first plugin merge 2026-05-07) gives consumer plugins time to adopt envelope unwrap before the suite repo's dashboard starts warning on legacy emits. Phase 3 will land the suite-side payload-registry replacement + adoption ledger update + dashboard cutover.
+- The 6-month migration window (handoff §6) gives consumer plugins time to adopt envelope unwrap before the suite repo's dashboard starts warning on legacy emits. The T+0 timer start and the deep-review row in `claude-deep-suite/docs/envelope-migration.md` §6.1 (Adoption ledger) are intentionally **not** updated by this PR — Phase 2 §1 policy reserves all suite-repo writes (marketplace.json SHA bump, payload-registry replacement, adoption ledger update, dashboard cutover) for the Phase 3 batch after the 6th plugin lands.
 
 ## [1.3.4] — 2026-04-24
 
