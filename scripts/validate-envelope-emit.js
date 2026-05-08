@@ -20,7 +20,14 @@
  *   - producer_version is SemVer 2.0.0 strict.
  *   - generated_at is RFC 3339.
  *   - git.head matches /^[a-f0-9]{7,40}$/, git.dirty ∈ {true,false,'unknown'}.
- *   - provenance.source_artifacts[].path non-empty, run_id (if present) is ULID.
+ *   - provenance.source_artifacts[].path non-empty, run_id (if present) is
+ *     a non-empty string. Suite envelope schema does NOT enforce ULID format
+ *     on `source_artifacts[].run_id` — external producers may use other run_id
+ *     conventions, and identity-gated chain extraction at the writer layer
+ *     (wrap-recurring-findings-envelope.js#tryReadEnvelopeRunId) is what
+ *     guarantees correctness for envelope-wrapped sources. Codex Round-1 Q3/Q10
+ *     lesson: docstring previously claimed ULID validation but the implementation
+ *     matched the suite spec (typeof string). Comment now matches behaviour.
  *   - provenance.tool_versions container is object (not array).
  *   - provenance.tool_versions values are string OR (object && !array).
  *   - payload is non-null, non-array object (minimal — domain shape lives in

@@ -640,6 +640,32 @@ describe('envelope-chain — CLI boundary validation (W3 mirror)', () => {
       /missing required flag --output/,
     );
   });
+
+  it('rejects empty --source-artifact (Codex Round-1 Q6 — repeatable flag boundary)', () => {
+    // Previously, --source-artifact= was accepted then silently dropped by
+    // parseSourceArtifactSpec returning null. Boundary rejection now mirrors
+    // the W3 lesson on scalar flags.
+    expectRejection(
+      [
+        '--payload-file', '/tmp/x.json',
+        '--output', '/tmp/y.json',
+        '--source-artifact=',
+      ],
+      /--source-artifact value must be non-empty/,
+    );
+  });
+
+  it('rejects empty --source-artifact even alongside valid entries', () => {
+    expectRejection(
+      [
+        '--payload-file', '/tmp/x.json',
+        '--output', '/tmp/y.json',
+        '--source-artifact', 'valid/path.md',
+        '--source-artifact=',
+      ],
+      /--source-artifact value must be non-empty/,
+    );
+  });
 });
 
 describe('envelope-chain — --source-artifact auto-harvest with self-consistency', () => {

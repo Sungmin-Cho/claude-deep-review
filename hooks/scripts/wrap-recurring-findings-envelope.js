@@ -117,11 +117,17 @@ function parseArgs(argv) {
     if (
       (key === 'session-id' ||
         key === 'source-session-receipt' ||
+        key === 'source-artifact' ||
         key === 'payload-file' ||
         key === 'output' ||
         key === 'artifact-kind') &&
       value.length === 0
     ) {
+      // Codex Round-1 Q6 lesson: empty repeatable flag value
+      // (`--source-artifact=`) was previously accepted then silently
+      // dropped by parseSourceArtifactSpec returning null — losing the
+      // user's intent without error. Reject at boundary, consistent with
+      // scalar flags.
       usage(`--${key} value must be non-empty`);
     }
 

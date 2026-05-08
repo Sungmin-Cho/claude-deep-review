@@ -192,7 +192,7 @@ PY
 deep-work v6.5.0+ 부터 session-receipt 는 M3 envelope-wrapped (`{schema_version: "1.0", envelope: {...}, payload: {...}}`). Reader 는 envelope detect → strict identity guard → `payload.health_report` unwrap 패턴이며, legacy (envelope 미적용) receipt 도 fall-through 로 처리한다.
 
 - Receipt 발견 계약:
-  1. `.deep-work/sessions/` 디렉토리에서 가장 최근 세션의 `session-receipt.json` 또는 `receipt.json` 탐색 (deep-work 측 정식 경로는 `.deep-work/<sid>/session-receipt.json`).
+  1. deep-work canonical layout `.deep-work/<sid>/session-receipt.json` 에서 가장 최근 세션 탐색 (legacy `receipt.json` 도 동일 위치). `<sid>` 는 timestamp slug 라 lex-sort 가 곧 시간순. mindepth=2 maxdepth=2 로 검색 — deeper layout (예: deep-review v1.3.x 가 imagined 한 `.deep-work/sessions/<sid>/...`) 은 deep-work 의 실제 emit 위치가 아니므로 검색하지 않음.
   2. **Envelope 감지** — 파일이 다음 모양이면 envelope-wrapped 로 간주:
      - 최상위 `schema_version === "1.0"` AND `envelope` (object) AND `payload` 존재
      - 그러면 envelope **identity guard** 적용:
@@ -490,24 +490,22 @@ restore_mutation
 
    # parent_run_id chain — 본 snippet 안에서 deep-work session-receipt 재탐색.
    # SOURCE_SESSION_RECEIPT 환경변수로 caller override 가능 (있으면 우선).
-   # 없으면 .deep-work/sessions/<sid>/session-receipt.json (또는 .deep-work/<sid>/...)
-   # 의 가장 최근 파일을 자동 선택. helper 가 strict 3-way identity check 로
-   # foreign envelope / legacy 를 path-only 로 격리하므로 재탐색 결과가 잘못된 파일을
-   # 가리키더라도 silent chain 오염은 발생하지 않는다 (corrupt-payload defense).
+   # 없으면 deep-work canonical layout `.deep-work/<sid>/session-receipt.json`
+   # 의 가장 최근 파일을 자동 선택 (sid = timestamp slug, lex-sortable).
+   # mindepth=2 maxdepth=2 — `.deep-work/<sid>/<file>` 만 매치, deep-review
+   # imagined `.deep-work/sessions/<sid>/...` 같은 깊은 layout 은 의도적 제외
+   # (Codex Round-1 Q4 lesson — sessions/ prefix 가 lex-sort 에서 timestamp 보다
+   # 우선시 되어 잘못된 source 를 픽하던 회귀; helper 의 strict 3-way identity
+   # guard 가 차단하므로 정확성 영향은 없었지만 UX 측면 fix).
+   #
+   # awk 'NR==1' 사용 (head -1 대신) — set -o pipefail 하에서 head 의 early-close 가
+   # 상류 sort 로 SIGPIPE (exit 141) 를 보내 pipeline 을 abort 시키는 것을 회피
+   # (Codex Round-1 Q5 lesson; macOS bash 3.2 에서 재현 확인됨).
    SESSION_RECEIPT="${SOURCE_SESSION_RECEIPT:-}"
-   if [ -z "$SESSION_RECEIPT" ]; then
-     # 가장 최근 세션의 session-receipt.json (또는 legacy receipt.json) 1개 선택.
-     # 파일명/디렉토리에 timestamp prefix (e.g. 2026-05-08T01-30-00) 가 들어있다는
-     # 컨벤션 가정 — lex sort 로 reverse 후 1번째 = 최신. macOS BSD 와 Linux GNU
-     # 모두에서 동작 (stat -f vs stat -c 회피).
-     candidate=""
-     for d in "$PROJECT_ROOT/.deep-work/sessions" "$PROJECT_ROOT/.deep-work"; do
-       [ -d "$d" ] || continue
-       found=$(find "$d" -maxdepth 3 \( -name 'session-receipt.json' -o -name 'receipt.json' \) -type f 2>/dev/null \
-         | sort -r | head -1)
-       if [ -n "$found" ]; then candidate="$found"; break; fi
-     done
-     SESSION_RECEIPT="$candidate"
+   if [ -z "$SESSION_RECEIPT" ] && [ -d "$PROJECT_ROOT/.deep-work" ]; then
+     SESSION_RECEIPT=$(find "$PROJECT_ROOT/.deep-work" -mindepth 2 -maxdepth 2 \
+       \( -name 'session-receipt.json' -o -name 'receipt.json' \) -type f 2>/dev/null \
+       | sort -r | awk 'NR==1')
    fi
 
    WRAP_ARGS=(--payload-file "$PAYLOAD_TMP" --output "$OUTPUT_PATH")
@@ -517,17 +515,15 @@ restore_mutation
 
    # Multi-source 추적 — review report markdown 들도 source_artifacts 에 기록
    # (path-only; envelope detect 안 됨 → run_id 없음). 최근 N=20 개로 제한해
-   # source_artifacts 폭증 방지.
+   # source_artifacts 폭증 방지. while-read 루프 + awk 'NR<=20' 사용 — head 의
+   # SIGPIPE 와 IFS subshell expansion 을 모두 회피 (bash 3.2 호환).
    shopt -s nullglob
    reports=("$PROJECT_ROOT"/.deep-review/reports/*.md)
    shopt -u nullglob
    if [ ${#reports[@]} -gt 0 ]; then
-     # 파일명 정렬 후 최근 20 개만 (timestamp prefix YYYY-MM-DD-HHMMSS 가정)
-     IFS=$'\n' sorted=($(printf '%s\n' "${reports[@]}" | sort -r | head -20))
-     unset IFS
-     for r in "${sorted[@]}"; do
+     while IFS= read -r r; do
        WRAP_ARGS+=(--source-artifact "$r")
-     done
+     done < <(printf '%s\n' "${reports[@]}" | sort -r | awk 'NR<=20')
    fi
 
    # Gated cleanup: helper 성공 시에만 PAYLOAD_TMP 제거. 실패 시 보존 → 재실행 가능

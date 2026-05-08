@@ -4,7 +4,7 @@
 
 ## [1.4.0] — 2026-05-08
 
-M3 Phase 2 envelope adoption (handoff §3 절차). `.deep-review/recurring-findings.json` 을 M3 cross-plugin envelope 으로 emit (cf. `claude-deep-suite/docs/envelope-migration.md`). deep-work session-receipt 를 소비하는 reader 경로는 envelope-aware (strict 3-way identity guard). 6 plugin 중 5 번째 마이그레이션 — 직전 사례는 deep-evolve PR #11 `9b867b1`.
+M3 Phase 2 envelope adoption (handoff §3 절차). `.deep-review/recurring-findings.json` 을 M3 cross-plugin envelope 으로 emit (cf. `claude-deep-suite/docs/envelope-migration.md`). deep-work session-receipt 를 소비하는 reader 경로는 envelope-aware (strict 3-way identity guard). 패턴은 직전 plugin migration 인 deep-evolve PR #11 `9b867b1` 에서 채택. Phase 2 adoption ledger 는 suite repo 의 `docs/envelope-migration.md` §6.1 이 single source — 본 CHANGELOG 는 progress count 를 prose 에 두지 않는다 (handoff §4 cross-section count drift 규칙).
 
 ### 추가
 - `hooks/scripts/envelope.js` — zero-dep CommonJS envelope 라이브러리. exports: `generateUlid` (MSB-first Crockford Base32 26-char ULID, 타임스탬프 간 lex-monotonic 보장), `detectGit` (head/branch/dirty trio + shallow CI clone fallback `0000000`/`unknown`), `loadProducerVersion` (caller cwd 가 아닌 module `__dirname` 기준으로 `.claude-plugin/plugin.json` 해결 — handoff §4 literal-cwd-resolve 교훈), `wrapEnvelope` (envelope 객체 빌드; null/array payload 거부 + own runId AND parentRunId 모두 ULID 검증을 라이브러리 경계에서 강제), `isEnvelope` (loose detector — `envelope` 키 없는 legacy receipt 와 충돌 없음), `isValidEnvelope` (strict — W4 payload-shape gate 추가로 corrupt envelope 가 downstream chain 에 trace data 기여하는 것 차단), `unwrapEnvelope` (legacy pass-through + identity-matched payload 추출 + corrupt payload stderr 경고 후 reject).
