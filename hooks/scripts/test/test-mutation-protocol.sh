@@ -3,8 +3,9 @@
 set -euo pipefail
 
 # DEBUG: trap unexpected exits with line number info (M5.5 follow-up — ubuntu CI bug)
-trap 'rc=$?; echo ">>> EXIT trap fired: rc=$rc at LINENO=$LINENO BASH_LINENO=(${BASH_LINENO[*]}) FUNCNAME=(${FUNCNAME[*]:-MAIN})" >&2' EXIT
-trap 'rc=$?; echo ">>> ERR trap fired: rc=$rc at LINENO=$LINENO BASH_COMMAND=[$BASH_COMMAND] FUNCNAME=(${FUNCNAME[*]:-MAIN})" >&2' ERR
+# nounset-safe: avoid ${BASH_LINENO[*]} which can fail under set -u
+trap 'rc=$?; echo ">>> EXIT trap fired: rc=$rc at LINENO=$LINENO" >&2' EXIT
+trap 'rc=$?; echo ">>> ERR trap fired: rc=$rc at LINENO=$LINENO" >&2' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
@@ -67,11 +68,17 @@ echo ">>> MARK: test 6 start; PWD=$PWD" >&2
 repo=$(setup_test_repo)
 echo ">>> MARK: test 6 setup OK; repo=$repo" >&2
 cd "$repo"
+echo ">>> MARK: test 6 cd OK; PWD=$PWD" >&2
 mkdir -p .deep-review
+echo ">>> MARK: test 6 mkdir OK; _MUTATION_LOCK_OWNED=${_MUTATION_LOCK_OWNED:-(unset)}" >&2
 acquire_mutation_lock
+echo ">>> MARK: test 6 acquire OK; _MUTATION_LOCK_OWNED=$_MUTATION_LOCK_OWNED" >&2
 assert_failure "acquire_mutation_lock" "second acquire fails"
+echo ">>> MARK: test 6 assert OK" >&2
 release_mutation_lock
+echo ">>> MARK: test 6 release OK" >&2
 teardown_test_repo
+echo ">>> MARK: test 6 done" >&2
 
 # Test 7: stale lock (>3600s) auto-cleaned
 repo=$(setup_test_repo)
