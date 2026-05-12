@@ -61,8 +61,15 @@ acquire_mutation_lock() {
   fi
 
   local lock_mtime age now
-  # macOS BSD stat: -f %m ; GNU Linux stat: -c %Y
-  lock_mtime=$(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0)
+  # Cross-platform mtime: GNU `stat -c %Y` first, BSD `stat -f %m` fallback.
+  # **Order matters** — GNU stat ACCEPTS `-f` (means "filesystem status") but
+  # returns the mount-point string when given `%m`, which then breaks the
+  # arithmetic on line `age=$((now - lock_mtime))` with a syntax error
+  # (operand `/` is not a number) and `set -e` exits. Discovered when the
+  # M5.5 #5 test-mutation-protocol.sh was first run under ubuntu CI
+  # (mutation-stale-recovery follow-up). Mirror pattern of deep-work
+  # PR #27 `test-v6.4.2-regression.sh` §2 BSD/GNU stat reverse-order fix.
+  lock_mtime=$(stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || echo 0)
   now=$(date +%s)
   age=$((now - lock_mtime))
 
@@ -250,7 +257,10 @@ auto_recover() {
   # legitimate long reviews can extend REVIEW_TIMEOUT_SECONDS (session-scoped env).
   if [ -d "$LOCK_DIR" ]; then
     local lock_mtime age status
-    lock_mtime=$(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0)
+    # Cross-platform mtime: see acquire_mutation_lock comment about the
+    # GNU-first / BSD-fallback order — BSD-first leaks mount-point string
+    # on Linux through GNU stat's -f flag, breaking arithmetic.
+    lock_mtime=$(stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || echo 0)
     age=$(( $(date +%s) - lock_mtime ))
     status=$(python3 -c 'import json,sys
 try:

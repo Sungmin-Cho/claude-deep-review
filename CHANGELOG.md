@@ -2,6 +2,32 @@
 
 **English** | [한국어](./CHANGELOG.ko.md)
 
+## [1.4.2] — 2026-05-12 (M5.5 #5 follow-up — cross-platform `stat` order fix)
+
+### Fixed — `mutation-protocol.sh` BSD-first `stat -f %m` ordering broke ubuntu
+
+Pre-fix, `acquire_mutation_lock()` and `auto_recover()` resolved the lock mtime via:
+
+```bash
+lock_mtime=$(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0)
+```
+
+The order was wrong: GNU `stat -f` **accepts** the flag (it means "filesystem status" on Linux, not file status) and `%m` resolves to the mount-point STRING (e.g. `/`). The fallback `||` never triggered. The next line `age=$((now - lock_mtime))` then hit an arithmetic syntax error because `/` is not a numeric operand, and under `set -e` the script exited.
+
+This stayed latent because the bash test (`test-mutation-protocol.sh`) was never run in CI before M5.5 #5 (PR #11) added it; the failure was deferred at the time (per the v1.4.1 CHANGELOG note) and surfaced again in this investigation.
+
+**Fix**: reverse the stat order — GNU `-c %Y` first, BSD `-f %m` fallback. Mirrors the deep-work PR #27 `test-v6.4.2-regression.sh` §2 BSD/GNU `stat` reverse-order pattern.
+
+### Changed
+
+- `hooks/scripts/mutation-protocol.sh` lines 65 and 253 — two call sites updated, with cross-reference comments explaining the order contract.
+- `.github/workflows/tests.yml` — re-enabled the `bash hooks/scripts/test/test-mutation-protocol.sh` CI step that was disabled in v1.4.1 as a workaround. Both ubuntu and macOS legs now exercise the full mutation-protocol regression.
+- `.claude-plugin/plugin.json` + `package.json` version: 1.4.1 → 1.4.2.
+
+### Investigation
+
+Root cause was identified via a debug branch (`debug/ubuntu-mutation-protocol-trace`, PR #12) that added `>>> MARK` trace lines around every test transition and inside `assert_failure()`. The trace showed the exit happening between `assert_failure: pre-eval` and `post-eval` — i.e. inside the inner `eval "acquire_mutation_lock"` of the second call (when the lock was already held). That narrowed the suspect to acquire_mutation_lock's fallback-stat block, which then identified the `-f %m` cross-platform divergence.
+
 ## [1.4.1] — 2026-05-12
 
 ### Added — M5.5 #5 mutation-lock stale-recovery integration test

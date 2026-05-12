@@ -2,6 +2,32 @@
 
 [English](./CHANGELOG.md) | **한국어**
 
+## [1.4.2] — 2026-05-12 (M5.5 #5 follow-up — cross-platform `stat` 순서 수정)
+
+### 수정 — `mutation-protocol.sh` BSD-first `stat -f %m` 순서가 ubuntu에서 깨짐
+
+수정 전 `acquire_mutation_lock()` / `auto_recover()` 의 lock mtime 해결:
+
+```bash
+lock_mtime=$(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0)
+```
+
+순서가 잘못됨: GNU `stat -f`는 **수락**됨 (Linux에서는 "filesystem status" 의미). `%m`는 mount-point **문자열** (예: `/`)을 반환. fallback `||`는 절대 실행되지 않음. 다음 줄 `age=$((now - lock_mtime))`는 `/`가 숫자 operand이 아니므로 arithmetic 문법 오류 → `set -e` exit.
+
+bash 테스트(`test-mutation-protocol.sh`)가 M5.5 #5 (PR #11) 이전에는 CI에서 실행된 적이 없어 잠재. v1.4.1에서 CI step을 임시 비활성화로 우회했고, 이번 조사로 표면화.
+
+**수정**: stat 순서를 reverse — GNU `-c %Y` 먼저, BSD `-f %m` fallback. deep-work PR #27 `test-v6.4.2-regression.sh` §2 BSD/GNU `stat` reverse-order 패턴 미러.
+
+### 변경
+
+- `hooks/scripts/mutation-protocol.sh` line 65, 253 — 두 호출점 수정 + 순서 contract 명시 코멘트.
+- `.github/workflows/tests.yml` — v1.4.1에서 우회를 위해 비활성화했던 `bash hooks/scripts/test/test-mutation-protocol.sh` CI step 재활성화. ubuntu/macOS 양쪽 모두 mutation-protocol 전체 회귀를 실행.
+- `.claude-plugin/plugin.json` + `package.json` version: 1.4.1 → 1.4.2.
+
+### 조사 과정
+
+debug 브랜치 (`debug/ubuntu-mutation-protocol-trace`, PR #12)에서 모든 테스트 전환 지점과 `assert_failure()` 내부에 `>>> MARK` 트레이스 라인을 추가하여 root cause 식별. 트레이스 결과 exit이 `assert_failure: pre-eval`과 `post-eval` 사이 — 즉 두 번째 호출(lock 이미 보유 상태)의 내부 `eval "acquire_mutation_lock"` 안에서 발생함을 확인. 이로써 acquire_mutation_lock의 fallback-stat 블록으로 범위 축소 → `-f %m` cross-platform 의미 차이 발견.
+
 ## [1.4.1] — 2026-05-12
 
 ### 추가 — M5.5 #5 mutation-lock stale-recovery 통합 테스트
