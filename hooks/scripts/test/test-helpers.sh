@@ -9,7 +9,9 @@ TEST_FAILURES=0
 TEST_COUNT=0
 
 setup_test_repo() {
+  echo ">>> setup_test_repo: enter; PWD=$PWD" >&2
   TEST_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/deep-review-test.XXXXXX")
+  echo ">>> setup_test_repo: mktemp OK; TEST_TMPDIR=$TEST_TMPDIR" >&2
   (
     cd "$TEST_TMPDIR"
     git init -q
@@ -19,11 +21,16 @@ setup_test_repo() {
     git add seed.md
     git commit -q -m "init"
   )
+  local sub_rc=$?
+  echo ">>> setup_test_repo: subshell rc=$sub_rc" >&2
   echo "$TEST_TMPDIR"
 }
 
 teardown_test_repo() {
+  echo ">>> teardown_test_repo: enter; PWD=$PWD TEST_TMPDIR=${TEST_TMPDIR:-(unset)}" >&2
   [ -n "${TEST_TMPDIR:-}" ] && [ -d "$TEST_TMPDIR" ] && rm -rf "$TEST_TMPDIR"
+  local rc=$?
+  echo ">>> teardown_test_repo: rm rc=$rc; PWD=$PWD (may be deleted)" >&2
   TEST_TMPDIR=""
 }
 

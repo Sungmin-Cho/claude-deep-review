@@ -2,6 +2,10 @@
 # hooks/scripts/test/test-mutation-protocol.sh
 set -euo pipefail
 
+# DEBUG: trap unexpected exits with line number info (M5.5 follow-up — ubuntu CI bug)
+trap 'rc=$?; echo ">>> EXIT trap fired: rc=$rc at LINENO=$LINENO BASH_LINENO=(${BASH_LINENO[*]}) FUNCNAME=(${FUNCNAME[*]:-MAIN})" >&2' EXIT
+trap 'rc=$?; echo ">>> ERR trap fired: rc=$rc at LINENO=$LINENO BASH_COMMAND=[$BASH_COMMAND] FUNCNAME=(${FUNCNAME[*]:-MAIN})" >&2' ERR
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
 source "$SCRIPT_DIR/../mutation-protocol.sh"
@@ -44,17 +48,24 @@ echo ""
 echo "=== mutation lock tests ==="
 
 # Test 5: acquire_mutation_lock on fresh dir succeeds
+echo ">>> MARK: test 5 start; PWD=$PWD" >&2
 repo=$(setup_test_repo)
+echo ">>> MARK: test 5 setup OK; repo=$repo" >&2
 cd "$repo"
+echo ">>> MARK: test 5 cd OK; PWD=$PWD" >&2
 mkdir -p .deep-review
 assert_success "acquire_mutation_lock" "first lock acquisition"
 assert_success "[ -d .deep-review/.mutation.lock ]" "lock dir exists"
 release_mutation_lock
 assert_failure "[ -d .deep-review/.mutation.lock ]" "lock released"
+echo ">>> MARK: test 5 pre-teardown; PWD=$PWD TEST_TMPDIR=$TEST_TMPDIR" >&2
 teardown_test_repo
+echo ">>> MARK: test 5 post-teardown; PWD=$PWD TEST_TMPDIR=$TEST_TMPDIR" >&2
 
 # Test 6: second acquire fails while first holds
+echo ">>> MARK: test 6 start; PWD=$PWD" >&2
 repo=$(setup_test_repo)
+echo ">>> MARK: test 6 setup OK; repo=$repo" >&2
 cd "$repo"
 mkdir -p .deep-review
 acquire_mutation_lock
