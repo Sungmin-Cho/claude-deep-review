@@ -62,13 +62,19 @@ assert_success() {
 assert_failure() {
   local cmd="$1"
   local msg="${2:-command should fail}"
+  echo ">>> assert_failure: enter cmd=[$cmd] msg=[$msg] TEST_COUNT=$TEST_COUNT" >&2
   TEST_COUNT=$((TEST_COUNT + 1))
-  if eval "$cmd" >/dev/null 2>&1; then
+  echo ">>> assert_failure: pre-eval TEST_COUNT=$TEST_COUNT" >&2
+  local _eval_rc=0
+  eval "$cmd" >/dev/null 2>&1 || _eval_rc=$?
+  echo ">>> assert_failure: post-eval _eval_rc=$_eval_rc" >&2
+  if [ "$_eval_rc" -eq 0 ]; then
     TEST_FAILURES=$((TEST_FAILURES + 1))
     echo "  ❌ $msg: '$cmd' unexpectedly succeeded"
   else
     echo "  ✅ $msg"
   fi
+  echo ">>> assert_failure: exit" >&2
 }
 
 test_summary() {
