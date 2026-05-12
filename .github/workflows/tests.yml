@@ -29,3 +29,6 @@ jobs:
 
       - name: Run envelope tests
         run: npm test
+
+      - name: Run mutation-protocol bash regression (M5.5 #5)
+        run: bash hooks/scripts/test/test-mutation-protocol.sh

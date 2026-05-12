@@ -2,6 +2,26 @@
 
 [English](./CHANGELOG.md) | **한국어**
 
+## [1.4.1] — 2026-05-12
+
+### 추가 — M5.5 #5 mutation-lock stale-recovery 통합 테스트
+
+`hooks/scripts/test/test-mutation-protocol.sh` 에 3 개 신규 케이스 (Test 26 / 27 / 28) 추가. 기존 Test 12 (stale state, lock 없음) + Test 10 (restore_mutation user-staging 필터) 가 다루지 못한 **통합 시나리오** — 잔여 `.deep-review/.mutation.lock` + `.pending-mutation.json` + 별도 흐름에서 추가된 사용자 staging 의 동시 공존 — 을 검증한다. 다섯 가지 계약 속성을 동시에 핀한다: (1) orphan-lock 감지, (2) lock 해제, (3) 우리의 i-t-a 제거, (4) **사용자 staging 보존**, (5) state-file 정리. (4) 만 깨지고 나머지가 통과하는 단일 회귀는 기존 스위트로는 잡히지 않는다.
+
+- Test 26 (M5.5 #5-A): 단일 사용자 staging 파일 + crashed mutation → 복구 + 보존.
+- Test 27 (M5.5 #5-B): state file 없을 때 defensive no-op (legitimate staging 박탈 방지).
+- Test 28 (M5.5 #5-C): 3 개 사용자 staging 파일 모두 복구 후 살아남음 (i-t-a 필터의 off-by-one 회귀 가드).
+
+총 단언 수: 51 → 54 (+3). 프로덕션 코드 변경 없음 — 테스트 전용 PR.
+
+### 변경
+
+- `.claude-plugin/plugin.json` version: 1.4.0 → 1.4.1 (테스트 전용 patch).
+
+### 노트
+
+Spec: `claude-deep-suite/docs/superpowers/plans/2026-05-12-m5.5-remaining-tests-handoff.md` §2 #5 (deep-review 행).
+
 ## [1.4.0] — 2026-05-08
 
 M3 Phase 2 envelope adoption (handoff §3 절차). `.deep-review/recurring-findings.json` 을 M3 cross-plugin envelope 으로 emit (cf. `claude-deep-suite/docs/envelope-migration.md`). deep-work session-receipt 를 소비하는 reader 경로는 envelope-aware (strict 3-way identity guard). 패턴은 직전 plugin migration 인 deep-evolve PR #11 `9b867b1` 에서 채택. Phase 2 adoption ledger 는 suite repo 의 `docs/envelope-migration.md` §6.1 이 single source — 본 CHANGELOG 는 progress count 를 prose 에 두지 않는다 (handoff §4 cross-section count drift 규칙).
