@@ -20,7 +20,8 @@ Total assertions: 51 → 54 (+3). No production code changes — this PR is test
 
 ### Notes
 
-Spec: `claude-deep-suite/docs/superpowers/plans/2026-05-12-m5.5-remaining-tests-handoff.md` §2 #5 (deep-review row).
+- Bash regression tests (`test-mutation-protocol.sh`) are run **locally on macOS** but **deferred from ubuntu CI integration** to a follow-up. An initial attempt to add the bash step to `tests.yml` exposed a pre-existing ubuntu-specific failure between tests 5 → 6 that is unrelated to the M5.5 #5 additions; macOS bash 3.2 paths through cleanly. The latent bug investigation will be its own PR.
+- Spec: `claude-deep-suite/docs/superpowers/plans/2026-05-12-m5.5-remaining-tests-handoff.md` §2 #5 (deep-review row).
 
 ## [1.4.0] — 2026-05-08
 

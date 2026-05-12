@@ -23,13 +23,6 @@ setup_test_repo() {
 }
 
 teardown_test_repo() {
-  # Restore CWD to a known-valid dir BEFORE deleting the test tmpdir. On
-  # Linux/glibc, a process whose CWD has been removed will see `getcwd()`
-  # return NULL and subsequent subshells (e.g. `$(setup_test_repo)`) can
-  # fail at fork-time depending on the bash version — macOS APFS is more
-  # permissive about this and lets the phantom cwd survive, which is why
-  # the bug stayed latent until ubuntu CI runs were added (PR #11).
-  cd "${TMPDIR:-/tmp}" 2>/dev/null || cd /
   [ -n "${TEST_TMPDIR:-}" ] && [ -d "$TEST_TMPDIR" ] && rm -rf "$TEST_TMPDIR"
   TEST_TMPDIR=""
 }

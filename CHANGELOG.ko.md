@@ -20,7 +20,8 @@
 
 ### 노트
 
-Spec: `claude-deep-suite/docs/superpowers/plans/2026-05-12-m5.5-remaining-tests-handoff.md` §2 #5 (deep-review 행).
+- Bash 회귀 테스트 (`test-mutation-protocol.sh`) 는 macOS 에서는 로컬 실행하지만 ubuntu CI 통합은 follow-up 으로 보류. `tests.yml` 에 bash 단계를 추가해 본 초기 시도가 tests 5 → 6 사이에서 pre-existing ubuntu 특화 실패를 노출 — M5.5 #5 추가와는 무관 (macOS bash 3.2 는 깔끔하게 통과). 잠재 버그 조사는 별도 PR.
+- Spec: `claude-deep-suite/docs/superpowers/plans/2026-05-12-m5.5-remaining-tests-handoff.md` §2 #5 (deep-review 행).
 
 ## [1.4.0] — 2026-05-08
 
