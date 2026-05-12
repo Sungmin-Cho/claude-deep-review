@@ -339,4 +339,101 @@ assert_success "[ -d .deep-review/.mutation.lock ]" "W1: release_mutation_lock n
 rmdir .deep-review/.mutation.lock
 teardown_test_repo
 
+echo ""
+echo "=== M5.5 #5: stale-recovery preserves user staging ==="
+#
+# The Test 12 scenario covers "stale state file, no lock present" — a
+# clean post-crash restart. The M5.5 #5 acceptance scenario is stricter:
+# all THREE artifacts are present simultaneously (lock dir + state file +
+# user-staged changes from a separate flow), and auto_recover must:
+#   (1) detect the stale lock as orphaned (status=committed + age > 10min,
+#       OR status=in-progress + age > 1h)
+#   (2) release the lock
+#   (3) remove our i-t-a entries from the index
+#   (4) **NOT touch user staging** (C4 defense — `is_our_ita_entry` filter)
+#   (5) remove the state file
+#
+# This pins the integration: a single regression that breaks (4) without
+# breaking (1)/(2)/(3)/(5) would slip past the existing tests because
+# Test 10 exercises restore_mutation directly and Test 12 doesn't stage
+# anything pre-recovery.
+#
+# Spec: claude-deep-suite/docs/superpowers/plans/2026-05-12-m5.5-remaining-
+# tests-handoff.md §2 #5 (deep-review row).
+
+# Test 26 (M5.5 #5-A): leftover lock + state + user staging → recover + preserve
+repo=$(setup_test_repo)
+cd "$repo"
+mkdir -p .deep-review
+# Phase 1: simulate user staging an unrelated file independently of deep-review.
+echo "user-edit" > user-file.md
+git add user-file.md
+# Verify pre-recovery: user staging is real (non-empty, in index, not i-t-a)
+assert_success "git ls-files --error-unmatch --cached user-file.md" "pre: user-file.md staged"
+assert_failure "is_our_ita_entry user-file.md" "pre: user-file.md is NOT i-t-a (real staging)"
+
+# Phase 2: simulate a crashed deep-review mutation: state file with i-t-a entry
+# for OUR file (review-target.md), age the lock to past REVIEW_TIMEOUT_SECONDS
+# so auto_recover treats it as orphan.
+echo "review-target" > review-target.md
+perform_mutation review-target.md  # writes state file + lock + i-t-a
+# Force lock age past 10 min (REVIEW_TIMEOUT_SECONDS=600) so auto_recover
+# enters the orphan branch on a status=committed mutation.
+touch -t 202504121200.00 .deep-review/.mutation.lock 2>/dev/null \
+  || touch -A -2000 .deep-review/.mutation.lock 2>/dev/null \
+  || python3 -c "import os; os.utime('.deep-review/.mutation.lock', (1, 1))"
+# We do NOT release_mutation_lock here — simulating crashed session.
+_MUTATION_LOCK_OWNED=0  # auto_recover sees lock as not-ours, so we don't pre-empt it
+
+# Phase 3: recover.
+auto_recover
+
+# Phase 4: assert all 5 contract properties.
+assert_failure "[ -f .deep-review/.pending-mutation.json ]" "M5.5 #5-A: state file removed"
+assert_failure "[ -d .deep-review/.mutation.lock ]" "M5.5 #5-A: orphan lock released"
+assert_failure "git ls-files --error-unmatch --cached review-target.md" "M5.5 #5-A: our i-t-a removed"
+assert_success "git ls-files --error-unmatch --cached user-file.md" "M5.5 #5-A: user staging preserved"
+# Belt-and-suspenders: confirm user-file.md still has its content staged
+staged_content=$(git show :user-file.md 2>/dev/null || echo "MISSING")
+[ "$staged_content" = "user-edit" ] \
+  && echo "  ✅ user staging content unchanged" \
+  || echo "  ❌ user staging content corrupted (got: '$staged_content')"
+teardown_test_repo
+
+# Test 27 (M5.5 #5-B): no-op when state file is missing (defensive)
+# Regression guard against auto_recover stripping a user's legitimate
+# staging when there's NO crashed session to recover from.
+repo=$(setup_test_repo)
+cd "$repo"
+mkdir -p .deep-review
+echo "user-only" > only-user.md
+git add only-user.md
+auto_recover  # should be no-op
+assert_success "git ls-files --error-unmatch --cached only-user.md" "M5.5 #5-B: user staging untouched when no state file"
+assert_failure "[ -f .deep-review/.pending-mutation.json ]" "M5.5 #5-B: still no state file"
+teardown_test_repo
+
+# Test 28 (M5.5 #5-C): MULTIPLE staged files survive recovery
+# Catches a regression where auto_recover iterates files but breaks on
+# the second user-staged file (e.g. off-by-one in i-t-a filter).
+repo=$(setup_test_repo)
+cd "$repo"
+mkdir -p .deep-review
+echo "u1" > user-a.md
+echo "u2" > user-b.md
+echo "u3" > user-c.md
+git add user-a.md user-b.md user-c.md
+echo "ours" > ours.md
+perform_mutation ours.md
+touch -t 202504121200.00 .deep-review/.mutation.lock 2>/dev/null \
+  || touch -A -2000 .deep-review/.mutation.lock 2>/dev/null \
+  || python3 -c "import os; os.utime('.deep-review/.mutation.lock', (1, 1))"
+_MUTATION_LOCK_OWNED=0
+auto_recover
+for f in user-a.md user-b.md user-c.md; do
+  assert_success "git ls-files --error-unmatch --cached $f" "M5.5 #5-C: $f survives recovery"
+done
+assert_failure "git ls-files --error-unmatch --cached ours.md" "M5.5 #5-C: our i-t-a still removed"
+teardown_test_repo
+
 test_summary

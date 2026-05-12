@@ -2,6 +2,27 @@
 
 **English** | [한국어](./CHANGELOG.ko.md)
 
+## [1.4.1] — 2026-05-12
+
+### Added — M5.5 #5 mutation-lock stale-recovery integration test
+
+3 new test cases in `hooks/scripts/test/test-mutation-protocol.sh` (Test 26 / 27 / 28) close the M5.5 acceptance gap that Test 12 (stale state, no lock) and Test 10 (restore_mutation user-staging filter) leave open: the **integration scenario** of leftover `.deep-review/.mutation.lock` + `.pending-mutation.json` co-existing with user-staged changes from an unrelated flow. The new tests pin all 5 contract properties simultaneously — (1) orphan-lock detection, (2) lock release, (3) our i-t-a removal, (4) **user staging preservation**, (5) state-file cleanup. A single regression that breaks (4) without breaking (1)/(2)/(3)/(5) would have slipped past the prior suite.
+
+- Test 26 (M5.5 #5-A): single user-staged file + crashed mutation → recover + preserve.
+- Test 27 (M5.5 #5-B): defensive no-op when state file missing (auto_recover must not strip legitimate staging).
+- Test 28 (M5.5 #5-C): 3 user-staged files survive recovery (off-by-one in i-t-a filter regression guard).
+
+Total assertions: 51 → 54 (+3). No production code changes — this PR is test-only.
+
+### Changed
+
+- `.claude-plugin/plugin.json` version: 1.4.0 → 1.4.1 (test-only patch).
+
+### Notes
+
+- Bash regression tests (`test-mutation-protocol.sh`) are run **locally on macOS** but **deferred from ubuntu CI integration** to a follow-up. An initial attempt to add the bash step to `tests.yml` exposed a pre-existing ubuntu-specific failure between tests 5 → 6 that is unrelated to the M5.5 #5 additions; macOS bash 3.2 paths through cleanly. The latent bug investigation will be its own PR.
+- Spec: `claude-deep-suite/docs/superpowers/plans/2026-05-12-m5.5-remaining-tests-handoff.md` §2 #5 (deep-review row).
+
 ## [1.4.0] — 2026-05-08
 
 M3 Phase 2 envelope adoption (handoff §3 procedure). `.deep-review/recurring-findings.json` is now emitted as an M3 cross-plugin envelope (cf. `claude-deep-suite/docs/envelope-migration.md`). Reader paths that consume deep-work session-receipt are envelope-aware with a strict 3-way identity guard. Pattern adapted from deep-evolve PR #11 `9b867b1` (the most recent prior plugin migration). Suite repo's `docs/envelope-migration.md` §6.1 is the canonical adoption ledger — this CHANGELOG intentionally avoids reproducing position counts (handoff §4 cross-section count drift rule).
