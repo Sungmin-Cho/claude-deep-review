@@ -304,7 +304,7 @@ mkdir -p .deep-review/.mutation.lock
 restore_mutation
 teardown_test_repo
 
-# Test 24 (FR3): status=committed + lock older than REVIEW_TIMEOUT_SECONDS (10min) → orphan, recover
+# Test 24 (FR3): status=committed + lock older than REVIEW_TIMEOUT_SECONDS (20min, v1.5.0+) → orphan, recover
 repo=$(setup_test_repo)
 cd "$repo"
 mkdir -p .deep-review
@@ -312,9 +312,10 @@ echo "f2" > f2.md
 perform_mutation f2.md
 release_mutation_lock
 mkdir -p .deep-review/.mutation.lock
-# Backdate lock to 15 min ago (> REVIEW_TIMEOUT_SECONDS)
-# macOS: touch -t YYYYMMDDhhmm[.ss]
-backdate=$(date -u -v-15M +%Y%m%d%H%M 2>/dev/null || date -u -d '15 minutes ago' +%Y%m%d%H%M)
+# Backdate lock past REVIEW_TIMEOUT_SECONDS (v1.5.0+ default 1200s = 20min; use 25min for headroom).
+# macOS: touch -t YYYYMMDDhhmm[.ss]. The -u -v-25M form combined with -t produces an mtime that
+# is reliably past the threshold across both BSD and GNU date variants.
+backdate=$(date -u -v-25M +%Y%m%d%H%M 2>/dev/null || date -u -d '25 minutes ago' +%Y%m%d%H%M)
 touch -t "$backdate" .deep-review/.mutation.lock
 output=$(auto_recover 2>&1 || true)
 echo "$output" | grep -q "orphan lock from crashed session" && echo "  ✅ FR3: orphan committed lock recovered" \
@@ -346,8 +347,8 @@ echo "=== M5.5 #5: stale-recovery preserves user staging ==="
 # clean post-crash restart. The M5.5 #5 acceptance scenario is stricter:
 # all THREE artifacts are present simultaneously (lock dir + state file +
 # user-staged changes from a separate flow), and auto_recover must:
-#   (1) detect the stale lock as orphaned (status=committed + age > 10min,
-#       OR status=in-progress + age > 1h)
+#   (1) detect the stale lock as orphaned (status=committed + age > REVIEW_TIMEOUT_SECONDS
+#       (20min, v1.5.0+), OR status=in-progress + age > 1h)
 #   (2) release the lock
 #   (3) remove our i-t-a entries from the index
 #   (4) **NOT touch user staging** (C4 defense — `is_our_ita_entry` filter)
@@ -377,7 +378,7 @@ assert_failure "is_our_ita_entry user-file.md" "pre: user-file.md is NOT i-t-a (
 # so auto_recover treats it as orphan.
 echo "review-target" > review-target.md
 perform_mutation review-target.md  # writes state file + lock + i-t-a
-# Force lock age past 10 min (REVIEW_TIMEOUT_SECONDS=600) so auto_recover
+# Force lock age past REVIEW_TIMEOUT_SECONDS (v1.5.0+: 1200s = 20min) so auto_recover
 # enters the orphan branch on a status=committed mutation.
 touch -t 202504121200.00 .deep-review/.mutation.lock 2>/dev/null \
   || touch -A -2000 .deep-review/.mutation.lock 2>/dev/null \

@@ -40,9 +40,11 @@ is_our_ita_entry() {
 # Atomic `mkdir` is used as POSIX-portable mutual exclusion (no flock dependency).
 LOCK_DIR=".deep-review/.mutation.lock"
 LOCK_STALE_SECONDS=3600     # 1 hour; for status=in-progress
-REVIEW_TIMEOUT_SECONDS=600  # 10 min; mid-review window for status=committed
-                            # (Codex review + adversarial + Opus synthesis typically < 5 min;
-                            # 10 min buffer accommodates slow networks / large diffs.)
+REVIEW_TIMEOUT_SECONDS=1200 # 20 min; mid-review window for status=committed
+                            # (v1.5.0+: per-call `_timeout 900` for Codex review/adversarial
+                            # means a single review can legitimately hold the lock up to 900s;
+                            # 1200s = 900s + 300s synthesis/I-O margin. Override per-session
+                            # with `export REVIEW_TIMEOUT_SECONDS=N` if needed.)
 
 # W1 (4회차 Opus): module-scoped ownership flag.
 # `release_mutation_lock` and `restore_mutation` only act on locks this shell acquired,
