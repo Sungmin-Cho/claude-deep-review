@@ -2,6 +2,36 @@
 
 **English** | [한국어](./CHANGELOG.ko.md)
 
+## [1.5.0] — 2026-05-13
+
+### Added — `/deep-review-loop` wrapper command
+
+New slash command `/deep-review-loop` that runs `/deep-review` (review) and `/deep-review --respond` (respond) back-to-back, repeating until the main agent decides further iteration is no longer useful.
+
+- **Argument**: accepts `--contract [SLICE-NNN]` / `--entropy` (forwarded to each review round) plus a `--max=N` safety cap (default 5; **unit = Review calls**, Respond does not advance the counter). Rejects `--respond` / `init` / `--qa` because they collide with the loop semantics.
+- **Termination policy**: not a hard iteration count. The main agent terminates on (a) natural convergence (`verdict=APPROVE`, no 🔴/🟡), (b) `--max` reached, (c) **stalled state** — same `findings_signature` set (severity:file:line±3:taxonomy_category) reappears ≥50% with `implemented_count=0` or `halted=true`, (d) operational errors (mutation restore failures, lock contention) accumulating ≥ 2 in one round, or (e) user picking "stop" at any guard. Soft-continue requires verdict in `(REQUEST_CHANGES, CONCERN)` AND at least one implemented change in the previous round AND meaningfully different `findings_signature`.
+- **Implementation**: the wrapper `Read`s `commands/deep-review.md` once and follows its existing "리뷰 모드" / "대응 모드" sections inline per round — no new state files are introduced. Loop metrics live in session memory only; the final summary lands in `.deep-review/responses/{YYYY-MM-DD}-{HHmmss}-loop-summary.md` (untracked under existing `.gitignore` policy).
+
+Use case: the common pattern of running `/deep-review` → seeing `REQUEST_CHANGES` → immediately running `/deep-review --respond` → re-running `/deep-review` to verify can now be triggered as a single wrapper that converges on its own.
+
+### Changed — Codex per-call timeout 300s → 900s (15 min)
+
+- `commands/deep-review.md` (4 call sites: §3 stderr probe, review, adversarial-review Option A, Option B step 3).
+- `skills/deep-review-workflow/SKILL.md` Stage 3 Case 3 (review + adversarial-review).
+- `skills/deep-review-workflow/references/codex-integration.md` §Preflight Step 3, §3-way (review + adversarial-review), §Codex 인증 실패 처리.
+- Historical references to `timeout 300` in CHANGELOG entries are preserved as point-in-time facts.
+
+Reason: 300s was repeatedly hit on large diffs, rate-limited Codex sessions, and retry-prone first-token latency, demoting valid 3-way reviews to 1-way with `CODEX_STATUS=timeout`. 900s preserves the safety net while removing the false-positive timeout class. The shim semantics (gtimeout → timeout → perl alarm fallback) are unchanged.
+
+### Changed — `REVIEW_TIMEOUT_SECONDS` 600s → 1200s (mutation lock orphan window)
+
+`hooks/scripts/mutation-protocol.sh:43` — the mid-review orphan-detection window for `status=committed` locks is raised from 600s (10 min) to 1200s (20 min). With the new `_timeout 900` per Codex call, a legitimate review can hold the lock close to 900s; the prior 600s threshold made a concurrent session's `auto_recover` misclassify the active reviewer's lock as orphaned and pull its intent-to-add entries out from under it. 1200s = 900s + 300s synthesis/I-O margin. Override per-session with `export REVIEW_TIMEOUT_SECONDS=N`.
+
+### Versions
+
+- `.claude-plugin/plugin.json` 1.4.2 → 1.5.0.
+- `package.json` 1.4.2 → 1.5.0 (kept in lockstep with the plugin manifest per prior release policy).
+
 ## [1.4.2] — 2026-05-12 (M5.5 #5 follow-up — cross-platform `stat` order fix)
 
 ### Fixed — `mutation-protocol.sh` BSD-first `stat -f %m` ordering broke ubuntu

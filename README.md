@@ -43,6 +43,7 @@ In the 2×2 matrix:
 | `/deep-review --entropy` | Entropy scan (duplicates, pattern drift, naming mismatches) |
 | `/deep-review --respond` | Respond to review findings with evidence-based protocol |
 | `/deep-review --respond --source=pr` | Respond to GitHub PR review comments |
+| `/deep-review-loop` | Auto-iterate review ↔ respond in one session until natural convergence (v1.5.0+) |
 | `/deep-review init` | Initialize per-project review rules interactively |
 
 ## Review Pipeline

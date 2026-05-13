@@ -2,6 +2,36 @@
 
 [English](./CHANGELOG.md) | **한국어**
 
+## [1.5.0] — 2026-05-13
+
+### 추가 — `/deep-review-loop` wrapper 커맨드
+
+`/deep-review` (리뷰) 와 `/deep-review --respond` (대응) 을 같은 세션에서 자동 반복하는 신규 슬래시 커맨드 `/deep-review-loop`. 메인 에이전트가 더 이상의 반복이 무의미하다고 판단할 때까지 라운드를 이어간다.
+
+- **Argument**: `--contract [SLICE-NNN]` / `--entropy` 는 매 라운드 review 단계로 그대로 전달. `--max=N` 은 안전장치 (기본 5; **단위 = Review 호출 횟수**, Respond 는 카운터를 증가시키지 않음). loop 의미와 충돌하는 `--respond` / `init` / `--qa` 는 거부.
+- **종료 정책**: 고정 횟수가 아니라 메인 에이전트의 종합 판단. (a) 자연 수렴 (`verdict=APPROVE` AND 🔴/🟡=0), (b) `--max` 도달, (c) **수렴 정체** — 직전 라운드와 동일한 `findings_signature` 집합 (`severity:file:line±3:taxonomy_category`) 이 50% 이상 재출현 + `implemented_count=0` 또는 `halted=true`, (d) 한 라운드 안에서 운영 오류(mutation 복원 실패, lock 점유 등) 누적 ≥ 2, (e) 사용자가 가드 단계에서 중단 선택, 중 하나라도 충족되면 즉시 중단. 계속 진행하려면 verdict 가 `REQUEST_CHANGES`/`CONCERN` AND 직전 라운드에서 실제 변경 발생 AND `findings_signature` 가 유의미하게 변화해야 한다.
+- **구현**: wrapper 는 별도 상태 파일을 만들지 않고, `commands/deep-review.md` 본문을 1회 `Read` 한 뒤 그 안의 "리뷰 모드" / "대응 모드" 섹션을 매 라운드 인라인 수행. 라운드 메트릭은 세션 메모리에만 있고, 최종 요약은 `.deep-review/responses/{YYYY-MM-DD}-{HHmmss}-loop-summary.md` 로 저장 (기존 `.gitignore` 정책상 untracked).
+
+활용: `/deep-review` 받고 `REQUEST_CHANGES` 떨어지면 `/deep-review --respond` 돌리고 다시 `/deep-review` 로 검증하는 흐름을 한 커맨드로 묶어 자동 수렴.
+
+### 변경 — Codex per-call timeout 300s → 900s (15분)
+
+- `commands/deep-review.md` (4개 호출 지점: §3 stderr probe, review, adversarial-review Option A, Option B step 3).
+- `skills/deep-review-workflow/SKILL.md` Stage 3 Case 3 (review + adversarial-review).
+- `skills/deep-review-workflow/references/codex-integration.md` §Preflight Step 3, §3-way (review + adversarial-review), §Codex 인증 실패 처리.
+- CHANGELOG 의 historical `timeout 300` 언급은 시점 사실로 보존.
+
+이유: 대형 diff, rate-limit, 재시도 등으로 300s 가 자주 미달되어 유효한 3-way 리뷰가 `CODEX_STATUS=timeout` 으로 1-way 로 강등되는 사례가 반복. 900s 로 상향해 안전장치는 유지하되 false-positive timeout 을 제거. shim 의미론(gtimeout → timeout → perl alarm fallback) 은 변경 없음.
+
+### 변경 — `REVIEW_TIMEOUT_SECONDS` 600s → 1200s (mutation lock orphan window)
+
+`hooks/scripts/mutation-protocol.sh:43` — `status=committed` lock 의 mid-review orphan 감지 임계를 600s (10분) → 1200s (20분) 으로 상향. 새 `_timeout 900` 가 한 Codex 호출당 최대 900s 까지 lock 을 정당하게 점유할 수 있는데, 600s 임계는 동시 세션의 `auto_recover` 가 진행 중 reviewer 의 lock 을 orphan 으로 오판해 intent-to-add 항목을 회수하는 race 를 만들었음. 1200s = 900s + 300s (합성/I-O 마진). 세션별 override 는 `export REVIEW_TIMEOUT_SECONDS=N`.
+
+### 버전
+
+- `.claude-plugin/plugin.json` 1.4.2 → 1.5.0.
+- `package.json` 1.4.2 → 1.5.0 (이전 릴리스 정책대로 플러그인 매니페스트와 동기화).
+
 ## [1.4.2] — 2026-05-12 (M5.5 #5 follow-up — cross-platform `stat` 순서 수정)
 
 ### 수정 — `mutation-protocol.sh` BSD-first `stat -f %m` 순서가 ubuntu에서 깨짐
