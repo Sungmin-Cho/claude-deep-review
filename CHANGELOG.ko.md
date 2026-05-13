@@ -2,6 +2,28 @@
 
 [English](./CHANGELOG.md) | **한국어**
 
+## [1.5.1] — 2026-05-13 (스킬 문서 drift 정리 — plugin-dev audit follow-up)
+
+### 수정 — v1.5.0 릴리스와 실제 shipped 산출물 간 문서 drift 정리
+
+v1.5.0 릴리스 직후 `plugin-dev:plugin-validator` + `plugin-dev:skill-reviewer` audit 으로 스킬/스펙 문서와 실제 shipped 산출물 간 7개 drift 항목이 발견되었다. 본 patch 는 이를 모두 해결하며, 커맨드/스크립트/훅 프로토콜/런타임 동작 변경은 없다.
+
+- **`agents/code-reviewer.md`, `agents/phase6-implementer.md`** — 비표준 `whenToUse` frontmatter 필드 제거 (Claude Code agent 스키마에 없는 필드라 silently ignore 되고 있었음). "직접 호출 금지" 안내는 기존 `description` block scalar 에 흡수.
+- **`skills/deep-review-workflow/SKILL.md`**:
+  - Stage 5 dangling cross-reference 정리 — `(Stage 5)` 라벨이 `(/deep-review --respond 모드, Stage 5+ 참조)` 로 변경되고, 새 `## Stage 5+ (커맨드 레벨 확장)` 섹션이 stages 5 / 5.5 / 6 / 7 의 위치(=`commands/deep-review.md`)를 명시.
+  - Codex Mutation Protocol 섹션에 `*왜 필요한가*` 설명 단락 추가 (Codex CLI 는 git-tracked 경로만 인식 → gitignored 세션 파일 노출에 intent-to-add mutation + 사후 복원 필요).
+  - Stage 3 Case 3 의 inline `(v1.3.x …)` changelog 브레드크럼 트림 — 기술적 사실은 유지하고 버전 태그만 제거 (CHANGELOG 에 속함, spec 에 속하지 않음).
+- **`skills/receiving-review/SKILL.md`** — `references/phase6-delegation-spec.md` (Phase 6 dispatch 설계 스펙) 가 "참조 문서" 리스트에 1줄 purpose 와 함께 추가되어 SKILL 로딩 시 발견 가능.
+- **`skills/receiving-review/references/response-protocol.md`** — Phase 6 "구현 규칙 — 그룹 dispatch" 가 35줄의 중복 shell 로직 (sed/awk/git commit --only 세부) 에서 single-source-of-truth 표 + 7개 invariant 요약으로 축소. shell 로직의 정식 단일 소스는 `commands/deep-review.md` `--respond` Step 2.5; 중복은 drift 위험을 만들었음. Re-review 제안 블록도 `SKILL.md "Re-review 제안"` 포인터로 교체.
+- **`skills/receiving-review/references/phase6-delegation-spec.md`** — Status `Draft (브레인스토밍 합의 반영)` → `Shipped (v1.3.3+, revised through v1.5.0)`; 날짜 dual-stamp `2026-04-24 (initial), revised 2026-05-13`. 임베디드 YAML frontmatter 예제도 shipped shape (no `whenToUse`) 로 sync 하고 v1.3.3 → v1.5.1 schema convergence 를 설명하는 migration note 추가.
+
+검증: `plugin-dev:plugin-validator` + `plugin-dev:skill-reviewer` 재실행 결과 PASS, 신규 경고/에러 0건.
+
+### 버전
+
+- `.claude-plugin/plugin.json` 1.5.0 → 1.5.1.
+- `package.json` 1.5.0 → 1.5.1.
+
 ## [1.5.0] — 2026-05-13
 
 ### 추가 — `/deep-review-loop` wrapper 커맨드

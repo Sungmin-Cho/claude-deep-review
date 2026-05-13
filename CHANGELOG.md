@@ -2,6 +2,28 @@
 
 **English** | [한국어](./CHANGELOG.ko.md)
 
+## [1.5.1] — 2026-05-13 (skill-drift cleanup — plugin-dev audit follow-up)
+
+### Fixed — Documentation drift between v1.5.0 release and shipped artifacts
+
+`plugin-dev:plugin-validator` + `plugin-dev:skill-reviewer` audit after the v1.5.0 release surfaced 7 documentation-drift items between the skill/spec docs and the actually-shipped artifacts. This patch resolves all of them; no command, script, hook protocol, or runtime behavior changes.
+
+- **`agents/code-reviewer.md`, `agents/phase6-implementer.md`** — Removed non-standard `whenToUse` frontmatter field (the Claude Code agent schema has no such key; it was silently ignored). The "do not call directly" guidance is merged into the existing `description` block scalar.
+- **`skills/deep-review-workflow/SKILL.md`**:
+  - Stage 5 dangling cross-reference clarified — the `(Stage 5)` label now reads `(/deep-review --respond 모드, Stage 5+ 참조)`, anchored against a new `## Stage 5+ (커맨드 레벨 확장)` section that explicitly delegates stages 5 / 5.5 / 6 / 7 to `commands/deep-review.md`.
+  - Codex Mutation Protocol section gains a `*왜 필요한가*` rationale paragraph (Codex CLI sees only git-tracked paths → gitignored session files require intent-to-add mutation + post-verification restore).
+  - Inline `(v1.3.x …)` changelog crumbs trimmed from Stage 3 Case 3 — technical facts retained, version tags removed (they belong in CHANGELOG, not in spec).
+- **`skills/receiving-review/SKILL.md`** — `references/phase6-delegation-spec.md` (Phase 6 dispatch design spec) is now linked from "참조 문서" with a 1-line purpose so debugging discovers it through the SKILL.
+- **`skills/receiving-review/references/response-protocol.md`** — Phase 6 "구현 규칙 — 그룹 dispatch" trimmed from 35 lines of duplicated shell logic (sed/awk/git commit --only specifics) to a single-source-of-truth table + 7-item invariant summary. The shell logic lives canonically in `commands/deep-review.md` `--respond` Step 2.5; duplication created drift risk. Re-review suggestion block also replaced with a pointer to `SKILL.md "Re-review 제안"`.
+- **`skills/receiving-review/references/phase6-delegation-spec.md`** — Status `Draft (브레인스토밍 합의 반영)` → `Shipped (v1.3.3+, revised through v1.5.0)`; dual-dated `2026-04-24 (initial), revised 2026-05-13`. The embedded YAML frontmatter example synced to the shipped shape (no `whenToUse`), with a migration note explaining the v1.3.3 → v1.5.1 schema convergence.
+
+Validation: `plugin-dev:plugin-validator` + `plugin-dev:skill-reviewer` re-runs report PASS with zero new warnings/errors after these changes.
+
+### Versions
+
+- `.claude-plugin/plugin.json` 1.5.0 → 1.5.1.
+- `package.json` 1.5.0 → 1.5.1.
+
 ## [1.5.0] — 2026-05-13
 
 ### Added — `/deep-review-loop` wrapper command

@@ -5,8 +5,7 @@ color: blue
 description: |
   /deep-review --respond Phase 6의 구현 실행자. Main이 확정한 수락 항목을
   심각도 그룹 단위로 받아 한 항목씩 Edit + 테스트하고 구조화 결과를 반환한다.
-whenToUse: |
-  /deep-review --respond Phase 6에서 자동 dispatch된다. 직접 호출하지 않는다.
+  /deep-review --respond Phase 6에서 자동 dispatch된다 — 직접 호출하지 않는다.
 tools:
   - Read
   - Edit

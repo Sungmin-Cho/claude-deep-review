@@ -16,7 +16,7 @@ user-invocable: false
 - `references/codex-integration.md` — Codex 교차 검증
 - `references/contract-schema.md` — Sprint Contract 스키마
 - `references/report-format.md` — 리포트 형식
-- `../receiving-review/SKILL.md` — 리뷰 피드백 대응 프로토콜 (Stage 5)
+- `../receiving-review/SKILL.md` — 리뷰 피드백 대응 프로토콜 (`/deep-review --respond` 모드, Stage 5+ 참조)
 
 ## 4단계 파이프라인
 
@@ -78,18 +78,20 @@ user-invocable: false
   - codex_cli=false: Codex 플러그인 설치 안내
   - codex_cli=true: "CLI가 감지되었지만 플러그인이 필요합니다" 안내
 
-**Case 3: git + `codex_plugin=true`** (v1.3.2: `has_commits` 요구 제거 — 첫 커밋 전도 포함)
+**Case 3: git + `codex_plugin=true`** (첫 커밋 전 상태도 포함)
 → 3-way 병렬 백그라운드 실행:
   1. Agent(code-reviewer, model: opus, run_in_background: true) — 독립 리뷰
   2. Bash(_timeout 900 node "{codex_companion_path}" review {codex_target_flag}, run_in_background: true) — 코드 리뷰 (`_timeout`은 `references/codex-integration.md` preflight 섹션의 portable shim)
   3. Bash (run_in_background: true) — adversarial-review를 **단일 Bash 호출 내에 inline**으로 실행한다. mktemp 생성 → here-doc으로 focus_text 주입 → `_timeout 900 node ... adversarial-review ... - < "$focus_file"` 호출 → 종료 후 `rm -f` 정리. 별도 Bash에 `$focus_file`을 넘기면 subshell 경계에서 unset되므로 **반드시 같은 Bash command 문자열 안에서 완결**. 상세 예제는 `commands/deep-review.md` Stage 3 참조. mktemp 경로는 `"${TMPDIR:-/tmp}/deep-review-focus.XXXXXX"` 형식 — 고정 경로 사용 금지.
 
-{codex_target_flag}: clean 또는 WIP 커밋 후 → `--base {review_base}`, dirty tree → `--scope working-tree` (v1.3.2 F8 교정 — 기존 `--uncommitted` 는 companion 1.0.x 에서 미지원).
-**untracked-only**: `--scope working-tree` 가 `git ls-files --others --exclude-standard` 로 자동 수집. v1.3.1 의 `git add -N` + `git reset HEAD` fallback 은 F8 교정으로 불필요.
+{codex_target_flag}: clean 또는 WIP 커밋 후 → `--base {review_base}`, dirty tree → `--scope working-tree` (companion 1.0.x 호환).
+**untracked-only**: `--scope working-tree` 가 `git ls-files --others --exclude-standard` 로 자동 수집 — 별도 fallback 불필요.
 
 **Codex Mutation Protocol (Case 3 전용, spec §3-§6)**
 
-gitignored 세션 파일을 Codex 에 임시 노출하여 3-way 검증을 수행. 구현: `hooks/scripts/mutation-protocol.sh` 의 7개 함수 (`is_our_ita_entry`, `acquire_mutation_lock`, `release_mutation_lock`, `perform_mutation`, `restore_mutation`, `auto_recover`, `scan_sensitive_files`). Entry point: `commands/deep-review.md` Stage 0.1 (auto_recover), Stage 2.1 (session inference), Stage 3.0 (perform_mutation), Stage 5.0 (restore_mutation).
+*왜 필요한가*: Codex CLI 는 git-tracked 경로만 인식하므로, gitignored 세션 파일 (WIP, `.deep-review/`, `*.local.*` 등) 을 3-way 검증에 포함시키려면 임시 git-index mutation (intent-to-add) 이 필요하다. 검증 후 즉시 원상복구하여 사용자 워크트리에 흔적을 남기지 않는다.
+
+구현: `hooks/scripts/mutation-protocol.sh` 의 7개 함수 (`is_our_ita_entry`, `acquire_mutation_lock`, `release_mutation_lock`, `perform_mutation`, `restore_mutation`, `auto_recover`, `scan_sensitive_files`). Entry point: `commands/deep-review.md` Stage 0.1 (auto_recover), Stage 2.1 (session inference), Stage 3.0 (perform_mutation), Stage 5.0 (restore_mutation).
 
 **커밋되지 않은 상태에서:**
 - 사용자에게 WIP 커밋 제안
@@ -109,6 +111,15 @@ gitignored 세션 파일을 Codex 에 임시 노출하여 3-way 검증을 수행
    (1) 증거 기반 대응 시작 (`/deep-review --respond`) ← 기본 추천
    (2) codex:rescue로 수정 위임 (Codex 설치 시에만 표시)
    (3) 수동으로 처리
+
+## Stage 5+ (커맨드 레벨 확장)
+
+Stage 5 이후는 본 스킬이 아니라 `commands/deep-review.md` 본문에서 정의된다 — 스킬은 판단·합성까지, 커맨드는 응답·후처리·옵션 모드를 담당한다:
+
+- **Stage 5 (응답)**: `--respond` 모드 — `../receiving-review/SKILL.md` 가 Phase 1~6 가이드 제공.
+- **Stage 5.5 (Recurring Findings Export)**: 매 라운드 종료 시 `.deep-review/recurring-findings.json` 갱신 (`commands/deep-review.md` §5.5).
+- **Stage 6 (`--entropy` 스캔)**: 옵션 플래그 (`commands/deep-review.md` §6).
+- **Stage 7 (`--qa`)**: 향후 릴리스 예정 — 현재 `app_qa.*` config 필드는 예약 스키마.
 
 ## config.yaml 스키마
 
