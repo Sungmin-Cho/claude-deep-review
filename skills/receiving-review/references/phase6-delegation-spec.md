@@ -1,7 +1,7 @@
 # Phase 6 Subagent Delegation — Design Spec
 
-- **Date**: 2026-04-24
-- **Status**: Draft (브레인스토밍 합의 반영)
+- **Date**: 2026-04-24 (initial), revised 2026-05-13
+- **Status**: Shipped (v1.3.3+, revised through v1.5.0)
 - **Scope**: `/deep-review --respond` Phase 6 구현 단계를 전용 서브에이전트(Sonnet)로 위임하여 main 세션 context 소비를 감축
 - **Non-goals**: Phase 1~5(READ/UNDERSTAND/VERIFY/EVALUATE/RESPOND) 변경, `/deep-review` 리뷰 모드 변경, `codex:rescue` 경로 변경, PR comment posting 로직 변경
 
@@ -113,8 +113,7 @@ color: blue
 description: |
   /deep-review --respond Phase 6의 구현 실행자. Main이 확정한 수락 항목을
   심각도 그룹 단위로 받아 한 항목씩 Edit + 테스트하고 구조화 결과를 반환한다.
-whenToUse: |
-  /deep-review --respond Phase 6에서 자동 dispatch된다. 직접 호출하지 않는다.
+  /deep-review --respond Phase 6에서 자동 dispatch된다 — 직접 호출하지 않는다.
 tools:
   - Read
   - Edit
@@ -124,6 +123,8 @@ tools:
   - Glob
 ---
 ```
+
+> *Note (v1.3.3+)*: 초기 설계 시 별도 `whenToUse:` 필드를 사용했으나, Claude Code agent schema 표준화를 위해 v1.5.1 부터 `description` 에 흡수했다. 실제 shipped 형식은 위 예시와 같다.
 
 **제외된 tools 근거**:
 - `Agent`: 재귀 dispatch 방지

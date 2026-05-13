@@ -5,8 +5,7 @@ color: red
 description: |
   독립적인 코드 리뷰어 에이전트. Generator의 컨텍스트를 공유하지 않는
   별도 에이전트로서, 코드 변경사항을 5가지 관점에서 평가한다.
-whenToUse: |
-  deep-review 커맨드에서 자동으로 spawn된다. 직접 호출하지 않는다.
+  deep-review 커맨드에서 자동으로 spawn된다 — 직접 호출하지 않는다.
 tools:
   - Read
   - Glob
