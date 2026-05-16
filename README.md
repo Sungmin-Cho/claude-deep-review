@@ -43,7 +43,7 @@ In the 2×2 matrix:
 | `/deep-review --entropy` | Entropy scan (duplicates, pattern drift, naming mismatches) |
 | `/deep-review --respond` | Respond to review findings with evidence-based protocol |
 | `/deep-review --respond --source=pr` | Respond to GitHub PR review comments |
-| `/deep-review-loop` | Auto-iterate review ↔ respond in one session until natural convergence (v1.5.0+) |
+| `/deep-review-loop` | Auto-iterate review ↔ respond in one session until natural convergence. v1.5.0+ slash command; v1.6.0+ user-invocable **skill** (`Skill({ skill: "deep-review:deep-review-loop" })` also works — used by Codex CLI / SDK consumers) |
 | `/deep-review init` | Initialize per-project review rules interactively |
 
 ## Review Pipeline

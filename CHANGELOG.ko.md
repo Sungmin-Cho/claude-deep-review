@@ -2,6 +2,27 @@
 
 [English](./CHANGELOG.md) | **한국어**
 
+## [1.6.0] — 2026-05-16 (`/deep-review-loop` 커맨드 → user-invocable 스킬)
+
+### 변경 — `/deep-review-loop` 가 슬래시 커맨드에서 `user-invocable: true` 스킬로 이전
+
+v1.5.0 에서 슬래시 커맨드 (`commands/deep-review-loop.md`) 로 ship 된 리뷰↔대응 자동 반복 wrapper `/deep-review-loop` 가 스킬 (`skills/deep-review-loop/SKILL.md`) 로 마이그레이션. 목적은 **Codex / SDK / Claude Code 외 플랫폼과의 진입 표준화** — 슬래시 커맨드는 Claude Code 한정인 반면, 스킬은 Claude Code / Codex CLI / Copilot CLI / Gemini CLI / Agent SDK 모두가 이해하는 공통 invocation surface 다. 본 변경 이후 loop 은 어디서든 `Skill({ skill: "deep-review:deep-review-loop", args: "..." })` 로 호출 가능하며, Claude Code 에서는 기존 `/deep-review-loop` 진입도 그대로 동작한다 (`user-invocable: true` 스킬은 슬래시 진입을 자동 노출).
+
+- **동작 변경: 없음.** §0 ~ §9 프로토콜 — argument 사전 검증, 라운드 본체 (Review → 조건부 Respond → Metrics), 라운드 식별 set-difference invariant, Respond 경로 realpath 가드, `findings_signature` 정체 ≥ 50% 감지, 운영 오류 ≥ 2 hard stop, 자연 수렴 (`APPROVE` + 🔴/🟡=0), `--max` 안전장치 (기본 5; Review 호출만 카운트) — 모두 그대로 이전. 문구 차이는 self-reference 의 "wrapper / 커맨드" → "skill" 과 신규 `## Invocation` 섹션 (슬래시 진입과 `Skill(...)` 진입을 명시) 두 가지뿐.
+- **Frontmatter 이전**: 커맨드 전용 `allowed-tools` + `argument-hint` 제거. 신규 스킬 frontmatter: `name: deep-review-loop`, `description: Use when ...` (스킬 가이드에 따라 3인칭 + triggering-conditions only), `user-invocable: true`.
+- **`commands/deep-review-loop.md`** 삭제. **`skills/deep-review-loop/SKILL.md`** 신규. **`commands/deep-review.md`** 첫머리 링크가 스킬 경로 (`../skills/deep-review-loop/SKILL.md`) 로 조정되고 슬래시/`Skill(...)` 두 진입을 모두 명시.
+- **`CLAUDE.md`** 디렉토리 트리 업데이트 (`commands/` 는 단일 파일, `skills/deep-review-loop/` 추가). "Slash commands" 표는 "Slash commands & user-invocable skills" 로 개명, `Kind` 컬럼이 추가되어 커맨드 행과 신규 skill 행을 구분.
+- **`README.md` / `README.ko.md`** 행은 dual entry (`/deep-review-loop` 슬래시 = Claude Code, `Skill({ skill: ... })` = 그 외) 를 설명하도록 수정.
+
+### 왜 지금
+
+v1.5.0 구현은 이미 슬래시-to-슬래시 dispatch 가 portable 하지 않다는 사실을 인지하고 `commands/deep-review.md` 를 `Read` 해 인라인 수행하도록 설계되어 있었다 (즉, 커맨드 본문에 의존하긴 하지만 커맨드 dispatch 자체에는 의존하지 않음). 따라서 커맨드 진입을 고수해야 할 invariant 는 사실상 없었고, 스킬로 승격하는 것이 자연스러운 종착점이다. Codex 마이그레이션 준비, 그리고 향후 Agent-SDK 기반 harness 가 deep-review 를 감싸는 모든 시나리오에서 `Skill(...)` 단일 진입을 활용할 수 있다.
+
+### 버전
+
+- `.claude-plugin/plugin.json` 1.5.1 → 1.6.0.
+- `package.json` 1.5.1 → 1.6.0.
+
 ## [1.5.1] — 2026-05-13 (스킬 문서 drift 정리 — plugin-dev audit follow-up)
 
 ### 수정 — v1.5.0 릴리스와 실제 shipped 산출물 간 문서 drift 정리

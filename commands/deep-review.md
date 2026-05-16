@@ -8,7 +8,7 @@ argument-hint: "[init] [--contract [SLICE-NNN]] [--entropy] [--respond (REPORT_P
 
 현재 코드 변경사항을 독립된 Evaluator 에이전트로 리뷰합니다.
 
-> 리뷰 → 대응 → 재리뷰 를 한 세션에서 자동 반복하려면 [`/deep-review-loop`](./deep-review-loop.md) 를 사용하세요 (v1.5.0+).
+> 리뷰 → 대응 → 재리뷰 를 한 세션에서 자동 반복하려면 [`deep-review-loop` skill](../skills/deep-review-loop/SKILL.md) 을 사용하세요 (`/deep-review-loop` 또는 `Skill({ skill: "deep-review:deep-review-loop" })`). v1.5.0+ command 였으며 v1.6.0 부터 skill 로 마이그레이션되어 Codex 등 cross-platform 진입이 가능합니다.
 
 ## Argument Dispatch
 

@@ -61,8 +61,7 @@ deep-review/
 │   ├── code-reviewer.md           # Opus subagent (spawned by /deep-review, Stage 3)
 │   └── phase6-implementer.md      # Sonnet subagent (dispatched by /deep-review --respond Phase 6)
 ├── commands/
-│   ├── deep-review.md             # main command — 4-stage review pipeline + Stage 5 respond
-│   └── deep-review-loop.md        # wrapper for auto-iteration (review ↔ respond until convergence)
+│   └── deep-review.md             # main command — 4-stage review pipeline + Stage 5 respond
 ├── hooks/
 │   ├── hooks.json                 # empty (no active hooks since v1.3.1)
 │   └── scripts/
@@ -82,6 +81,8 @@ deep-review/
 │   │       ├── contract-schema.md     # Sprint Contract YAML shape + auto/manual/mixed verification
 │   │       ├── report-format.md       # Findings output (🔴 Critical, 🟡 Warning, ℹ️ Info)
 │   │       └── codex-integration.md   # Preflight, 3-way parallel, timeout/auth handling
+│   ├── deep-review-loop/          # v1.6.0+ — user-invocable skill: review ↔ respond auto-iteration (was commands/deep-review-loop.md in v1.5.x)
+│   │   └── SKILL.md
 │   └── receiving-review/          # Stage 5 response protocol
 │       └── references/
 │           ├── response-protocol.md       # 6-phase workflow + source-trust matrix
@@ -225,17 +226,17 @@ Per-call value is 900s (set at the top of `mutation-protocol.sh`); per-review lo
 
 ---
 
-## Slash commands
+## Slash commands & user-invocable skills
 
-| Command | Description |
-|---|---|
-| `/deep-review` | Review current changes with the Opus subagent (Codex optional) |
-| `/deep-review --contract [SLICE-NNN]` | Sprint Contract-based verification |
-| `/deep-review --entropy` | Entropy scan → `.deep-review/entropy-log.jsonl` |
-| `/deep-review --respond <REPORT_PATH>` | 6-phase response protocol on a saved report |
-| `/deep-review --respond --source=pr --pr=<N>` | Collect GitHub PR comments via `gh api` and respond |
-| `/deep-review-loop [--max=N]` | Auto-iterate review ↔ respond until convergence |
-| `/deep-review init` | Interactive setup of `.deep-review/rules.yaml` + `.gitignore` |
+| Entry | Kind | Description |
+|---|---|---|
+| `/deep-review` | command | Review current changes with the Opus subagent (Codex optional) |
+| `/deep-review --contract [SLICE-NNN]` | command | Sprint Contract-based verification |
+| `/deep-review --entropy` | command | Entropy scan → `.deep-review/entropy-log.jsonl` |
+| `/deep-review --respond <REPORT_PATH>` | command | 6-phase response protocol on a saved report |
+| `/deep-review --respond --source=pr --pr=<N>` | command | Collect GitHub PR comments via `gh api` and respond |
+| `/deep-review init` | command | Interactive setup of `.deep-review/rules.yaml` + `.gitignore` |
+| `/deep-review-loop [--max=N]` *(v1.6.0+)* | **skill** (`skills/deep-review-loop/`) | Auto-iterate review ↔ respond until convergence. Migrated from a slash command to a `user-invocable: true` skill so Codex CLI and other SDK consumers can invoke it via `Skill({ skill: "deep-review:deep-review-loop" })` — slash entry `/deep-review-loop` keeps working in Claude Code. |
 
 ---
 
