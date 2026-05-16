@@ -2,6 +2,27 @@
 
 **English** | [한국어](./CHANGELOG.ko.md)
 
+## [1.6.0] — 2026-05-16 (`/deep-review-loop` command → user-invocable skill)
+
+### Changed — `/deep-review-loop` migrates from a slash command to a `user-invocable: true` skill
+
+The `/deep-review-loop` review↔respond auto-iteration wrapper, shipped in v1.5.0 as a slash command (`commands/deep-review-loop.md`), is now a skill (`skills/deep-review-loop/SKILL.md`). The intent is **Codex / SDK / non-Claude-Code platform parity** — slash commands are Claude-Code-specific, whereas skills are the cross-platform invocation surface understood by Claude Code, Codex CLI, Copilot CLI, Gemini CLI, and the Agent SDK. With this migration the loop becomes invokable from any of those environments via `Skill({ skill: "deep-review:deep-review-loop", args: "..." })`, while the existing slash entry `/deep-review-loop` keeps working in Claude Code (skills with `user-invocable: true` are exposed as slash entries automatically).
+
+- **Behavioural delta: zero.** The §0–§9 protocol — argument pre-validation, the round body (Review → conditional Respond → Metrics), the round-identity set-difference invariant, the Respond-path realpath guard, the stalled-`findings_signature` ≥ 50% detector, the operational-error ≥ 2 hard stop, the natural `APPROVE` + 🔴/🟡 = 0 convergence, the `--max` safety cap (default 5; counts Review calls only) — all carry over verbatim. The only language change is "wrapper / command" → "skill" in self-references, plus a new `## Invocation` section disambiguating slash entry vs `Skill(...)` entry.
+- **Frontmatter migration**: removed the command-specific `allowed-tools` + `argument-hint` fields. New skill frontmatter: `name: deep-review-loop`, `description: Use when ...` (third-person, triggering-conditions-only per skill-authoring guidance), `user-invocable: true`.
+- **`commands/deep-review-loop.md`** deleted. **`skills/deep-review-loop/SKILL.md`** added. **`commands/deep-review.md`** §intro link adjusted to point to the skill path (`../skills/deep-review-loop/SKILL.md`) with a one-line invocation hint covering both entry surfaces.
+- **`CLAUDE.md`** directory tree updated (`commands/` shrinks to a single file; `skills/deep-review-loop/` added). The "Slash commands" reference table renamed to "Slash commands & user-invocable skills" with a `Kind` column distinguishing command rows from the new skill row.
+- **`README.md` / `README.ko.md`** rows updated to describe the dual entry (`/deep-review-loop` slash in Claude Code; `Skill({ skill: ... })` everywhere else).
+
+### Why now
+
+The v1.5.0 implementation was already designed not to dispatch other slash commands (it `Read`s `commands/deep-review.md` and follows it inline) precisely because slash-to-slash dispatch is not portable. Promoting it to a skill closes the loop: there is no command-only invariant left that justifies a command-only entry point. Codex migration prep — and any future Agent-SDK-driven harness wrapping deep-review — gets a uniform entry through `Skill(...)`.
+
+### Versions
+
+- `.claude-plugin/plugin.json` 1.5.1 → 1.6.0.
+- `package.json` 1.5.1 → 1.6.0.
+
 ## [1.5.1] — 2026-05-13 (skill-drift cleanup — plugin-dev audit follow-up)
 
 ### Fixed — Documentation drift between v1.5.0 release and shipped artifacts

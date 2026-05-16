@@ -1,16 +1,25 @@
 ---
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, Skill, AskUserQuestion
-description: /deep-review 와 /deep-review --respond 를 한 흐름에서 자동 반복 실행합니다. 메인 에이전트가 종료 시점을 판단합니다.
-argument-hint: "[--contract [SLICE-NNN]] [--entropy] [--max=N]"
+name: deep-review-loop
+description: Use when the user wants /deep-review and /deep-review --respond to alternate automatically until convergence — e.g. after seeing REQUEST_CHANGES and wanting auto-apply + re-review without manually toggling commands. Triggers on phrases like "keep reviewing until clean", "auto-iterate review", "loop until APPROVE", "리뷰↔대응 반복", "수렴까지 자동 반복".
+user-invocable: true
 ---
 
-# /deep-review-loop — Review ↔ Respond Iteration Loop
+# deep-review-loop — Review ↔ Respond Iteration Loop
 
-`/deep-review` (리뷰) 와 `/deep-review --respond` (대응) 를 같은 세션에서 반복 실행해, 더 이상의 리뷰/대응이 무의미해질 때까지 자동으로 수렴시킵니다.
+`/deep-review` (리뷰) 와 `/deep-review --respond` (대응) 을 같은 세션에서 반복 실행해, 더 이상의 리뷰/대응이 무의미해질 때까지 자동으로 수렴시킵니다.
 
 수렴은 명시적 max iteration 이 아니라 **메인 에이전트의 판단** 으로 멈춥니다. (휴리스틱은 §3 종료 조건 참조.)
 
-## Argument
+## Invocation
+
+이 스킬은 두 가지 경로로 호출됩니다 — 어느 쪽이든 본 SKILL 의 §1 ~ §9 절차를 그대로 실행합니다:
+
+1. **Claude Code 슬래시 진입** — 사용자가 `/deep-review-loop [args]` 를 입력 (skill 의 `user-invocable: true` 가 슬래시 진입을 허용).
+2. **타 에이전트 / Codex / SDK** — `Skill({ skill: "deep-review:deep-review-loop", args: "..." })` 형태로 명시적 invoke (Codex 마이그레이션을 포함한 cross-platform 표준 경로).
+
+두 경로 모두 args 는 동일한 토큰 문자열로 전달됩니다.
+
+## Inputs (skill args)
 
 - `--contract [SLICE-NNN]` / `--entropy` — 매 라운드 `/deep-review` 호출에 그대로 전달.
 - `--max=N` (선택, 기본 5) — **안전장치**. 의도치 않은 무한 루프 방지. **단위 = Review 호출 횟수** (한 라운드 = Review 한 번 + 필요 시 Respond 한 번. Respond 는 카운팅 단위가 아니다). N 양의 정수 (≥1, 비정수/0/음수 입력 시 안내 후 종료). N 도달 시 §4 통합 요약에 `종료 사유: max_reached` 로 기록 후 종료. 일반적인 종료는 §3 의 verdict/잔여 ACCEPT/변화 판단으로 발생.
@@ -20,7 +29,7 @@ argument-hint: "[--contract [SLICE-NNN]] [--entropy] [--max=N]"
 
 ```text
 입력에 --respond, init, --qa 중 하나라도 있으면 종료:
-  "/deep-review-loop 는 리뷰↔대응을 묶어 반복하는 wrapper 입니다.
+  "deep-review-loop 는 리뷰↔대응을 묶어 반복하는 wrapper 입니다.
    --respond / init / --qa 가 필요하면 /deep-review 를 직접 호출하세요."
 ```
 
@@ -44,7 +53,7 @@ argument-hint: "[--contract [SLICE-NNN]] [--entropy] [--max=N]"
 
 ### 2.1 Review 단계
 
-`/deep-review` 본문의 "리뷰 모드" 절차를 인라인으로 수행합니다 (슬래시 커맨드는 wrapper 가 다시 dispatch 할 수 없으므로 본문을 Read 해서 따라간다):
+`/deep-review` 본문의 "리뷰 모드" 절차를 인라인으로 수행합니다 (skill 은 다른 슬래시 커맨드를 다시 dispatch 할 수 없으므로 본문을 Read 해서 따라간다):
 
 1. `Read({ file_path: "${CLAUDE_PLUGIN_ROOT}/commands/deep-review.md" })` — 첫 라운드에서만 1회 (이후 라운드는 이미 컨텍스트에 있음).
 2. 그 본문의 **§0 "Auto-create .deep-review/"** + **§0.1 "자동 복원 (stale mutation recovery)"** + **"## Steps (리뷰 모드)"** 섹션 (Stage 1 ~ Stage 5.5 + Stage 6 `--entropy` 있을 때) 절차를 그대로 수행. §0.1 의 `auto_recover` 호출은 **매 라운드 진입 시 반드시 실행** — 본문 인용 범위의 시작점을 `## Steps` 헤딩이 아닌 §0 으로 명시한다 (R-006 회귀 방지). argument 는 `--contract`/`--entropy` 만 전달 (loop 전용 플래그는 제거).
@@ -93,9 +102,9 @@ round_review_report_path=$(cd "$(dirname "$round_review_report_path")" && pwd)/$
 대응 진행은 다음과 같이:
 
 1. wrapper 변수 `respond_arg_path="$round_review_report_path"` 를 설정. 이미 컨텍스트에 있는 `commands/deep-review.md` 의 **"## Steps (대응 모드 — `--respond` 인수)"** 섹션 (Step 0 ~ Step 4) 을 인라인 수행. argument 는 **`--respond ${respond_arg_path}`** — §2.1 에서 캡처한 절대 경로를 **명시 전달** (mtime fallback 의존 금지, race 회귀 방지). `receiving-review` 스킬은 본문 §Prerequisites 의 3단계 fallback 으로 로드.
-2. **Invariant check**: 본문 §1 이 로드한 리포트 경로가 wrapper 캡처값과 일치하는지 확인. wrapper 가 본문을 inline 수행하므로 sub-process argv (`$1`) 가 아닌 wrapper-context 변수로 직접 비교한다 (W1 회귀 방지):
+2. **Invariant check**: 본문 §1 이 로드한 리포트 경로가 wrapper 캡처값과 일치하는지 확인. skill 이 본문을 inline 수행하므로 sub-process argv (`$1`) 가 아닌 skill-context 변수로 직접 비교한다 (W1 회귀 방지):
    ```bash
-   # 본문 §1 의 path-load 결과를 명시적으로 변수에 복사 (wrapper context).
+   # 본문 §1 의 path-load 결과를 명시적으로 변수에 복사 (skill context).
    # 본문이 mtime fallback 으로 다른 경로를 골랐다면 여기서 즉시 발각된다.
    loaded_path_from_respond=$(realpath "${respond_arg_path:-}")
    captured_path=$(realpath "$round_review_report_path")
@@ -123,7 +132,7 @@ implemented_count, halted (boolean), execution_path,
 findings_signature (Set<"{severity}:{file}:{line ±3}:{taxonomy_category}">) — §3.A.3 정체 감지용
 ```
 
-**`taxonomy_category` 출처 (W6 명시)**: `report-format.md` 의 리포트 행에는 taxonomy 컬럼이 없으므로 wrapper 는 두 단계로 채운다:
+**`taxonomy_category` 출처 (W6 명시)**: `report-format.md` 의 리포트 행에는 taxonomy 컬럼이 없으므로 skill 은 두 단계로 채운다:
 
 1. **Stage 5.5 Recurring Findings Export** 가 매 라운드 끝에 갱신하는 `.deep-review/recurring-findings.json` 의 `payload.findings[].category` 와 본 라운드 issue 의 `file:line` 을 매칭. 매칭되면 그 카테고리를 사용 (7개 taxonomy: `error-handling | naming-convention | type-safety | test-coverage | security | performance | architecture`).
 2. 매칭 실패 시 `taxonomy_category = "untagged"` 로 채운다.
@@ -184,13 +193,13 @@ findings_signature (Set<"{severity}:{file}:{line ±3}:{taxonomy_category}">) —
 ## 5. 동시성 / 안전성
 
 - 동일 세션 안에서 직렬 실행 — 한 라운드의 모든 백그라운드 리뷰어가 완료될 때까지 다음 라운드 진입 금지.
-- `auto_recover` 는 **각 라운드 진입 시점에 매번 호출** (이미 `/deep-review` 와 `/deep-review --respond` 본문에서 호출되므로 wrapper 가 따로 호출할 필요 없음 — 단, Read fallback 으로 본문을 인라인 수행할 때는 본문이 이 호출을 포함하는지 확인).
+- `auto_recover` 는 **각 라운드 진입 시점에 매번 호출** (이미 `/deep-review` 와 `/deep-review --respond` 본문에서 호출되므로 skill 이 따로 호출할 필요 없음 — 단, Read fallback 으로 본문을 인라인 수행할 때는 본문이 이 호출을 포함하는지 확인).
 - mutation lock 이 다른 세션에 의해 점유된 경우: 즉시 §3.A.4 로 중단 + 사용자에게 안내.
 - 루프 도중 사용자가 `Ctrl-C` 등으로 인터럽트 → 직전까지 저장된 리포트는 보존, 진행 중이던 mutation 은 다음 세션의 `auto_recover` 가 복원.
 
 ## 6. 멱등성 / 재진입
 
-- `/deep-review-loop` 는 **상태를 별도 파일에 저장하지 않는다**. 라운드 메트릭은 세션 메모리에만 보관. 세션이 끊기면 다시 호출하면 그 시점부터 새 루프가 시작됨 (이미 적용된 변경은 다음 라운드 review 에 자연스럽게 반영).
+- deep-review-loop 는 **상태를 별도 파일에 저장하지 않는다**. 라운드 메트릭은 세션 메모리에만 보관. 세션이 끊기면 다시 호출하면 그 시점부터 새 루프가 시작됨 (이미 적용된 변경은 다음 라운드 review 에 자연스럽게 반영).
 - 단, 마지막 라운드의 review / response 리포트는 디스크에 남아 있으므로 사용자는 `/deep-review --respond {path}` 로 임의 시점 리포트에 명시적으로 재대응 가능.
 
 ## 7. 비교 — 언제 무엇을 쓰나
@@ -199,7 +208,7 @@ findings_signature (Set<"{severity}:{file}:{line ±3}:{taxonomy_category}">) —
 |---|---|
 | 1회만 리뷰 받고 사람이 직접 판단 | `/deep-review` |
 | 리뷰 결과 받은 후 대응만 따로 | `/deep-review --respond` |
-| "리뷰 → 대응 → 재리뷰" 를 끝까지 자동화 | `/deep-review-loop` ← 본 커맨드 |
+| "리뷰 → 대응 → 재리뷰" 를 끝까지 자동화 | `deep-review-loop` ← 본 skill |
 | 외부 리뷰어 (PR) 코멘트 단발 대응 | `/deep-review --respond --source=pr` |
 
 ## 8. 출력 예시 (참고)
@@ -233,5 +242,5 @@ findings_signature (Set<"{severity}:{file}:{line ±3}:{taxonomy_category}">) —
 
 ## 9. 알려진 제한
 
-- 한 라운드가 매우 길어지는 경우(대형 diff + 3-way Codex), wrapper 가 별도 timeout 을 부과하지 않습니다. 개별 호출의 `_timeout 900` (codex-integration.md) 가 유일한 안전장치입니다.
-- `--source=pr` 모드는 한 라운드 안에서 PR 코멘트가 변하지 않으므로 의미 있는 반복이 어렵습니다. wrapper 는 이를 막지 않지만, 한 라운드만 의미가 있다고 안내합니다.
+- 한 라운드가 매우 길어지는 경우(대형 diff + 3-way Codex), skill 이 별도 timeout 을 부과하지 않습니다. 개별 호출의 `_timeout 900` (codex-integration.md) 가 유일한 안전장치입니다.
+- `--source=pr` 모드는 한 라운드 안에서 PR 코멘트가 변하지 않으므로 의미 있는 반복이 어렵습니다. skill 은 이를 막지 않지만, 한 라운드만 의미가 있다고 안내합니다.
