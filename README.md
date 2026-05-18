@@ -89,7 +89,7 @@ Each criterion is verified against the actual code changes.
 
 ### Stage 3: Deep Review
 
-An independent `code-reviewer` agent is spawned via the Agent tool with `model: opus` and `run_in_background: true`. Before spawning, the user is notified which reviewers will run (Opus-only or 3-way). It receives only the diff, rules, and contract — never the originating session context.
+An independent `code-reviewer` agent is spawned via the Agent tool with `model: opus` and `run_in_background: true`. In Codex/non-Claude runtimes, where Claude Code's Agent tool is unavailable, Deep Review uses `hooks/scripts/run-claude-reviewer.sh` to invoke the same reviewer through `claude -p --plugin-dir ... --agent code-reviewer`. Before spawning, the user is notified which reviewers will run (Opus-only or 3-way). It receives only the diff, rules, and contract — never the originating session context.
 
 The agent evaluates 5 criteria:
 

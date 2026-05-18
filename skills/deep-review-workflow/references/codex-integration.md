@@ -9,6 +9,8 @@
 - `codex_cli_path`: CLI 바이너리 절대 경로
 - `node_available`: Node.js 실행 가능 여부 (`command -v node`) **[v1.3.2 F2 신규]**
 - `node_path`: node 바이너리 절대 경로
+- `claude_cli`: Claude CLI 설치 여부 (`command -v claude`). Codex/non-Claude 런타임에서 Claude reviewer bridge를 실행할 때 필요.
+- `claude_cli_path`: Claude CLI 바이너리 절대 경로
 - `codex_installed`: 하위호환 — `codex_plugin` OR `codex_cli`. **[DEPRECATED — v1.4.0 에서 제거 예정, 새 소비자는 `codex_plugin` 직접 사용]**
 
 교차 검증에는 `codex_plugin=true`가 필요. CLI만 있으면 (codex_cli=true, codex_plugin=false) 교차 검증 불가, 플러그인 설치 안내.
@@ -58,9 +60,25 @@ Codex 3-way 리뷰 진입 전 반드시 확인:
 
 Codex가 사용 가능할 때 3개 리뷰를 **백그라운드에서 동시 실행**:
 
-1. **Claude Opus 서브에이전트** (Agent tool, model: opus, run_in_background: true)
+1. **Claude Opus reviewer**
    - 독립 컨텍스트에서 5가지 관점 리뷰
    - 항상 실행됨
+   - Claude Code 런타임: Agent tool (`code-reviewer`, model: opus, run_in_background: true)
+   - Codex / non-Claude 런타임: Agent tool이 없으므로 `hooks/scripts/run-claude-reviewer.sh`를 Bash로 실행. helper는 동일 prompt를 받아 `claude -p --plugin-dir "{CLAUDE_PLUGIN_ROOT}" --agent code-reviewer --model opus`를 호출한다.
+   - Codex의 `spawn_agent`로 대체 금지. 이는 Claude reviewer가 아니라 Codex reviewer라서 Opus + Codex review + Codex adversarial 3-way 계약을 깨뜨린다.
+   - `claude_cli=false` 또는 helper exit 127이면 Claude reviewer는 `not_attempted: claude_cli_unavailable`로 표시하고 N-way synthesis로 진행.
+
+   ```bash
+   prompt_file=$(mktemp "${TMPDIR:-/tmp}/deep-review-claude-prompt.XXXXXX")
+   output_file=$(mktemp "${TMPDIR:-/tmp}/deep-review-claude-output.XXXXXX")
+   # prompt_file에는 Agent tool에 전달할 동일 reviewer prompt를 기록한다.
+   "{CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-claude-reviewer.sh" \
+     --project-root "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" \
+     --plugin-root "{CLAUDE_PLUGIN_ROOT}" \
+     --prompt-file "$prompt_file" \
+     --output "$output_file" \
+     --model "opus"
+   ```
 
 2. **codex review** (Bash tool, run_in_background: true)
    - `_timeout 900 node "{codex_companion_path}" review {codex_target_flag}` — shim 정의를 command 시작부에 포함 (Preflight 섹션 참조)
