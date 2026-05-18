@@ -4,6 +4,10 @@
 
 AI 코딩 에이전트의 작업을 독립적으로 평가하는 Evaluator 플러그인 — Codex 연동 교차 모델 코드 리뷰와 Sprint Contract 지원.
 
+## Codex 호환성
+
+이번 릴리스는 `.codex-plugin/plugin.json` Codex 네이티브 플러그인 메타데이터와 `AGENTS.md` Codex 프로젝트 가이드를 포함합니다. Claude Code 매니페스트는 `.claude-plugin/plugin.json`에 그대로 유지되며, 기존 `claude-deep-suite` marketplace namespace를 유지해 기존 설치 키를 보존하면서 Codex는 suite의 `.agents/plugins/marketplace.json`을 읽습니다.
+
 > **v1.4.0** — `.deep-review/recurring-findings.json` 이 M3 cross-plugin envelope 으로 emit (cf. [`claude-deep-suite/docs/envelope-migration.md`](https://github.com/Sungmin-Cho/claude-deep-suite/blob/main/docs/envelope-migration.md)). Stage 3 receipt loader 는 envelope-aware 이며 소비된 deep-work session-receipt 의 `run_id` 를 `recurring-findings.envelope.parent_run_id` 로 chain (handoff §3.3). 6개월 마이그레이션 윈도우 동안 pre-envelope consumer 는 legacy emit 으로 fall-through 가능. Phase 2 adoption ledger 는 `claude-deep-suite/docs/envelope-migration.md` §6.1 이 single source. 자세한 마이그레이션 노트는 [CHANGELOG](./CHANGELOG.ko.md) 참고.
 
 ## 문제

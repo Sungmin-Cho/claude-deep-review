@@ -4,6 +4,10 @@
 
 An independent Evaluator plugin for AI coding agents — cross-model code review with Codex integration and Sprint Contract support.
 
+## Codex Compatibility
+
+This release includes native Codex plugin metadata in `.codex-plugin/plugin.json` and a Codex project guide in `AGENTS.md`. The Claude Code manifest remains in `.claude-plugin/plugin.json`, and the unchanged `claude-deep-suite` marketplace namespace lets existing installs keep their plugin keys while Codex reads the suite's `.agents/plugins/marketplace.json`.
+
 > **v1.4.0** — `.deep-review/recurring-findings.json` is now emitted as an M3 cross-plugin envelope (cf. [`claude-deep-suite/docs/envelope-migration.md`](https://github.com/Sungmin-Cho/claude-deep-suite/blob/main/docs/envelope-migration.md)). Stage 3 receipt loader is envelope-aware and chains the consumed deep-work session-receipt's `run_id` into `recurring-findings.envelope.parent_run_id` (handoff §3.3). The 6-month migration window allows pre-envelope consumers to fall through to legacy emit; the canonical Phase 2 adoption ledger lives in `claude-deep-suite/docs/envelope-migration.md` §6.1. See [CHANGELOG](./CHANGELOG.md) for the full migration note.
 
 ## The Problem

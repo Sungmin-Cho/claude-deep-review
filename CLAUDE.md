@@ -31,13 +31,13 @@ To check the current version: `jq -r .version .claude-plugin/plugin.json`
 
 Update the following in `/Users/sungmin/Dev/claude-plugins/deep-suite/`:
 
-- **`.claude-plugin/marketplace.json`** — under the `deep-review` entry: `sha` = full 40-character merge commit hash on the new `main`; description = one-line headline summary.
+- **`.claude-plugin/marketplace.json`** and **`.agents/plugins/marketplace.json`** — under the `deep-review` entry: `sha` = full 40-character merge commit hash on the new `main`; description = one-line headline summary.
 - **`README.md`** / **`README.ko.md`** — the `deep-review` row in the Plugins table and any narrative sections that reference the version.
 
 After editing:
 ```bash
 cd /Users/sungmin/Dev/claude-plugins/deep-suite
-git add .claude-plugin/marketplace.json README.md README.ko.md
+git add .claude-plugin/marketplace.json .agents/plugins/marketplace.json README.md README.ko.md
 git commit -m "chore: bump deep-review to vX.Y.Z — <one-line summary>"
 git push
 ```
@@ -45,7 +45,7 @@ git push
 ### 2. Update deep-review CHANGELOG (required)
 
 - Add a new version entry to `CHANGELOG.md`
-- Bump the version in `.claude-plugin/plugin.json` and `package.json`
+- Bump the version in `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, and `package.json`
 
 **Do NOT inline release notes in this CLAUDE.md** — CHANGELOG is the single source of truth.
 
@@ -55,7 +55,8 @@ git push
 
 ```
 deep-review/
-├── .claude-plugin/plugin.json     # plugin manifest
+├── .claude-plugin/plugin.json
+├── .codex-plugin/plugin.json     # plugin manifest
 ├── package.json                    # npm manifest (Node 20+, node:test runner)
 ├── agents/
 │   ├── code-reviewer.md           # Opus subagent (spawned by /deep-review, Stage 3)

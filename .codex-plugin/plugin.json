@@ -1,0 +1,37 @@
+{
+  "name": "deep-review",
+  "version": "1.6.1",
+  "description": "Independent Evaluator for AI coding agents with cross-model review workflows",
+  "author": {
+    "name": "Sungmin-Cho"
+  },
+  "repository": "https://github.com/Sungmin-Cho/claude-deep-review.git",
+  "license": "MIT",
+  "keywords": [
+    "code-review",
+    "evaluator",
+    "harness-engineering",
+    "quality"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Deep Review",
+    "shortDescription": "Independent code review workflow",
+    "longDescription": "Run independent review, adversarial review, Sprint Contract verification, recurring-finding capture, and evidence-based review response workflows.",
+    "developerName": "Sungmin-Cho",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "$deep-review:deep-review-workflow",
+      "$deep-review:deep-review-loop",
+      "$deep-review:receiving-review"
+    ],
+    "brandColor": "#111827",
+    "screenshots": []
+  }
+}
