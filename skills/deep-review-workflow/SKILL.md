@@ -69,18 +69,25 @@ user-invocable: false
 3. `*.min.js`, `*.lock`, `*.generated.*`, `vendor/`, `node_modules/` 외에도 300 KB를 초과하는 단일 파일은 기본 exclusion 후보로 표시하고 사용자에게 포함 여부 확인.
 4. Agent 호출이 size·token 오류로 실패하면 Stage 4의 "부분 성공" 경로로 처리하고 원인을 리포트에 기록. 무한 재시도 금지 (1회 재시도만 허용).
 
+**Claude reviewer 런타임 선택**
+
+- Claude Code 런타임: `Agent(code-reviewer, model: opus, run_in_background: true)` 를 사용한다.
+- Codex / non-Claude 런타임: Claude Code `Agent` tool이 없으므로 `hooks/scripts/run-claude-reviewer.sh` 를 Bash로 실행한다. 이 helper는 동일한 reviewer prompt를 받아 `claude -p --plugin-dir "{CLAUDE_PLUGIN_ROOT}" --agent code-reviewer --model opus` 로 Opus reviewer를 실행한다.
+- Codex의 `spawn_agent`로 대체하지 않는다. 그 결과는 Codex reviewer이지 Claude reviewer가 아니므로 3-way 독립성 계약을 만족하지 않는다.
+- `claude_cli=false` 또는 helper 실패 시 Claude reviewer는 `not_attempted`로 기록하고, 성공한 리뷰어만 N-way 합성한다.
+
 **Case 1: non-git (`is_git=false`)**
-→ Claude Opus 서브에이전트 단독 리뷰 (run_in_background: true). Codex companion 이 `ensureGitRepository` 로 즉시 에러 — 호출 경로 없음.
+→ Claude reviewer 단독 리뷰. Claude Code에서는 Agent tool, Codex/non-Claude에서는 `run-claude-reviewer.sh` bridge 사용. Codex companion 이 `ensureGitRepository` 로 즉시 에러 — 호출 경로 없음.
 
 **Case 2: git + `codex_plugin=false`**
-→ Claude Opus 서브에이전트 단독 리뷰 (run_in_background: true)
+→ Claude reviewer 단독 리뷰 (Claude Code Agent 또는 Codex CLI bridge)
 → 세션 내 최초 1회 안내:
   - codex_cli=false: Codex 플러그인 설치 안내
   - codex_cli=true: "CLI가 감지되었지만 플러그인이 필요합니다" 안내
 
 **Case 3: git + `codex_plugin=true`** (첫 커밋 전 상태도 포함)
 → 3-way 병렬 백그라운드 실행:
-  1. Agent(code-reviewer, model: opus, run_in_background: true) — 독립 리뷰
+  1. Claude reviewer — Claude Code에서는 Agent(code-reviewer, model: opus, run_in_background: true), Codex/non-Claude에서는 `run-claude-reviewer.sh` CLI bridge
   2. Bash(_timeout 900 node "{codex_companion_path}" review {codex_target_flag}, run_in_background: true) — 코드 리뷰 (`_timeout`은 `references/codex-integration.md` preflight 섹션의 portable shim)
   3. Bash (run_in_background: true) — adversarial-review를 **단일 Bash 호출 내에 inline**으로 실행한다. mktemp 생성 → here-doc으로 focus_text 주입 → `_timeout 900 node ... adversarial-review ... - < "$focus_file"` 호출 → 종료 후 `rm -f` 정리. 별도 Bash에 `$focus_file`을 넘기면 subshell 경계에서 unset되므로 **반드시 같은 Bash command 문자열 안에서 완결**. 상세 예제는 `commands/deep-review.md` Stage 3 참조. mktemp 경로는 `"${TMPDIR:-/tmp}/deep-review-focus.XXXXXX"` 형식 — 고정 경로 사용 금지.
 

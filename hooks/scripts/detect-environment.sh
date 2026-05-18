@@ -14,6 +14,18 @@ emit_node_availability() {
   echo "node_path=$node_path"
 }
 
+# Claude reviewer bridge availability for Codex/non-Claude runtimes.
+emit_claude_cli_availability() {
+  local claude_cli="false"
+  local claude_cli_path=""
+  if command -v claude >/dev/null 2>&1; then
+    claude_cli="true"
+    claude_cli_path="$(command -v claude)"
+  fi
+  echo "claude_cli=$claude_cli"
+  echo "claude_cli_path=$claude_cli_path"
+}
+
 # === 1. Git 리포지터리 여부 ===
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "is_git=false"
@@ -27,6 +39,7 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   # 새 소비자는 `codex_plugin` 직접 사용. 현재는 하위호환을 위해 유지.
   echo "codex_installed=false"
   emit_node_availability
+  emit_claude_cli_availability
   exit 0
 fi
 
@@ -83,6 +96,7 @@ if ! git rev-parse HEAD >/dev/null 2>&1; then
     echo "codex_installed=false"
   fi
   emit_node_availability
+  emit_claude_cli_availability
   exit 0
 fi
 
@@ -192,3 +206,6 @@ fi
 
 # 5d. F2 — Node.js 가용성 (Codex companion 은 .mjs 이므로 node 필수)
 emit_node_availability
+
+# 5e. Codex/non-Claude runtime에서 Claude reviewer를 실행하기 위한 CLI bridge.
+emit_claude_cli_availability

@@ -14,6 +14,6 @@
     "quality"
   ],
   "scripts": {
-    "test": "node --test tests/envelope-emit.test.js tests/envelope-chain.test.js"
+    "test": "node --test tests/envelope-emit.test.js tests/envelope-chain.test.js && bash hooks/scripts/test/test-codex-claude-reviewer.sh"
   }
 }
