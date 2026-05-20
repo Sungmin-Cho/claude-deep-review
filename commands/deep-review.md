@@ -36,6 +36,9 @@ config.yaml이 없으면 기본값으로 생성:
 ```yaml
 review_model: opus
 codex_notified: false
+agy_notified: false
+agy_enabled: true
+agy_sensitive_acked_fingerprint: ""
 last_review: null
 app_qa:
   last_command: null
@@ -56,6 +59,38 @@ auto_recover
 - `restore_attempts` 카운터가 3 이상이면 사용자 에스컬레이션.
 - `--respond` 모드에서도 동일하게 호출 — stale mutation 이 다음 리뷰로 새어나가지 않도록.
 - 상세는 `skills/deep-review-workflow/references/codex-integration.md` 참조.
+
+### 0.2 agy 필드 마이그레이션 (v1.6.x → v1.7.0+)
+
+`auto_recover` 완료 후, config.yaml 에 agy 관련 필드가 없는 v1.6.x 사용자를 위해 idempotent 마이그레이션을 수행한다:
+
+```bash
+# Migration: probe each new agy field independently. Anchor on last_review:
+# (value-agnostic) — NOT on codex_notified: false (W-R5-1 bug: value can be true).
+# Use `grep -q '^name:' .deep-review/config.yaml` with SPACE before filename.
+grep -q '^agy_notified:'                    .deep-review/config.yaml || NEED_NOTIFIED=1
+grep -q '^agy_enabled:'                     .deep-review/config.yaml || NEED_ENABLED=1
+grep -q '^agy_sensitive_acked_fingerprint:' .deep-review/config.yaml || NEED_ACK=1
+
+block=""
+[ "${NEED_NOTIFIED:-0}" = 1 ] && block="${block}agy_notified: false"$'\n'
+[ "${NEED_ENABLED:-0}"  = 1 ] && block="${block}agy_enabled: true"$'\n'
+[ "${NEED_ACK:-0}"      = 1 ] && block="${block}agy_sensitive_acked_fingerprint: \"\""$'\n'
+
+if [ -n "$block" ]; then
+  # Use Edit tool, not Write — preserve user-customized review_model / last_review / app_qa
+  # The `new_string` is DYNAMICALLY built so partial migrations don't duplicate keys
+  # or reset user's `agy_enabled: false` to `true` (R5/R6 carry-forward).
+  Edit(file_path: ".deep-review/config.yaml",
+       old_string: "last_review:",
+       new_string: "${block}last_review:")
+fi
+```
+
+**주의사항:**
+- `grep -q '^agy_notified:'` — 행 시작(`^`) 앵커와 파일명 앞 **공백**이 필수 (W-R5-1: 공백 누락 시 silent no-match).
+- 앵커를 `codex_notified: false` 값에 두지 않음 — v1.6.x 사용자는 이미 `codex_notified: true` 상태일 수 있어 마이그레이션 no-op 가능성 있음 (C-R5-3).
+- `block` 변수를 NEED_* 플래그로 동적으로 구성 — 부분 마이그레이션(키 일부만 없는 경우)에서도 중복 삽입 없음.
 
 ## Steps (리뷰 모드)
 
@@ -1048,6 +1083,9 @@ mkdir -p .deep-review/journeys
 # .deep-review/config.yaml
 review_model: opus
 codex_notified: false
+agy_notified: false
+agy_enabled: true
+agy_sensitive_acked_fingerprint: ""
 last_review: null
 app_qa:
   last_command: null
