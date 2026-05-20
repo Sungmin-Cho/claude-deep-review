@@ -107,6 +107,10 @@ Codex 또는 다른 non-Claude 런타임에서는 `claude_cli` / `claude_cli_pat
 - "shallow clone에서는 review base가 부정확할 수 있습니다. `git fetch --unshallow`를 권장합니다." 안내
 - HEAD~1 fallback으로 진행
 
+**agy 변수 (v1.7.0 신규)**:
+- `agy_cli`, `agy_cli_path`, `agy_version` — `_emit_agy_vars` 가 모든 detection path 에서 emit (Task 2)
+- `agy_enabled` (config) — false 면 detection 결과와 무관하게 reviewer 제외
+
 ### 2. 변경사항 수집 (Stage 1: Collect)
 
 환경에 따라 diff를 수집합니다:
@@ -245,6 +249,22 @@ deep-work v6.5.0+ 부터 session-receipt 는 M3 envelope-wrapped (`{schema_versi
   7. receipt 없음 → skip (에러 아님).
 
 slice receipt (`.deep-work/<sid>/receipts/SLICE-*.json`) 도 동일 패턴이 필요한 경우 같은 envelope-aware 로직 (`producer=deep-work`, `artifact_kind=slice-receipt`) 으로 unwrap 한다. v1.4.0 에서는 slice receipt 직접 read path 가 없지만 향후 추가 시 본 패턴 미러.
+
+**리뷰어 열거 (reviewer enumeration):**
+
+```text
+reviewers_planned = ["opus"]                   # always
+if codex_plugin && node_available:
+    reviewers_planned += ["codex-review", "codex-adversarial"]
+if agy_cli && agy_enabled:                     # honor config opt-out
+    reviewers_planned += ["agy"]
+N_planned = len(reviewers_planned)             # 1, 2, 3, or 4
+
+# N_planned is recomputed after Stage 2.5 acknowledgment may have removed agy.
+# See Stage 3.5 user notice for the final N value source.
+```
+
+**중요 invariant**: `agy_enabled: false` (config opt-out) excludes agy from `reviewers_planned`, AND (per §3.3 mutation gating unchanged) it means `agy_cli=true, agy_enabled=false, codex_plugin=false` triggers **no** mutation prompt — verified by §5.5 scenario #7 (Task 16 manual dogfooding).
 
 **유저 고지 (리뷰어 spawn 직전):**
 
