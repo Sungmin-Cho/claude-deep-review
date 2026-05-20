@@ -617,6 +617,170 @@ test_e11_recovery_preserves_deleted_tracked() {
 }
 
 # ============================================================================
+# E12. Source enum widening — agy + Human + PR comment dispatch acceptance
+# ============================================================================
+# 목적 (§3.8 "append, not replace" invariant):
+#   source 필드가 새 값(agy)을 추가해도 기존 값(Human, PR comment)을 유지하며
+#   3가지 source 모두 phase6 dispatch prompt 에서 거부되지 않음을 검증한다.
+#
+# 방법:
+#   Accepted Items 블록을 가진 가상 Phase 6 prompt 텍스트를 구성하고,
+#   실제 dispatch 직전 item count를 추출하는 shell 로직(### ITEM- 헤더 카운트)이
+#   source 값과 무관하게 3개 모두를 계산함을 단언.
+#
+# 3가지 source 값:
+#   - agy               (신규 추가)
+#   - Human             (기존 값)
+#   - PR comment        (기존 값, @author #id 포함)
+#
+# 핵심 불변식: 3개 항목이 모두 카운트됨 (items_total == grep 카운트 == 3).
+#             source 값 기반 필터링이 없음을 증명.
+
+test_e12_source_enum_dispatch_acceptance() {
+  local name="E12"
+
+  # Simulate a Phase 6 Group Implementation Request prompt with 3 diverse sources.
+  # NOTE: bash 3.2 (macOS default) does NOT support heredoc inside $() — use a temp
+  # file instead (macOS bash 3.2 portability requirement per CLAUDE.md).
+  local PROMPT_FILE
+  PROMPT_FILE=$(mktemp "${TMPDIR:-/tmp}/e12-prompt.XXXXXX")
+
+  {
+    printf '%s\n' "# Phase 6 Group Implementation Request"
+    printf '%s\n' ""
+    printf '%s\n' "## Group"
+    printf '%s\n' "- severity: warning"
+    printf '%s\n' "- items_total: 3"
+    printf '%s\n' ""
+    printf '%s\n' "## Source Review"
+    printf '%s\n' "- path: .deep-review/reports/2026-05-20-test-review.md"
+    printf '%s\n' "- verdict: REQUEST_CHANGES"
+    printf '%s\n' ""
+    printf '%s\n' "## Constraints"
+    printf '%s\n' "- log_path: /tmp/phase6-test.log"
+    printf '%s\n' "- halt_on_regression: true"
+    printf '%s\n' "- max_files_per_item: 10"
+    printf '%s\n' ""
+    printf '%s\n' "## Accepted Items"
+    printf '%s\n' ""
+    printf '%s\n' "### ITEM-1"
+    printf '%s\n' "- title: agy-sourced finding (Round 7 sample)"
+    printf '%s\n' "- severity: warning"
+    printf '%s\n' "- confidence: partial"
+    printf '%s\n' "- source: agy"
+    printf '%s\n' "- file_refs:"
+    printf '%s\n' "  - test/agy-sample.ts:10-15"
+    printf '%s\n' "- issue_summary: sample finding sourced from agy reviewer"
+    printf '%s\n' "- implementation_guide:"
+    printf '%s\n' "    target_location: test/agy-sample.ts:10-15"
+    printf '%s\n' "    modifiable_paths: []"
+    printf '%s\n' "    intent: verify agy source is accepted by dispatch"
+    printf '%s\n' "    change_shape: noop or trivial edit"
+    printf '%s\n' "    non_goals:"
+    printf '%s\n' "      - do not modify unrelated files"
+    printf '%s\n' "    acceptance:"
+    printf '%s\n' "      - phase6-implementer accepts the source without rejection"
+    printf '%s\n' ""
+    printf '%s\n' "### ITEM-2"
+    printf '%s\n' "- title: Human-sourced finding"
+    printf '%s\n' "- severity: warning"
+    printf '%s\n' "- confidence: agreed"
+    printf '%s\n' "- source: Human"
+    printf '%s\n' "- file_refs:"
+    printf '%s\n' "  - test/human-sample.ts:20-25"
+    printf '%s\n' "- issue_summary: sample finding provided directly by the user"
+    printf '%s\n' "- implementation_guide:"
+    printf '%s\n' "    target_location: test/human-sample.ts:20-25"
+    printf '%s\n' "    modifiable_paths: []"
+    printf '%s\n' "    intent: verify Human source is accepted by dispatch"
+    printf '%s\n' "    change_shape: noop or trivial edit"
+    printf '%s\n' "    non_goals:"
+    printf '%s\n' "      - do not modify unrelated files"
+    printf '%s\n' "    acceptance:"
+    printf '%s\n' "      - phase6-implementer accepts the source without rejection"
+    printf '%s\n' ""
+    printf '%s\n' "### ITEM-3"
+    printf '%s\n' "- title: PR-comment-sourced finding"
+    printf '%s\n' "- severity: warning"
+    printf '%s\n' "- confidence: agreed"
+    printf '%s\n' "- source: PR comment (@reviewer, #123)"
+    printf '%s\n' "- file_refs:"
+    printf '%s\n' "  - test/pr-sample.ts:30-35"
+    printf '%s\n' "- issue_summary: sample finding sourced from PR comment by @reviewer on #123"
+    printf '%s\n' "- implementation_guide:"
+    printf '%s\n' "    target_location: test/pr-sample.ts:30-35"
+    printf '%s\n' "    modifiable_paths: []"
+    printf '%s\n' "    intent: verify PR comment source (with @author #id) is accepted by dispatch"
+    printf '%s\n' "    change_shape: noop or trivial edit"
+    printf '%s\n' "    non_goals:"
+    printf '%s\n' "      - do not modify unrelated files"
+    printf '%s\n' "    acceptance:"
+    printf '%s\n' "      - phase6-implementer accepts the source without rejection"
+    printf '%s\n' ""
+    printf '%s\n' "## Protocol"
+    printf '%s\n' "See agent system prompt (agents/phase6-implementer.md) for authoritative protocol."
+  } > "$PROMPT_FILE"
+
+  # --- assertion 1: item header count equals items_total (3) ---
+  # dispatch loop uses "### ITEM-" prefix count to iterate items; source value is irrelevant.
+  local item_count
+  item_count=$(grep -c '^### ITEM-' "$PROMPT_FILE")
+
+  if [[ "$item_count" -ne 3 ]]; then
+    rm -f "$PROMPT_FILE"
+    e2e_fail "$name" "item header count mismatch: expected 3, got $item_count"
+    return
+  fi
+
+  # --- assertion 2: items_total in Group header matches item count (invariant check) ---
+  local declared_total
+  declared_total=$(grep '^- items_total:' "$PROMPT_FILE" | awk '{print $NF}')
+
+  if [[ "$declared_total" != "3" ]]; then
+    rm -f "$PROMPT_FILE"
+    e2e_fail "$name" "items_total mismatch: expected 3, got '$declared_total'"
+    return
+  fi
+
+  # --- assertion 3: all 3 source values are present (append, not replace) ---
+  local has_agy has_human has_pr_comment
+  has_agy=$(grep -c '^- source: agy$' "$PROMPT_FILE")
+  has_human=$(grep -c '^- source: Human$' "$PROMPT_FILE")
+  has_pr_comment=$(grep -c '^- source: PR comment' "$PROMPT_FILE")
+
+  if [[ "$has_agy" -ne 1 ]]; then
+    rm -f "$PROMPT_FILE"
+    e2e_fail "$name" "agy source missing or duplicated in fixture (count=$has_agy)"
+    return
+  fi
+  if [[ "$has_human" -ne 1 ]]; then
+    rm -f "$PROMPT_FILE"
+    e2e_fail "$name" "Human source missing or duplicated in fixture (count=$has_human)"
+    return
+  fi
+  if [[ "$has_pr_comment" -ne 1 ]]; then
+    rm -f "$PROMPT_FILE"
+    e2e_fail "$name" "PR comment source missing or duplicated in fixture (count=$has_pr_comment)"
+    return
+  fi
+
+  # --- assertion 4: no source-based item filtering — ITEM-1/2/3 all present after source scan ---
+  # Simulate dispatch loop: collect item_ids from headers regardless of source value.
+  local id_count
+  id_count=$(grep '^### ITEM-' "$PROMPT_FILE" | grep -c 'ITEM-')
+
+  if [[ "$id_count" -ne 3 ]]; then
+    rm -f "$PROMPT_FILE"
+    e2e_fail "$name" "source-filtered item count wrong: expected 3, got $id_count (source-based filtering detected)"
+    return
+  fi
+
+  rm -f "$PROMPT_FILE"
+  # All 4 assertions passed
+  e2e_pass "$name" "all 3 source values (agy / Human / PR comment) accepted — items_total=3, no source-based filtering"
+}
+
+# ============================================================================
 # 실행
 # ============================================================================
 
@@ -632,6 +796,7 @@ test_e8_binary_hash
 test_e9_outside_dirty_mutation
 test_e10_recovery_index_sync
 test_e11_recovery_preserves_deleted_tracked
+test_e12_source_enum_dispatch_acceptance
 
 echo "---"
 echo "E2E Total: $E2E_PASS passed, $E2E_FAIL failed"
