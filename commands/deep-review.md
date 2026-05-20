@@ -356,9 +356,14 @@ N_planned = len(reviewers_planned)             # 1, 2, 3, or 4
 
 **유저 고지 (리뷰어 spawn 직전):**
 
-리뷰어를 spawn하기 직전, 실행되는 리뷰어 구성에 따라 고지:
-- Opus 단독 (Case 1/2): "Opus 리뷰를 백그라운드에서 실행합니다. 완료되면 결과를 알려드리겠습니다."
-- 3-way (Case 3): "3개 리뷰어(Opus, Codex review, Codex adversarial)를 백그라운드에서 실행합니다. 완료되면 결과를 합성하여 알려드리겠습니다."
+리뷰어를 spawn하기 직전, 실행되는 리뷰어 구성(N_planned)에 따라 고지:
+
+| N | Message |
+|---|---|
+| 4 | "4개 리뷰어(Opus, Codex review, Codex adversarial, agy)를 백그라운드에서 실행합니다. 완료되면 결과를 합성하여 알려드리겠습니다." |
+| 3 | "3개 리뷰어(Opus, Codex review, Codex adversarial)를 백그라운드에서 실행합니다. 완료되면 결과를 합성하여 알려드리겠습니다." |
+| 2 | "2개 리뷰어(<composition>)를 백그라운드에서 실행합니다. 완료되면 결과를 합성하여 알려드리겠습니다." |
+| 1 | "Opus 리뷰를 백그라운드에서 실행합니다. 완료되면 결과를 알려드리겠습니다." |
 
 **Claude Opus reviewer (항상 시도):**
 
@@ -391,6 +396,16 @@ N_planned = len(reviewers_planned)             # 1, 2, 3, or 4
 2. codex:review를 시도하기 전에 Codex가 실제로 동작하는지 확인
 3. 실패 시 (인증 오류, 타임아웃 등): Codex 결과를 "미수행"으로 표시하고 Claude Opus 단독으로 fallback
 4. 합성 시 미수행 리뷰어는 제외 (3-way가 아닌 실제 수행된 리뷰어 수 기준)
+
+**agy preflight (agy가 reviewers_planned에 포함된 경우):**
+```bash
+# agy preflight (W-R5-1 / W-R7-1 fix: use $agy_cli_path for deterministic binding, NOT literal `agy`).
+_timeout 10 "$agy_cli_path" --version >/dev/null 2>&1 && AGY_PREFLIGHT=OK || AGY_PREFLIGHT=FAIL
+if [ "$AGY_PREFLIGHT" = "FAIL" ]; then
+  AGY_STATUS="not_attempted:agy_preflight_failed"
+  # Remove agy from reviewers_planned, recompute N_planned
+fi
+```
 
 **Stage 3.0: Mutation 허가 플로우 (codex_invisible 감지 시)**
 
@@ -499,6 +514,21 @@ Codex 리뷰 대상은 change_state에 따라 결정:
   - 호출 1에서 `focus_file=$(mktemp …)` 로 변수만 만들고 후속 Bash에서 `$focus_file` 참조 → **subshell 경계 넘지 못해 unset**. 절대 사용 금지.
   - `trap 'rm -f "$focus_file"' EXIT` 을 호출 1에 등록 → 호출 1의 EXIT가 즉시 발생해 background 호출 2가 파일을 읽기 전에 선제 삭제. Option A 내부에서만 trap을 사용한다.
   - `/tmp/deep-review-focus.txt` 같은 predictable name 사용 → race/symlink 공격.
+
+4. **agy reviewer** (Bash tool, run_in_background: true)
+
+  ```
+  Bash({ command: '
+  "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-agy-reviewer.sh" \
+    --binary "$agy_cli_path" \
+    --project-root "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" \
+    --prompt-file "$prompt_file" \
+    --output "$output_file" \
+    --timeout-seconds 900
+  ', run_in_background: true })
+  ```
+
+  Orchestrator passes `--binary "$agy_cli_path"` (Stage 1 detection result) for deterministic binding independent of subsequent `$PATH` mutations. Bridge's internal resolution (`--binary` → `$AGY_BINARY` → `command -v agy`) only activates if `--binary` was not passed (e.g., direct CLI tests).
 
 여기서 `{codex_target_flag}`는:
 - clean 또는 WIP 커밋 후: `--base {review_base}`
