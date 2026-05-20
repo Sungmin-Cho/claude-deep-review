@@ -4,6 +4,19 @@ on:
   push:
     branches: [main]
   pull_request:
+    paths:
+      - 'hooks/scripts/detect-environment.sh'
+      - 'hooks/scripts/mutation-protocol.sh'
+      - 'hooks/scripts/run-agy-reviewer.sh'
+      - 'hooks/scripts/run-claude-reviewer.sh'
+      - 'hooks/scripts/test/test-mutation-protocol.sh'
+      - 'hooks/scripts/test/test-detect-environment.sh'
+      - 'hooks/scripts/test/test-run-agy-reviewer.sh'
+      - 'hooks/scripts/envelope.js'
+      - 'hooks/scripts/wrap-recurring-findings-envelope.js'
+      - 'tests/**'
+      - 'package.json'
+      - '.github/workflows/tests.yml'
 
 permissions:
   contents: read
@@ -32,3 +45,9 @@ jobs:
 
       - name: Run mutation-protocol bash regression (M5.5 #5 + stat cross-platform fix)
         run: bash hooks/scripts/test/test-mutation-protocol.sh
+
+      - name: detect-environment smoke test
+        run: bash hooks/scripts/test/test-detect-environment.sh
+
+      - name: run-agy-reviewer bridge test
+        run: bash hooks/scripts/test/test-run-agy-reviewer.sh
