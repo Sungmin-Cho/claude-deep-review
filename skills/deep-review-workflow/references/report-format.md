@@ -13,7 +13,7 @@
 
 ## Summary
 - **Verdict**: {APPROVE | REQUEST_CHANGES | CONCERN}
-- **Review Mode**: {Claude Opus Only | 3-way Cross-Model}
+- **Review Mode**: {Claude Opus Only | 2-way Cross-Model | 3-way Cross-Model | 4-way Cross-Model}
 - **Issues**: {🔴 N건, 🟡 N건, ℹ️ N건}
 
 ## Sprint Contract: {SLICE-ID} (있을 때만)
@@ -22,9 +22,11 @@
 | {description} | {✅ PASS / ❌ FAIL / ⚠️ PARTIAL / ⏭️ SKIP} | {evidence} |
 
 ## Cross-Model Verification (Codex 사용 시)
-| 항목 | Claude | Codex | Codex Adversarial | 확신도 |
-|------|--------|-------|-------------------|--------|
-| {issue} | {🔴/🟡/—} | {🔴/🟡/—} | {🔴/🟡/—} | {높음/중간/낮음} |
+| 항목 | Claude (Opus) | Codex Review | Codex Adversarial | agy | Agreement |
+|---|---|---|---|---|---|
+| (issue) | ✓ / – | ✓ / – | ✓ / – | ✓ / – | unanimous_4 / majority_3_of_4 / split_2_of_4 / solo_1_of_4 |
+
+> For N < 4 modes, the agy column is omitted (or shown as `(not run)`).
 
 ## Code Review
 ### 🔴 Critical
@@ -45,3 +47,22 @@
 - 🟡만 있고 전원 일치 → REQUEST_CHANGES
 - 🟡만 있고 의견 분리 → CONCERN (사람에게 에스컬레이션)
 - 🟢만 → APPROVE
+
+### Per-finding annotations (4-way mode)
+
+When `Review Mode: 4-way Cross-Model`, each finding includes:
+- `agreement: unanimous_4 | majority_3_of_4 | split_2_of_4 | solo_1_of_4`
+- For `majority_3_of_4`: `dissenter: <reviewer-name>`, `dissenter_family: anthropic | openai | google`, `dissent_summary: <one line>`
+
+This preserves cross-vendor-family signal even when the majority threshold (3/4) is met — a dissent from the sole Google reviewer (agy) is treated as informationally distinct from intra-family dissent.
+
+### Degraded mode marker
+
+When `opus_status != success AND N_actual_external ≤ 1`, the Summary records:
+
+```
+Verdict: CONCERN
+Summary.degraded: opus_failed_low_confidence
+```
+
+This is deterministic (no AskUserQuestion at synthesis) — see spec §4.3.1 for the rationale.
