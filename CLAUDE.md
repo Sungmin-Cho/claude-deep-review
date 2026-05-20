@@ -1,6 +1,6 @@
 # deep-review — Project Guide for Claude
 
-Independent Evaluator for AI coding agents — runs a separate Opus subagent for cross-model code review (with optional Codex 3-way verification), Sprint Contract verification, entropy scanning, and a structured 6-phase response protocol for evidence-based feedback handling.
+Independent Evaluator for AI coding agents — runs a separate Opus subagent for cross-model code review (with optional Codex 최대 4-way verification), Sprint Contract verification, entropy scanning, and a structured 6-phase response protocol for evidence-based feedback handling.
 
 For detailed version history see [`CHANGELOG.md`](CHANGELOG.md). This file is intentionally short — it holds the overview, structure, and drift-resistant conventions only.
 
@@ -10,7 +10,7 @@ To check the current version: `jq -r .version .claude-plugin/plugin.json`
 
 ## Project Overview
 
-**deep-review** is a [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugin that reviews changes through a separate evaluator subagent — never the Generator. Inspired by Anthropic's [Harness Design](https://www.anthropic.com/engineering/harness-design-long-running-apps), it structurally eliminates self-approval bias through Generator-Evaluator separation. When the Codex plugin is installed it expands into 3-way parallel review (Opus + Codex review + Codex adversarial).
+**deep-review** is a [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugin that reviews changes through a separate evaluator subagent — never the Generator. Inspired by Anthropic's [Harness Design](https://www.anthropic.com/engineering/harness-design-long-running-apps), it structurally eliminates self-approval bias through Generator-Evaluator separation. When the Codex plugin is installed it expands into 최대 4-way parallel review (Opus + Codex review + Codex adversarial + agy); agy is included only when the agy CLI is detected.
 
 **The 5-stage review pipeline** runs in fixed order:
 1. **Collect** — git state detection (`change_state`, `review_base`, diff content)
@@ -81,7 +81,7 @@ deep-review/
 │   │       ├── review-criteria.md     # Correctness, Architecture, Entropy, Test coverage, Readability
 │   │       ├── contract-schema.md     # Sprint Contract YAML shape + auto/manual/mixed verification
 │   │       ├── report-format.md       # Findings output (🔴 Critical, 🟡 Warning, ℹ️ Info)
-│   │       └── codex-integration.md   # Preflight, 3-way parallel, timeout/auth handling
+│   │       └── codex-integration.md   # Preflight, 최대 4-way parallel, timeout/auth handling
 │   ├── deep-review-loop/          # v1.6.0+ — user-invocable skill: review ↔ respond auto-iteration (was commands/deep-review-loop.md in v1.5.x)
 │   │   └── SKILL.md
 │   └── receiving-review/          # Stage 5 response protocol
@@ -174,7 +174,7 @@ item_id: <string>
 title: <string>
 severity: critical | warning | info
 confidence: agreed | partial
-source: opus | codex-review | codex-adversarial
+source: opus | codex-review | codex-adversarial | agy | Human | PR comment (@author, #id)
 file_refs: [path, ...]
 issue_summary: <string>
 implementation_guide:
@@ -186,6 +186,8 @@ implementation_guide:
   acceptance: <test command>
 ```
 
+Phase 6 `source` enum: `opus | codex-review | codex-adversarial | agy | Human | PR comment (@author, #id)` — `agy` is **appended** to the existing enum, not replacing other values.
+
 The subagent only does **execution mechanics** (Edit, test, commit). If the `implementation_guide` is ambiguous, it sets `status: error` on that item and continues — it never re-evaluates accept/reject decisions.
 
 **Main-session Step 5 verification** — compares the post-implement git diff (`git hash-object` per file) against the allowlist (DELTA). NEW_PATHS / REVERTED mismatches → `execution_status=error`; recovers from per-file content baselines in `.deep-review/tmp/phase6-<severity>-baseline/`. Preserves the tracked-but-deleted WIP distinction (` D` vs `D `).
@@ -196,6 +198,11 @@ The subagent only does **execution mechanics** (Edit, test, commit). If the `imp
 
 - **Per-machine** (`.gitignore`d): `.deep-review/config.yaml`, `reports/`, `responses/`, `entropy-log.jsonl`, `.pending-mutation.json`
 - **Shared** (tracked): `.deep-review/rules.yaml` (inferential style/architecture rules), `contracts/`, `fitness.json` (deep-work health rules)
+
+**agy-related config flags** (all stored in `.deep-review/config.yaml`):
+- `agy_notified: false` — 1-time install hint suppression
+- `agy_enabled: true` — permanent opt-out (set false to skip agy regardless of detection)
+- `agy_sensitive_acked_fingerprint: ""` — SHA-256 of last-acked sensitive-file scan (§4.5.1)
 
 ---
 
