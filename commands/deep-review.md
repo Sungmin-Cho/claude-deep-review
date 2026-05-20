@@ -221,6 +221,94 @@ PY
 - `--contract SLICE-NNN`으로 archived contract를 명시적으로 지정한 경우: "SLICE-{NNN}은 archived 상태입니다. 리뷰를 계속할까요?" 확인.
 - `criteria`가 비어있으면: contract 검증 건너뜀 (Stage 3만 실행).
 
+### 2.5 agy sensitive-file acknowledgment (pre-spawn gate, fingerprint-based)
+
+agy 가 `reviewers_planned` 에 포함되어 있으면 (Task 7 의 enumeration) Stage 3 spawn **전에** 이 게이트를 실행. 아니면 skip.
+
+**Critical (R7 carry-forward C-R7-1)**: `scan_sensitive_files` 은 `mutation-protocol.sh` 의 bash function 이며 외부 명령이 아니다. `xargs` 로 호출 불가. while-read 루프 사용:
+
+```bash
+source "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/mutation-protocol.sh"
+
+# Portable sha256 shim (W-R7-5).
+_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1
+  elif command -v shasum   >/dev/null 2>&1; then shasum -a 256 | cut -d' ' -f1
+  else openssl dgst -sha256 -r | cut -d' ' -f1
+  fi
+}
+
+# Build file list — depth-limited, common-dir excluded (I-R7-2 stderr captured).
+project_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+paths_file=$(mktemp "${TMPDIR:-/tmp}/agy-paths.XXXXXX")
+find_err=$(mktemp "${TMPDIR:-/tmp}/agy-find-err.XXXXXX")
+find "$project_root" -maxdepth 5 -type f \
+  -not -path '*/.git/*' \
+  -not -path '*/node_modules/*' \
+  -not -path '*/.venv/*' \
+  -not -path '*/__pycache__/*' \
+  -not -path '*/dist/*' \
+  -not -path '*/build/*' \
+  -not -path '*/target/*' \
+  -print0 2>"$find_err" > "$paths_file"
+if [ -s "$find_err" ]; then
+  echo "⚠️ agy scan: find encountered errors (see $find_err)" >&2
+fi
+
+# C-R7-1 fix: while-read invocation (xargs can NOT call bash functions).
+hits=""
+while IFS= read -r -d '' f; do
+  if scan_sensitive_files "$f" 2>/dev/null | grep -q .; then
+    hits="${hits}${f}"$'\n'
+  fi
+done < "$paths_file"
+hits="${hits%$'\n'}"
+rm -f "$paths_file" "$find_err"
+
+# Compute current fingerprint.
+if [ -z "$hits" ]; then
+  current_fingerprint=$(printf '' | _sha256)
+else
+  current_fingerprint=$(printf '%s\n' "$hits" | sort -u | tr '\n' '\0' | _sha256)
+fi
+
+# Read stored fingerprint from config.
+stored=$(grep '^agy_sensitive_acked_fingerprint:' .deep-review/config.yaml \
+         | sed -E 's/^agy_sensitive_acked_fingerprint: *"?([^"]*)"?$/\1/')
+
+# Decision logic (W-R7-2 fix: special-case empty stored as wildcard for no-hits clean repo).
+if [ "$current_fingerprint" = "$stored" ]; then
+  : # silent proceed (user already saw this exact set)
+elif [ -z "$stored" ] && [ -z "$hits" ]; then
+  # Clean repo first run — silently set sentinel, no prompt.
+  Edit(file_path: ".deep-review/config.yaml",
+       old_string: "agy_sensitive_acked_fingerprint: \"\"",
+       new_string: "agy_sensitive_acked_fingerprint: \"${current_fingerprint}\"")
+else
+  # Sensitive set differs from last ack (or first ack with hits) — prompt user.
+  # AskUserQuestion shown BEFORE any reviewer is spawned (safe — not at synthesis).
+  AskUserQuestion(
+    question: "agy reviewer will walk this repository's filesystem (--add-dir). Sensitive-pattern files detected (compared against last acknowledgment): ${hits_summary_max_20}. Proceed with agy for cross-vendor review?",
+    options: [
+      { label: "Y — proceed and remember this fingerprint",
+        description: "Updates agy_sensitive_acked_fingerprint to ${current_fingerprint}." },
+      { label: "N — skip agy this run, do not persist fingerprint",
+        description: "agy removed from reviewers_planned this run only; you will be re-prompted next run." }
+    ]
+  )
+  if user_choice == "Y":
+    Edit(... agy_sensitive_acked_fingerprint: "${current_fingerprint}")
+  else:
+    reviewers_planned = [r for r in reviewers_planned if r != "agy"]
+    # W-R7-6 fix: do NOT touch agy_notified — that flag is for install hints, not ack.
+fi
+
+# Recompute N_planned after potential agy removal (I-R5-1 fix).
+N_planned = len(reviewers_planned)
+```
+
+**중요 — 이 코드 블록은 runtime 동작의 문서화**. 실제 실행은 Claude Code 가 본 markdown 의 의도를 읽어 수행. `Edit(...)`, `AskUserQuestion(...)`, `user_choice` 같은 표현은 Edit tool 호출과 user prompt 결과를 의미하는 pseudocode 임.
+
 ### 4. 리뷰 실행 (Stage 3: Deep Review)
 
 **fitness.json 주입 (있으면):**
