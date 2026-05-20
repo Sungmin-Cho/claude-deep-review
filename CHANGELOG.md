@@ -2,6 +2,41 @@
 
 **English** | [한국어](./CHANGELOG.ko.md)
 
+## [1.7.0] — 2026-05-20 (agy 4-way Review Integration)
+
+### Added
+
+- **Google Antigravity CLI (`agy`, Gemini 3.5 Flash)** as a 4th reviewer in the cross-model review pipeline — cross-vendor-family parallel with Opus + Codex review + Codex adversarial.
+- **`hooks/scripts/run-agy-reviewer.sh`** — standalone bridge with `_timeout`/`_sha256` shims, deterministic binary binding via Stage 1 detection.
+- **`skills/deep-review-workflow/references/agy-integration.md`** — full reference doc covering preflight, spawn, timeout/auth handling, and N-way synthesis.
+- **4-way verdict synthesis table** with `dissenter`/`dissenter_family`/`dissent_summary` annotations (preserves cross-vendor-family signal at 3/4 threshold).
+- **Stage 2.5 pre-spawn fingerprint-based sensitive-file acknowledgment** (scan-on-every-spawn semantics).
+- **`.deep-review/config.yaml` schema**: `agy_notified`, `agy_enabled`, `agy_sensitive_acked_fingerprint` (with idempotent migration for v1.6.x users).
+- **Tests**: `test-detect-environment.sh` (extended), `test-run-agy-reviewer.sh` (Mechanism A/B + argv capture), `test-phase6-protocol-e2e.sh` E12 (source enum widening).
+
+### Changed
+
+- **`detect-environment.sh`** — `_emit_agy_vars` helper called before every `exit 0` (3 detection paths).
+- **`commands/deep-review.md`** — Stage 1 parsing, Stage 2.5 acknowledgment, Stage 3 preflight + 4-way spawn, Stage 4 4-way synthesis.
+- **`skills/deep-review-workflow/references/codex-integration.md`** — N-way table extended to 4, mutation gating documented as codex-only.
+- **`skills/deep-review-workflow/references/report-format.md`** — Review Mode enum + 5-column Cross-Model table.
+- **`CLAUDE.md`** — "3-way" → "최대 4-way" + new config flag mentions.
+
+### Unchanged
+
+- Mutation protocol (`git add -f -N` + lock) — codex-only; agy is orthogonal (uses `--add-dir` walk).
+- Phase 6 implementer + envelope schema — reviewer count is independent of envelope shape.
+
+### Migration notes
+
+- v1.6.x users: on next `/deep-review` invocation, three new config fields are added independently (preserves `agy_enabled: false` opt-out — see migration logic in `commands/deep-review.md` Stage 0).
+
+### Empirical validation
+
+- The spec itself was validated through a 7-round deep-review-loop. Loop terminated by §3.C judgment after Round 7 — fix-introduces-defect pattern empirically confirmed across 4 consecutive rounds, validating the cross-vendor bias-elimination thesis the spec advocates. 12 Round 7 findings carried forward to this implementation (see plan §R7 Carry-Forward).
+
+---
+
 ## [1.6.1] — 2026-05-18 (Codex-native plugin manifest and AGENTS guide)
 
 ### Added
