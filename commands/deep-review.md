@@ -432,7 +432,16 @@ fi
    fi
    ```
    - `MUTATION_OK=1` → Codex review / adversarial 경로 진행.
-   - `MUTATION_OK=0` → Codex 호출 skip, Opus 만 spawn. Summary: `Review Mode: 1-way (Opus only) — mutation failed`.
+   - `MUTATION_OK=0` → Codex 호출 skip, Opus 만 spawn.
+
+**Mutation-failure fallback (C-R7-4 / spec §4.4 update — per-reviewer label)**
+
+`acquire_mutation_lock` 또는 `git add -f -N` 실패 시 (CR3 graceful fallback):
+
+- **codex** 는 git-visible files 만으로 호출 (노출된 gitignored 파일 access 불가)
+- **agy 는 영향 없음** — `--add-dir` filesystem walk 은 mutation 무관 (§3.3 / §4.5 trust-boundary 참조)
+
+Summary 가 `Review Mode: {N}-way — codex visible-only / agy full-tree, mutation failed` 라고 표시 → 사용자가 리포트만 봐도 agy 의 coverage 가 변하지 않고 codex 만 degrade 됐음을 인지.
 
 **F3 — Codex 인증 실패 구분 (stderr 캡처)**:
 
@@ -588,17 +597,47 @@ restore_mutation
 - Opus background task 실패 시: "미수행"으로 표시, 실행된 리뷰어만으로 합성
 - 부분 성공 시: 성공한 리뷰어 수 기준으로 합성 (3-way가 아닌 실제 수행된 N-way)
 
+```bash
+# Read agy's classified AGY_STATUS from the bridge's terminal status file.
+# (Bridge writes status_file atomically via .tmp + mv — orchestrator can read directly.)
+AGY_STATUS=$(cat "${output_file}.status" 2>/dev/null || echo "not_attempted:bridge_no_notification")
+```
+
 1. 교차 검증 합성 (Codex 결과가 있을 때):
    - 전원 일치 지적 → 🔴 높은 확신
    - 2/3 지적 → 🟡 중간 확신
    - 단독 지적 → 참고
    - 전원 통과 → 🟢
 
+**4-way verdict synthesis (when N_actual=4)**:
+
+| N_actual | Pattern | Verdict | Per-finding annotation |
+|---|---|---|---|
+| 4 | 4/4 agree | 🔴 high → REQUEST_CHANGES | `agreement: unanimous_4` |
+| 4 | 3/4 agree | 🔴 high | `agreement: majority_3_of_4` + `dissenter: <name>` + `dissenter_family: anthropic\|openai\|google` + `dissent_summary` |
+| 4 | 2/4 agree | 🟡 CONCERN | `agreement: split_2_of_4` (supporters + dissenters listed) |
+| 4 | 1/4 sole | info (single-reviewer note) | `agreement: solo_1_of_4` + `source: <reviewer>` |
+| 4 | 0/4 | 🟢 APPROVE | n/a |
+
+기존 N=3, 2, 1 fallback 행은 그대로 유지 (3-way 이하).
+
 2. Verdict 결정:
    - 🔴 1건 이상 → **REQUEST_CHANGES**
    - 🟡만, 전원 일치 → **REQUEST_CHANGES**
    - 🟡만, 의견 분리 → **CONCERN**
    - 🟢만 → **APPROVE**
+
+### Stage 4.3.1: opus 실패 시 auto-degradation (no AskUserQuestion at synthesis)
+
+`opus_status != success AND N_actual_external ≤ 1` (= Opus 실패 + 외부 reviewer 1개 이하 성공) 시:
+
+1. **합성과 리포트 저장은 항상 진행** (Verdict 강등하더라도 결과 보존).
+2. **Verdict 를 `CONCERN` 으로 강제** (APPROVE 또는 REQUEST_CHANGES 금지).
+3. **Summary 어노테이션**: `degraded: opus_failed_low_confidence` + 실행된 reviewer 목록.
+4. **`last_review` 평소처럼 update**.
+5. **사후 chat 메시지**: "⚠️ Verdict downgraded to CONCERN — Opus failed and only {N} external reviewer(s) responded. Treat findings as advisory."
+
+이는 deterministic — synthesis 단계에서 AskUserQuestion 없음. (R5 C-R5 / R7 §4.3.1 fix — async run_in_background 패러다임과 충돌 회피.)
 
 3. 리포트 저장: `.deep-review/reports/{YYYY-MM-DD}-{HHmmss}-review.md` (Bash `date "+%Y-%m-%d-%H%M%S"`로 파일명 생성 — 같은 날 재실행 시 덮어쓰기 방지)
 
