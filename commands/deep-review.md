@@ -39,6 +39,7 @@ codex_notified: false
 agy_notified: false
 agy_enabled: true
 agy_sensitive_acked_fingerprint: ""
+agy_sensitive_acked_at: ""
 last_review: null
 app_qa:
   last_command: null
@@ -71,11 +72,13 @@ auto_recover
 grep -q '^agy_notified:'                    .deep-review/config.yaml || NEED_NOTIFIED=1
 grep -q '^agy_enabled:'                     .deep-review/config.yaml || NEED_ENABLED=1
 grep -q '^agy_sensitive_acked_fingerprint:' .deep-review/config.yaml || NEED_ACK=1
+grep -q '^agy_sensitive_acked_at:'          .deep-review/config.yaml || NEED_ACK_AT=1
 
 block=""
 [ "${NEED_NOTIFIED:-0}" = 1 ] && block="${block}agy_notified: false"$'\n'
 [ "${NEED_ENABLED:-0}"  = 1 ] && block="${block}agy_enabled: true"$'\n'
 [ "${NEED_ACK:-0}"      = 1 ] && block="${block}agy_sensitive_acked_fingerprint: \"\""$'\n'
+[ "${NEED_ACK_AT:-0}"   = 1 ] && block="${block}agy_sensitive_acked_at: \"\""$'\n'
 
 if [ -n "$block" ]; then
   # Use Edit tool, not Write — preserve user-customized review_model / last_review / app_qa
@@ -221,7 +224,7 @@ PY
 - `--contract SLICE-NNN`으로 archived contract를 명시적으로 지정한 경우: "SLICE-{NNN}은 archived 상태입니다. 리뷰를 계속할까요?" 확인.
 - `criteria`가 비어있으면: contract 검증 건너뜀 (Stage 3만 실행).
 
-### 2.5 agy sensitive-file acknowledgment (pre-spawn gate, fingerprint-based)
+### 3.5 agy sensitive-file acknowledgment (pre-spawn gate, fingerprint-based)
 
 agy 가 `reviewers_planned` 에 포함되어 있으면 (Task 7 의 enumeration) Stage 3 spawn **전에** 이 게이트를 실행. 아니면 skip.
 
@@ -238,11 +241,16 @@ _sha256() {
   fi
 }
 
-# Build file list — depth-limited, common-dir excluded (I-R7-2 stderr captured).
+# C2: Build file list — NO depth limit (matches agy's --add-dir full-tree reach).
+# Removing -maxdepth 5 ensures sensitive files at depth 6+ are not silently bypassed.
+# Excluded directories are build/dependency caches only — not legitimate secret locations.
+# Scan covers full project tree (matching agy's --add-dir reach).
+# Excluded directories: .git/, node_modules/, .venv/, __pycache__/, dist/, build/, target/
+# (build/dependency caches only — not legitimate secret locations).
 project_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 paths_file=$(mktemp "${TMPDIR:-/tmp}/agy-paths.XXXXXX")
 find_err=$(mktemp "${TMPDIR:-/tmp}/agy-find-err.XXXXXX")
-find "$project_root" -maxdepth 5 -type f \
+find "$project_root" -type f \
   -not -path '*/.git/*' \
   -not -path '*/node_modules/*' \
   -not -path '*/.venv/*' \
@@ -252,7 +260,9 @@ find "$project_root" -maxdepth 5 -type f \
   -not -path '*/target/*' \
   -print0 2>"$find_err" > "$paths_file"
 if [ -s "$find_err" ]; then
-  echo "⚠️ agy scan: find encountered errors (see $find_err)" >&2
+  echo "⚠️ agy scan: find encountered errors:" >&2
+  head -10 "$find_err" >&2
+  echo "(showing first 10 lines; deletion follows for cleanup)" >&2
 fi
 
 # C-R7-1 fix: while-read invocation (xargs can NOT call bash functions).
@@ -280,10 +290,12 @@ stored=$(grep '^agy_sensitive_acked_fingerprint:' .deep-review/config.yaml \
 if [ "$current_fingerprint" = "$stored" ]; then
   : # silent proceed (user already saw this exact set)
 elif [ -z "$stored" ] && [ -z "$hits" ]; then
-  # Clean repo first run — silently set sentinel, no prompt.
+  # I2: Clean repo first run — silently set sentinel, no prompt.
+  # Also record agy_sensitive_acked_at for audit visibility (when was empty-scan auto-acked).
+  _ack_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   Edit(file_path: ".deep-review/config.yaml",
        old_string: "agy_sensitive_acked_fingerprint: \"\"",
-       new_string: "agy_sensitive_acked_fingerprint: \"${current_fingerprint}\"")
+       new_string: "agy_sensitive_acked_fingerprint: \"${current_fingerprint}\"\nagy_sensitive_acked_at: \"${_ack_at}\"")
 else
   # Sensitive set differs from last ack (or first ack with hits) — prompt user.
   # AskUserQuestion shown BEFORE any reviewer is spawned (safe — not at synthesis).
@@ -348,7 +360,7 @@ if agy_cli && agy_enabled:                     # honor config opt-out
     reviewers_planned += ["agy"]
 N_planned = len(reviewers_planned)             # 1, 2, 3, or 4
 
-# N_planned is recomputed after Stage 2.5 acknowledgment may have removed agy.
+# N_planned is recomputed after Stage 3.5 acknowledgment may have removed agy.
 # See Stage 3.5 user notice for the final N value source.
 ```
 
@@ -399,6 +411,15 @@ N_planned = len(reviewers_planned)             # 1, 2, 3, or 4
 
 **agy preflight (agy가 reviewers_planned에 포함된 경우):**
 ```bash
+# C4: _timeout shim MUST be defined inline at the start of every Bash block that uses it.
+# Each Bash tool call is a separate subshell — functions defined in prior calls are invisible.
+_timeout() {
+  local seconds="$1"; shift
+  if command -v gtimeout >/dev/null 2>&1; then gtimeout "$seconds" "$@"; return; fi
+  if command -v timeout  >/dev/null 2>&1; then  timeout  "$seconds" "$@"; return; fi
+  # C1 fix (fork/wait pattern): fork first; exec only in child. Parent traps SIGALRM, exits 124.
+  perl -e 'my $pid = fork; if (!$pid) { exec @ARGV } alarm shift; $SIG{ALRM} = sub { kill 15, $pid; exit 124 }; wait; exit ($? >> 8)' "$seconds" "$@"
+}
 # agy preflight (W-R5-1 / W-R7-1 fix: use $agy_cli_path for deterministic binding, NOT literal `agy`).
 _timeout 10 "$agy_cli_path" --version >/dev/null 2>&1 && AGY_PREFLIGHT=OK || AGY_PREFLIGHT=FAIL
 if [ "$AGY_PREFLIGHT" = "FAIL" ]; then
@@ -526,18 +547,44 @@ Codex 리뷰 대상은 change_state에 따라 결정:
 
 4. **agy reviewer** (Bash tool, run_in_background: true)
 
+  > **LLM substitution note**: `{placeholder}` values (e.g. `{agy_cli_path}`, `{prompt_file}`,
+  > `{output_file}`) are substituted with **literal strings** by the orchestrator (LLM) before
+  > invoking the Bash tool. They are NOT shell variables — the spawned subshell has no memory of
+  > prior Bash calls or LLM-side state. Use Stage 1 detection output (`agy_cli_path`) and mktemp
+  > outputs from earlier in this session as the literal values to substitute.
+
   ```
   Bash({ command: '
-  "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-agy-reviewer.sh" \
-    --binary "$agy_cli_path" \
-    --project-root "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" \
-    --prompt-file "$prompt_file" \
-    --output "$output_file" \
+  "{agy_cli_path_literal}/run-agy-reviewer.sh-via-plugin-root" \
+  # ↑ expand to literal: "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-agy-reviewer.sh"
+  # substituting $CLAUDE_PLUGIN_ROOT with its runtime value at spawn time
+  "{CLAUDE_PLUGIN_ROOT_literal}/hooks/scripts/run-agy-reviewer.sh" \
+    --binary "{agy_cli_path}" \
+    --project-root "{project_root}" \
+    --prompt-file "{prompt_file}" \
+    --output "{output_file}" \
     --timeout-seconds 900
   ', run_in_background: true })
   ```
 
-  Orchestrator passes `--binary "$agy_cli_path"` (Stage 1 detection result) for deterministic binding independent of subsequent `$PATH` mutations. Bridge's internal resolution (`--binary` → `$AGY_BINARY` → `command -v agy`) only activates if `--binary` was not passed (e.g., direct CLI tests).
+  **Concrete substitution example** (orchestrator fills before invoking Bash):
+  - `{agy_cli_path}` → `/usr/local/bin/agy` (from Stage 1 `agy_cli_path` detection)
+  - `{project_root}` → `/home/user/myrepo` (from `git rev-parse --show-toplevel`)
+  - `{prompt_file}` → `/tmp/deep-review-agy-prompt.xXxXxX` (from mktemp in earlier Bash call)
+  - `{output_file}` → `/tmp/deep-review-agy-output.xXxXxX` (from mktemp in earlier Bash call)
+
+  ```
+  Bash({ command: '
+  "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-agy-reviewer.sh" \
+    --binary "{agy_cli_path}" \
+    --project-root "{project_root}" \
+    --prompt-file "{prompt_file}" \
+    --output "{output_file}" \
+    --timeout-seconds 900
+  ', run_in_background: true })
+  ```
+
+  Orchestrator passes `--binary {agy_cli_path}` (Stage 1 detection result) for deterministic binding independent of subsequent `$PATH` mutations. Bridge's internal resolution (`--binary` → `$AGY_BINARY` → `command -v agy`) only activates if `--binary` was not passed (e.g., direct CLI tests).
 
 여기서 `{codex_target_flag}`는:
 - clean 또는 WIP 커밋 후: `--base {review_base}`
@@ -1263,6 +1310,7 @@ codex_notified: false
 agy_notified: false
 agy_enabled: true
 agy_sensitive_acked_fingerprint: ""
+agy_sensitive_acked_at: ""
 last_review: null
 app_qa:
   last_command: null
