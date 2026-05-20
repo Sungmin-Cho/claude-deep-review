@@ -5,15 +5,13 @@ on:
     branches: [main]
   pull_request:
     paths:
-      - 'hooks/scripts/detect-environment.sh'
-      - 'hooks/scripts/mutation-protocol.sh'
-      - 'hooks/scripts/run-agy-reviewer.sh'
-      - 'hooks/scripts/run-claude-reviewer.sh'
-      - 'hooks/scripts/test/test-mutation-protocol.sh'
-      - 'hooks/scripts/test/test-detect-environment.sh'
-      - 'hooks/scripts/test/test-run-agy-reviewer.sh'
-      - 'hooks/scripts/envelope.js'
-      - 'hooks/scripts/wrap-recurring-findings-envelope.js'
+      - 'hooks/scripts/**'
+      - 'hooks/hooks.json'
+      - 'commands/**'
+      - 'skills/**'
+      - 'agents/**'
+      - '.claude-plugin/**'
+      - '.codex-plugin/**'
       - 'tests/**'
       - 'package.json'
       - '.github/workflows/tests.yml'

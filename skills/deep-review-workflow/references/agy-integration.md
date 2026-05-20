@@ -73,3 +73,33 @@ agy 는 **mutation 과 직교** — `--add-dir` filesystem walk 으로 gitignore
 ## Permanent opt-out
 
 `.deep-review/config.yaml` 의 `agy_enabled: false` → reviewer enumeration 에서 agy 제외, 설치 여부와 무관. README 에 명시.
+
+## Security considerations
+
+agy runs with `--dangerously-skip-permissions`, granting it filesystem **write** capability over
+the full project tree (via `--add-dir`). `mutation-protocol.sh` only gates Codex git-index
+mutations, so any agy write would be undetected by the existing protocol.
+
+**Mitigation (v1.7.0)**: `run-agy-reviewer.sh` takes a coarse SHA-256 fingerprint of the
+worktree before and after agy runs. If the hashes differ, it emits a warning to stderr and writes
+`${output_file}.mutation-warning`. This fingerprint is **not cryptographically authoritative** —
+it can miss renames, races on large trees, or files excluded from the scan. It is a best-effort
+early warning. A future release may add git-status diffing for higher fidelity.
+
+## Known limits (ARG_MAX)
+
+`agy -p "$(cat $prompt_file)"` expands the full prompt into a process argument, which is
+visible in `ps` output and subject to OS ARG_MAX limits (~256KB on macOS, ~2MB on Linux).
+`run-agy-reviewer.sh` truncates prompts exceeding 200KB with a warning.
+
+If agy adds a `--prompt-file <path>` flag in a future version, switch to that to eliminate
+both the exposure and the size risk.
+
+## Known assumptions (v1.7.0)
+
+- `agy --print-timeout` is assumed to honor the value passed; behavior unverified at agy v1.0.0.
+  The outer `_timeout` shim (fork/wait pattern, exit 124) is the **primary** safety net.
+- `AGY_AUTH_REGEX` is provisional — to be refined from real unauthenticated agy stderr at first
+  integration test. Current value covers common OAuth / session-expiry patterns.
+- Worktree mutation fingerprint (C3) is coarse: races, large trees, excluded dirs (node_modules,
+  .git, dist, build, etc.) reduce coverage. Flag any mutation warning to the user regardless.
