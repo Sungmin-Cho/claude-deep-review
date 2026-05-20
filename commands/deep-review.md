@@ -66,8 +66,8 @@ auto_recover
 
 ```bash
 # Migration: probe each new agy field independently. Anchor on last_review:
-# (value-agnostic) — NOT on codex_notified: false (W-R5-1 bug: value can be true).
-# Use `grep -q '^name:' .deep-review/config.yaml` with SPACE before filename.
+# (value-agnostic) — NOT on codex_notified: false (C-R5-3: value can be true, matching would fail on v1.6.x with codex_notified: true).
+# Use `grep -q '^agy_notified:' .deep-review/config.yaml` with SPACE before filename.
 grep -q '^agy_notified:'                    .deep-review/config.yaml || NEED_NOTIFIED=1
 grep -q '^agy_enabled:'                     .deep-review/config.yaml || NEED_ENABLED=1
 grep -q '^agy_sensitive_acked_fingerprint:' .deep-review/config.yaml || NEED_ACK=1
