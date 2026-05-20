@@ -1,5 +1,7 @@
 # Codex Integration Guide
 
+> Related: [`agy-integration.md`](./agy-integration.md) — fourth reviewer (Google Gemini), orthogonal to mutation protocol.
+
 ## 감지 방법
 
 환경 감지 스크립트가 다음 변수를 출력:
@@ -155,6 +157,10 @@ rm -f "$stderr_log"
 
 Case 3 에서 gitignored 세션 파일을 Codex 에 임시 노출하여 3-way 검증을 수행하는 프로토콜. 구현은 `hooks/scripts/mutation-protocol.sh` 에 캡슐화되어 있으며, `commands/deep-review.md` 의 Stage 0.1, 2.1/2.2, 3.0, 5.0 에서 호출. 상세 설계는 `docs/superpowers/specs/2026-04-21-codex-git-mutation-protocol-design.md` (로컬, gitignored).
 
+### Mutation gating: codex-only
+
+agy reviewer uses `--add-dir` filesystem walk for its file context and is **not** subject to mutation protocol. The trigger condition remains `codex_plugin=true AND is_git=true` — agy presence does not affect this. See [`agy-integration.md`](./agy-integration.md) for agy's trust-boundary mitigation (fingerprint-based pre-spawn scan).
+
 ## Fallback
 
 Codex 플러그인 미설치 시 (codex_plugin=false):
@@ -166,7 +172,7 @@ Codex 플러그인 미설치 시 (codex_plugin=false):
 
 ## 합성 (Synthesis)
 
-3개 리뷰 결과를 하나의 리포트로 합성:
+3개 리뷰 결과를 하나의 리포트로 합성 (최대 4-way — agy 설치 시):
 
 | 패턴 | 확신도 | 처리 |
 |------|--------|------|
@@ -174,6 +180,22 @@ Codex 플러그인 미설치 시 (codex_plugin=false):
 | 2/3 일치 | 중간 🟡 | CONCERN (사람에게 에스컬레이션) |
 | 1/3 단독 | 낮음 | 참고 사항으로 표시 |
 | 0/3 | 안전 🟢 | APPROVE |
+
+### N-way 합성 (4-way pipeline 포함)
+
+`agy` 가 추가된 후 N=4 케이스:
+
+| N_actual | 패턴 | 처리 | Per-finding annotation |
+|---|---|---|---|
+| 4 | 4/4 일치 | 🔴 high → REQUEST_CHANGES | `agreement: unanimous_4` |
+| 4 | 3/4 일치 | 🔴 high | `agreement: majority_3_of_4` + `dissenter` / `dissenter_family` / `dissent_summary` |
+| 4 | 2/4 일치 | 🟡 CONCERN | `agreement: split_2_of_4` |
+| 4 | 1/4 단독 | 참고 | `agreement: solo_1_of_4` + `source` |
+| 4 | 0/4 | 🟢 APPROVE | n/a |
+
+기존 N=3, 2, 1 fallback 행은 그대로 유지 (3-way 이하 케이스).
+
+**Dissenter visibility rationale**: 4-way 의 핵심 가치는 cross-vendor-family bias elimination. 3/4 majority 임계값을 그대로 두되 dissenter 가 cross-family (예: agy 가 유일한 Google 가족) 라면 그 정보를 report 에 보존 → 사용자가 cross-vendor signal 강도를 판단 가능.
 
 ### N-way 합성 (일부 리뷰어 미수행)
 
