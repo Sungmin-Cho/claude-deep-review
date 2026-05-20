@@ -26,6 +26,25 @@ emit_claude_cli_availability() {
   echo "claude_cli_path=$claude_cli_path"
 }
 
+# Emits agy_cli / agy_cli_path / agy_version key=value lines.
+# Called before every `exit 0` to ensure all 3 detection paths (non-git, initial-repo,
+# normal-commits) emit these vars uniformly. C-R5-2 fix.
+_emit_agy_vars() {
+  if command -v agy >/dev/null 2>&1; then
+    local p
+    p="$(command -v agy)"
+    local v
+    v="$(agy --version 2>/dev/null | head -1 || echo)"
+    echo "agy_cli=true"
+    echo "agy_cli_path=$p"
+    echo "agy_version=$v"
+  else
+    echo "agy_cli=false"
+    echo "agy_cli_path="
+    echo "agy_version="
+  fi
+}
+
 # === 1. Git 리포지터리 여부 ===
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "is_git=false"
@@ -40,6 +59,7 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "codex_installed=false"
   emit_node_availability
   emit_claude_cli_availability
+  _emit_agy_vars
   exit 0
 fi
 
@@ -97,6 +117,7 @@ if ! git rev-parse HEAD >/dev/null 2>&1; then
   fi
   emit_node_availability
   emit_claude_cli_availability
+  _emit_agy_vars
   exit 0
 fi
 
@@ -209,3 +230,7 @@ emit_node_availability
 
 # 5e. Codex/non-Claude runtime에서 Claude reviewer를 실행하기 위한 CLI bridge.
 emit_claude_cli_availability
+
+# 5f. agy reviewer bridge availability. C-R5-2 fix: emit on all 3 paths.
+_emit_agy_vars
+exit 0
