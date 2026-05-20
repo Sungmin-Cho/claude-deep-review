@@ -72,7 +72,7 @@ deep-review/
 │       ├── wrap-recurring-findings-envelope.js  # CLI for recurring-findings emission
 │       └── test/
 │           ├── test-mutation-protocol.sh         # 54 assertions, macOS + ubuntu CI
-│           └── test-phase6-protocol-e2e.sh       # E1–E11 structural + protocol tests
+│           └── test-phase6-protocol-e2e.sh       # E1–E12 structural + protocol tests
 ├── scripts/
 │   └── validate-envelope-emit.js  # release-lint (mirrors suite envelope schema)
 ├── skills/
@@ -255,7 +255,7 @@ npm test
 # → node --test on tests/envelope-{emit,chain}.test.js (87 cases)
 
 bash hooks/scripts/test/test-mutation-protocol.sh  # 54 assertions
-bash hooks/scripts/test/test-phase6-protocol-e2e.sh  # E1–E11 scenarios
+bash hooks/scripts/test/test-phase6-protocol-e2e.sh  # E1–E12 scenarios
 ```
 
 CI matrix: `ubuntu-latest` + `macos-latest`. Triggers on main push + PRs touching `agents/`, `commands/deep-review.md`, `skills/**`, `tests/`, or the workflow itself.

@@ -268,7 +268,7 @@ Phase 6는 심각도 그룹(🔴 → 🟡 → ℹ️)별로 `phase6-implementer`
 | Main↔Subagent 입출력 계약 | `references/phase6-prompt-contract.md` |
 | 설계 배경·결정 사항 | `references/phase6-delegation-spec.md` |
 | Subagent의 구현 절차 | `agents/phase6-implementer.md` 시스템 프롬프트 |
-| 실행 검증 | `hooks/scripts/test/test-phase6-protocol-e2e.sh` (E1~E11) |
+| 실행 검증 | `hooks/scripts/test/test-phase6-protocol-e2e.sh` (E1~E12) |
 
 **불변량 요약** (스킬 단독 로드 시 최소 보장 — 세부는 위 단일 소스 참조):
 

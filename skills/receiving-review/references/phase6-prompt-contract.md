@@ -27,7 +27,7 @@ Phase 6는 `/deep-review --respond`의 6단계 대응 프로토콜 중 실행(IM
 **프로토콜 원칙**:
 - Main은 판단·검증·기록, 서브에이전트는 실행.
 - 서브에이전트 출력은 fail-closed로 검증 (`git hash-object` 기반 content delta, allowlist 강제).
-- 프로토콜의 모든 shell 로직은 `hooks/scripts/test/test-phase6-protocol-e2e.sh` (11 시나리오, E1~E11) + `test-phase6-subagent.sh` (10 구조 체크)로 실증 검증.
+- 프로토콜의 모든 shell 로직은 `hooks/scripts/test/test-phase6-protocol-e2e.sh` (12 시나리오, E1~E12) + `test-phase6-subagent.sh` (10 구조 체크)로 실증 검증.
 
 ---
 
@@ -616,4 +616,4 @@ v1.3.3 agent는 literal 치환만 지시. v1.3.4부터 single-quote wrap 필수.
 - **설계 배경**: `skills/receiving-review/references/phase6-delegation-spec.md`
 - **검증 테스트**:
   - `hooks/scripts/test/test-phase6-subagent.sh` (10 structural)
-  - `hooks/scripts/test/test-phase6-protocol-e2e.sh` (11 e2e, E1~E11)
+  - `hooks/scripts/test/test-phase6-protocol-e2e.sh` (12 e2e, E1~E12)

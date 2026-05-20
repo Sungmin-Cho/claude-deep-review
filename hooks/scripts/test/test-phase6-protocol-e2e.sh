@@ -2,7 +2,7 @@
 # test-phase6-protocol-e2e.sh — Phase 6 protocol end-to-end executable tests
 #
 # 임시 git repo에서 Phase 6 main 프로토콜의 핵심 shell 로직을 실제 실행하여
-# 11개 Critical 시나리오를 검증 (E1~E11).
+# 12개 Critical 시나리오를 검증 (E1~E12).
 #
 # 검증 시나리오:
 #   E1. files_changed suffix 정규화 (subagent output "(+A -B)" strip)
@@ -17,7 +17,7 @@
 #   E10. Recovery index sync — subagent git add 후 recovery 시 index 도 PRE 로 복원
 #   E11. Recovery preserves tracked-but-deleted WIP — pre_tracked=true + baseline absent
 #
-# exit 0 = 11개 모두 PASS, exit 1 = 1건 이상 FAIL.
+# exit 0 = 12개 모두 PASS, exit 1 = 1건 이상 FAIL.
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
