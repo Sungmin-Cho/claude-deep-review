@@ -35,6 +35,51 @@
 
 - The spec itself was validated through a 7-round deep-review-loop. Loop terminated by §3.C judgment after Round 7 — fix-introduces-defect pattern empirically confirmed across 4 consecutive rounds, validating the cross-vendor bias-elimination thesis the spec advocates. 12 Round 7 findings carried forward to this implementation (see plan §R7 Carry-Forward).
 
+### Known issues (carry-forward to v1.7.1)
+
+The 7-round deep-review-loop validation of this v1.7.0 implementation identified
+8 additional findings that are intentionally deferred — they require architectural
+changes or broader scope than v1.7.0 can absorb. All are tracked for v1.7.1:
+
+**Security / correctness**:
+1. **agy live-workspace write capability** (Codex adversarial R7 critical #1) — bridge
+   invokes agy with `--add-dir "$project_root"` and `--dangerously-skip-permissions`
+   on real project. fingerprint hash check only warns *after* write access; cannot
+   prevent or restore. v1.7.1 should run agy against a read-only copy/snapshot or
+   enforce filesystem-level permissions.
+2. **Sensitive scan ≠ agy access domain** (Codex review R7 P1 #2) — scan exclusion
+   list (`vendor/`, `.terraform/`, etc.) is not enforced on agy's `--add-dir`. If
+   excluded dirs contain `credentials*`, `*.key`, `*.token`, scan misses them but
+   agy reads them. v1.7.1 should align the two exclusion sets or restrict agy's
+   reach.
+3. **Acknowledgment fingerprint path-only** (Codex adversarial R7 high #3) — the
+   sensitive-acknowledgment fingerprint hashes only the sorted file path list. Same
+   `.env` with changed contents → same fingerprint → silent proceed. v1.7.1 should
+   include per-file content digest in the fingerprint.
+4. **Perl shim signal-killed = success** (Codex review R7 P2) — `exit ($? >> 8)`
+   converts signal-killed child to exit 0. agy killed with partial stdout → bridge
+   classifies as `success`. v1.7.1 should propagate `128 + signal` instead.
+
+**Polish (low impact)**:
+5. **Synthesis gate redundancy** (Opus R7 W#1) — `AGY_EXCLUDE_FROM_SYNTHESIS` gate
+   has 3 conditions where 1 suffices (others all imply `AGY_STATUS != success`).
+   Maintainability improvement, no correctness impact.
+6. **Atomic Edit assumes schema adjacency** (Opus R7 W#2) — Fix #2's two-line atomic
+   Edit fails silently if v1.6.x users have custom config fields between
+   `agy_sensitive_acked_fingerprint` and `agy_sensitive_acked_at`. Migration
+   normalization Edit needed.
+7. **output_file undefined when preflight fails** (Opus R7 W#3) — Stage 5.1 reads
+   `${output_file}.status` but output_file is unset if preflight removed agy. Falls
+   back to less-informative `bridge_no_notification` status.
+8. **Misleading comment line 240-242** (Opus R7 I#1) — comment hand-waves the
+   exact ordering issue Fix #4 was meant to fix. Updated as part of v1.7.0 R8 fix
+   for AGY_USER_DECLINED_THIS_RUN; further refinement in v1.7.1.
+
+These known issues do not block v1.7.0 release — the core 4-way pipeline (agy
+spawn, classification, synthesis, exclusion-on-failure) is functional. They
+represent depth-of-validation items that emerged after 8 review rounds and
+are appropriate for v1.7.1 hardening.
+
 ---
 
 ## [1.6.1] — 2026-05-18 (Codex-native plugin manifest and AGENTS guide)
