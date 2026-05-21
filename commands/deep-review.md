@@ -226,7 +226,20 @@ PY
 
 ### 3.5 agy sensitive-file acknowledgment (pre-spawn gate, fingerprint-based)
 
-agy 가 `reviewers_planned` 에 포함되어 있으면 (Task 7 의 enumeration) Stage 3 spawn **전에** 이 게이트를 실행. 아니면 skip.
+Fix #4: Stage 3.5 used to check `agy in reviewers_planned`, but `reviewers_planned` is only
+computed in the reviewer-enumeration block (§4, around line 375) — later than this gate.
+At the time Stage 3.5 runs, `reviewers_planned` has no value → gate silently misfires.
+
+Replaced with a direct config probe on the same two inputs that the enumeration block uses:
+- `agy_cli` — from Stage 1 detect-environment output
+- `agy_enabled` — from `.deep-review/config.yaml`
+
+If `agy_cli=true AND agy_enabled=true`: run this gate before spawning any reviewer.
+Otherwise: skip.
+
+(Note: Stage 3.5 may also remove agy by setting `reviewers_planned` filter after the user
+picks N. The reviewer-enumeration block at §4 later adds agy only when `agy_cli && agy_enabled`,
+and N_planned is recomputed at the bottom of this gate — so the two blocks stay consistent.)
 
 **Critical (R7 carry-forward C-R7-1)**: `scan_sensitive_files` 은 `mutation-protocol.sh` 의 bash function 이며 외부 명령이 아니다. `xargs` 로 호출 불가. while-read 루프 사용:
 
@@ -301,9 +314,12 @@ if [ "$current_fingerprint" = "$stored" ]; then
 elif [ -z "$stored" ] && [ -z "$hits" ]; then
   # I2: Clean repo first run — silently set sentinel, no prompt.
   # Also record agy_sensitive_acked_at for audit visibility (when was empty-scan auto-acked).
+  # Fix #3: Two-line atomic Edit (both lines adjacent in schema) — prevents duplicate key.
+  # Replacing only the fingerprint line while inserting ack_at inline left the original
+  # empty agy_sensitive_acked_at: "" line intact below → YAML duplicate key.
   _ack_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   Edit(file_path: ".deep-review/config.yaml",
-       old_string: "agy_sensitive_acked_fingerprint: \"\"",
+       old_string: "agy_sensitive_acked_fingerprint: \"\"\nagy_sensitive_acked_at: \"\"",
        new_string: "agy_sensitive_acked_fingerprint: \"${current_fingerprint}\"\nagy_sensitive_acked_at: \"${_ack_at}\"")
 else
   # Sensitive set differs from last ack (or first ack with hits) — prompt user.
@@ -324,14 +340,19 @@ else
     ]
   )
   if user_choice == "Y":
-    # N4 fix: persist both fingerprint AND timestamp so audit trail is complete.
+    # Fix #2: Edit tool matches LITERAL text, not regex — ".*" is not a wildcard here.
+    # After the first ack the config holds a real SHA-256, so 'agy_sensitive_acked_fingerprint: ".*"'
+    # never matches → subsequent acks silently fail → infinite re-prompts.
+    # Fix: read the current literal values first, then construct an exact two-line atomic Edit.
+    # Two-line atomic replace also eliminates the partial-update race (Fix #3 parallel).
     _ack_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    prev_fp=$(grep '^agy_sensitive_acked_fingerprint:' .deep-review/config.yaml \
+              | sed -E 's/^agy_sensitive_acked_fingerprint: *"?([^"]*)"?$/\1/')
+    prev_at=$(grep '^agy_sensitive_acked_at:' .deep-review/config.yaml \
+              | sed -E 's/^agy_sensitive_acked_at: *"?([^"]*)"?$/\1/')
     Edit(file_path: ".deep-review/config.yaml",
-         old_string: 'agy_sensitive_acked_fingerprint: ".*"',
-         new_string: "agy_sensitive_acked_fingerprint: \"${current_fingerprint}\"")
-    Edit(file_path: ".deep-review/config.yaml",
-         old_string: 'agy_sensitive_acked_at: ".*"',
-         new_string: "agy_sensitive_acked_at: \"${_ack_at}\"")
+         old_string: "agy_sensitive_acked_fingerprint: \"${prev_fp}\"\nagy_sensitive_acked_at: \"${prev_at}\"",
+         new_string: "agy_sensitive_acked_fingerprint: \"${current_fingerprint}\"\nagy_sensitive_acked_at: \"${_ack_at}\"")
   else:
     reviewers_planned = [r for r in reviewers_planned if r != "agy"]
     # W-R7-6 fix: do NOT touch agy_notified — that flag is for install hints, not ack.
@@ -693,13 +714,34 @@ if [ -f "${output_file}.mutation-warning" ]; then
   AGY_MUTATION_WARNING=1
   AGY_STATUS="mutated"
 fi
+
+# Fix #1 (BLOCKER-4): prompt_too_large means agy reviewed a truncated input — exclude from synthesis.
+# The bridge sets AGY_STATUS=prompt_too_large when diff > 200KB was truncated before being sent.
+# Without this gate, a truncated agy review still counted toward N_actual=4 and influenced verdict.
+AGY_TRUNCATED=0
+if [ "$AGY_STATUS" = "prompt_too_large" ]; then
+  AGY_TRUNCATED=1
+fi
+
+# Combined synthesis exclusion gate — replaces the prose-only AGY_MUTATION_WARNING rule below.
+# Any of these conditions means agy's output is unreliable and must NOT count toward N_actual.
+AGY_EXCLUDE_FROM_SYNTHESIS=0
+[ "$AGY_MUTATION_WARNING" = "1" ] && AGY_EXCLUDE_FROM_SYNTHESIS=1
+[ "$AGY_TRUNCATED"        = "1" ] && AGY_EXCLUDE_FROM_SYNTHESIS=1
+[ "$AGY_STATUS"          != "success" ] && AGY_EXCLUDE_FROM_SYNTHESIS=1
+# When AGY_EXCLUDE_FROM_SYNTHESIS=1:
+#   - Exclude agy from N_actual (do NOT count its output as a valid reviewer).
+#   - Inject reason-specific warning into Summary (see conditions above for per-reason text).
+#   - Do NOT promote agy findings into verdict — treat agy as "not_attempted" for synthesis purposes.
 ```
 
-> **Synthesis rule when `AGY_MUTATION_WARNING=1`**:
+> **Synthesis rule (AGY_EXCLUDE_FROM_SYNTHESIS=1)**:
 > - Exclude agy from `N_actual` (do NOT count its output as a valid reviewer).
-> - Inject into Summary: `⚠️ agy mutated workspace — manually verify before trusting review output`.
+> - Per-condition Summary warnings:
+>   - `AGY_MUTATION_WARNING=1`: `⚠️ agy mutated workspace — manually verify before trusting review output`; append `git status`.
+>   - `AGY_TRUNCATED=1` (prompt_too_large): `⚠️ agy reviewed a truncated diff (>200KB) — findings may be incomplete`.
+>   - Other non-success `AGY_STATUS`: `⚠️ agy did not complete successfully (status: ${AGY_STATUS}) — excluded from synthesis`.
 > - Do NOT promote agy findings into verdict — treat agy as "not_attempted" for synthesis purposes.
-> - If possible, append `git status` output to Summary for user visibility.
 
 1. 교차 검증 합성 (Codex 결과가 있을 때):
    - 전원 일치 지적 → 🔴 높은 확신
