@@ -99,13 +99,14 @@ stderr_log=$(mktemp "${TMPDIR:-/tmp}/agy-stderr.XXXXXX")
 # (~2MB on Linux, ~256KB on macOS). Truncate at 200KB with a warning.
 # TODO: if agy supports stdin prompt (e.g. `agy -p -` or `--prompt-file`), switch to that.
 prompt_size=$(wc -c < "$prompt_file")
+truncated=0
 if [ "$prompt_size" -gt 200000 ]; then
   echo "⚠️ Prompt size ${prompt_size} bytes exceeds 200KB argv safety limit. Truncating to 200KB." >&2
   prompt_content=$(head -c 200000 "$prompt_file")
+  truncated=1
 else
   prompt_content=$(cat "$prompt_file")
 fi
-
 rc=0
 _timeout "$timeout" "$resolved_binary" -p "$prompt_content" \
     --print-timeout "${timeout}s" \
@@ -123,14 +124,24 @@ post_walk_hash=$(cd "$project_root" && find . -type f \
   -not -path './build/*' \
   -not -path './target/*' \
   -print0 2>/dev/null | sort -z | xargs -0 -n 100 sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1 || echo "unavailable")
+mutation_detected=0
 if [ "$pre_walk_hash" != "unavailable" ] && [ "$post_walk_hash" != "unavailable" ] \
    && [ "$pre_walk_hash" != "$post_walk_hash" ]; then
   echo "⚠️  agy mutated workspace files. Investigate before trusting review output." >&2
+  # BLOCKER-3: write mutation-warning sidecar so orchestrator Stage 5.1 can detect it
+  # via .mutation-warning file check (independent of .status). Set flag for classifier.
   echo "mutated" > "${output_file}.mutation-warning"
+  mutation_detected=1
 fi
 
 # ---------- classifier (same logic as §4.2 standalone — single source of truth) ----------
-if [ "$rc" -eq 124 ]; then
+# BLOCKER-3: mutation_detected takes priority — agy output is untrusted regardless of rc.
+# BLOCKER-4: prompt_too_large is checked second — partial review is not trustworthy.
+if [ "$mutation_detected" = "1" ]; then
+    AGY_STATUS="mutated"
+elif [ "$truncated" = "1" ]; then
+    AGY_STATUS="prompt_too_large"
+elif [ "$rc" -eq 124 ]; then
     AGY_STATUS="timeout"
 elif [ "$rc" -ne 0 ] && grep -qE "$AGY_AUTH_REGEX" "$stderr_log"; then
     AGY_STATUS="not_authenticated"

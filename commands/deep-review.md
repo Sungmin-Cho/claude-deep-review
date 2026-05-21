@@ -662,7 +662,22 @@ restore_mutation
 # Read agy's classified AGY_STATUS from the bridge's terminal status file.
 # (Bridge writes status_file atomically via .tmp + mv — orchestrator can read directly.)
 AGY_STATUS=$(cat "${output_file}.status" 2>/dev/null || echo "not_attempted:bridge_no_notification")
+
+# BLOCKER-3: Read mutation-warning sidecar emitted by bridge C3 detection.
+# If the sidecar exists, agy mutated the worktree — findings may be based on altered state.
+# Override AGY_STATUS to "mutated" and force-degrade Verdict (exclude from N_actual count).
+AGY_MUTATION_WARNING=0
+if [ -f "${output_file}.mutation-warning" ]; then
+  AGY_MUTATION_WARNING=1
+  AGY_STATUS="mutated"
+fi
 ```
+
+> **Synthesis rule when `AGY_MUTATION_WARNING=1`**:
+> - Exclude agy from `N_actual` (do NOT count its output as a valid reviewer).
+> - Inject into Summary: `⚠️ agy mutated workspace — manually verify before trusting review output`.
+> - Do NOT promote agy findings into verdict — treat agy as "not_attempted" for synthesis purposes.
+> - If possible, append `git status` output to Summary for user visibility.
 
 1. 교차 검증 합성 (Codex 결과가 있을 때):
    - 전원 일치 지적 → 🔴 높은 확신

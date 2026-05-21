@@ -50,6 +50,8 @@ Reviewer prompt 페이로드는 Opus / Codex 와 동일 (diff + rules.yaml + fit
 | timeout | exit 124 (perl SIGALRM trap 적용) | "agy가 900초 안에 응답하지 않았습니다. 나머지 reviewer로 합성을 계속합니다." |
 | not_authenticated | exit ≠ 0 + stderr matches `AGY_AUTH_REGEX` | "agy 인증이 필요합니다. 터미널에서 `!agy` 실행 후 로그인하세요." |
 | failed | 기타 비-0 exit 또는 empty stdout (rc=0) | stderr 마지막 5줄 리포트 첨부 |
+| mutated | pre/post worktree fingerprint mismatch (C3 detection) | "⚠️ agy mutated workspace — manually verify before trusting review output." + `git status` 출력. agy 결과는 N_actual에서 제외. |
+| prompt_too_large | 프롬프트 크기 > 200KB → 잘림 (W3) | agy 결과는 N_actual에서 제외 (부분 리뷰 신뢰 불가). |
 | not_attempted | `agy_cli=false` OR `agy_enabled=false` OR preflight 실패 | (none) |
 
 `AGY_AUTH_REGEX` 는 `run-agy-reviewer.sh` 의 단일 상수. 첫 실행 시 unauthenticated agy stderr 실측 후 refine (§4.2 spec 참조).
