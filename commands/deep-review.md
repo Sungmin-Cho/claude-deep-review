@@ -36,6 +36,10 @@ config.yaml이 없으면 기본값으로 생성:
 ```yaml
 review_model: opus
 codex_notified: false
+agy_notified: false
+agy_enabled: true
+agy_sensitive_acked_fingerprint: ""
+agy_sensitive_acked_at: ""
 last_review: null
 app_qa:
   last_command: null
@@ -57,6 +61,40 @@ auto_recover
 - `--respond` 모드에서도 동일하게 호출 — stale mutation 이 다음 리뷰로 새어나가지 않도록.
 - 상세는 `skills/deep-review-workflow/references/codex-integration.md` 참조.
 
+### 0.2 agy 필드 마이그레이션 (v1.6.x → v1.7.0+)
+
+`auto_recover` 완료 후, config.yaml 에 agy 관련 필드가 없는 v1.6.x 사용자를 위해 idempotent 마이그레이션을 수행한다:
+
+```bash
+# Migration: probe each new agy field independently. Anchor on last_review:
+# (value-agnostic) — NOT on codex_notified: false (C-R5-3: value can be true, matching would fail on v1.6.x with codex_notified: true).
+# Use `grep -q '^agy_notified:' .deep-review/config.yaml` with SPACE before filename.
+grep -q '^agy_notified:'                    .deep-review/config.yaml || NEED_NOTIFIED=1
+grep -q '^agy_enabled:'                     .deep-review/config.yaml || NEED_ENABLED=1
+grep -q '^agy_sensitive_acked_fingerprint:' .deep-review/config.yaml || NEED_ACK=1
+grep -q '^agy_sensitive_acked_at:'          .deep-review/config.yaml || NEED_ACK_AT=1
+
+block=""
+[ "${NEED_NOTIFIED:-0}" = 1 ] && block="${block}agy_notified: false"$'\n'
+[ "${NEED_ENABLED:-0}"  = 1 ] && block="${block}agy_enabled: true"$'\n'
+[ "${NEED_ACK:-0}"      = 1 ] && block="${block}agy_sensitive_acked_fingerprint: \"\""$'\n'
+[ "${NEED_ACK_AT:-0}"   = 1 ] && block="${block}agy_sensitive_acked_at: \"\""$'\n'
+
+if [ -n "$block" ]; then
+  # Use Edit tool, not Write — preserve user-customized review_model / last_review / app_qa
+  # The `new_string` is DYNAMICALLY built so partial migrations don't duplicate keys
+  # or reset user's `agy_enabled: false` to `true` (R5/R6 carry-forward).
+  Edit(file_path: ".deep-review/config.yaml",
+       old_string: "last_review:",
+       new_string: "${block}last_review:")
+fi
+```
+
+**주의사항:**
+- `grep -q '^agy_notified:'` — 행 시작(`^`) 앵커와 파일명 앞 **공백**이 필수 (W-R5-1: 공백 누락 시 silent no-match).
+- 앵커를 `codex_notified: false` 값에 두지 않음 — v1.6.x 사용자는 이미 `codex_notified: true` 상태일 수 있어 마이그레이션 no-op 가능성 있음 (C-R5-3).
+- `block` 변수를 NEED_* 플래그로 동적으로 구성 — 부분 마이그레이션(키 일부만 없는 경우)에서도 중복 삽입 없음.
+
 ## Steps (리뷰 모드)
 
 ### 1. 환경 감지
@@ -71,6 +109,10 @@ Codex 또는 다른 non-Claude 런타임에서는 `claude_cli` / `claude_cli_pat
 **shallow clone (is_shallow=true) 감지 시:**
 - "shallow clone에서는 review base가 부정확할 수 있습니다. `git fetch --unshallow`를 권장합니다." 안내
 - HEAD~1 fallback으로 진행
+
+**agy 변수 (v1.7.0 신규)**:
+- `agy_cli`, `agy_cli_path`, `agy_version` — `_emit_agy_vars` 가 모든 detection path 에서 emit (Task 2)
+- `agy_enabled` (config) — false 면 detection 결과와 무관하게 reviewer 제외
 
 ### 2. 변경사항 수집 (Stage 1: Collect)
 
@@ -182,6 +224,144 @@ PY
 - `--contract SLICE-NNN`으로 archived contract를 명시적으로 지정한 경우: "SLICE-{NNN}은 archived 상태입니다. 리뷰를 계속할까요?" 확인.
 - `criteria`가 비어있으면: contract 검증 건너뜀 (Stage 3만 실행).
 
+### 3.5 agy sensitive-file acknowledgment (pre-spawn gate, fingerprint-based)
+
+Fix #4: Stage 3.5 used to check `agy in reviewers_planned`, but `reviewers_planned` is only
+computed in the reviewer-enumeration block (§4, around line 375) — later than this gate.
+At the time Stage 3.5 runs, `reviewers_planned` has no value → gate silently misfires.
+
+Replaced with a direct config probe on the same two inputs that the enumeration block uses:
+- `agy_cli` — from Stage 1 detect-environment output
+- `agy_enabled` — from `.deep-review/config.yaml`
+
+If `agy_cli=true AND agy_enabled=true`: run this gate before spawning any reviewer.
+Otherwise: skip.
+
+(Note: Stage 3.5 may set AGY_USER_DECLINED_THIS_RUN=1 if the user picks "N" in the AskUserQuestion.
+The reviewer-enumeration block at §4 consults BOTH `agy_cli && agy_enabled` (config) AND this session
+flag, so the user's per-run decline is honored without persisting any config change.)
+
+**Critical (R7 carry-forward C-R7-1)**: `scan_sensitive_files` 은 `mutation-protocol.sh` 의 bash function 이며 외부 명령이 아니다. `xargs` 로 호출 불가. while-read 루프 사용:
+
+```bash
+source "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/mutation-protocol.sh"
+
+# Portable sha256 shim (W-R7-5).
+_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1
+  elif command -v shasum   >/dev/null 2>&1; then shasum -a 256 | cut -d' ' -f1
+  else openssl dgst -sha256 -r | cut -d' ' -f1
+  fi
+}
+
+# C2: Build file list — NO depth limit (matches agy's --add-dir full-tree reach).
+# Removing -maxdepth 5 ensures sensitive files at depth 6+ are not silently bypassed.
+# Excluded directories are build/dependency caches only — not legitimate secret locations.
+# Scan covers full project tree (matching agy's --add-dir reach).
+# Excluded directories: .git/, node_modules/, .venv/, __pycache__/, dist/, build/, target/
+# (build/dependency caches only — not legitimate secret locations).
+project_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+paths_file=$(mktemp "${TMPDIR:-/tmp}/agy-paths.XXXXXX")
+find_err=$(mktemp "${TMPDIR:-/tmp}/agy-find-err.XXXXXX")
+find "$project_root" -type f \
+  -not -path '*/.git/*' \
+  -not -path '*/node_modules/*' \
+  -not -path '*/.venv/*' \
+  -not -path '*/__pycache__/*' \
+  -not -path '*/.pytest_cache/*' \
+  -not -path '*/dist/*' \
+  -not -path '*/build/*' \
+  -not -path '*/target/*' \
+  -not -path '*/.next/*' \
+  -not -path '*/.svelte-kit/*' \
+  -not -path '*/coverage/*' \
+  -not -path '*/out/*' \
+  -not -path '*/.gradle/*' \
+  -not -path '*/.cargo/*' \
+  -not -path '*/vendor/*' \
+  -not -path '*/.terraform/*' \
+  -print0 2>"$find_err" > "$paths_file"
+if [ -s "$find_err" ]; then
+  echo "⚠️ agy scan: find encountered errors:" >&2
+  head -10 "$find_err" >&2
+  echo "(showing first 10 lines; deletion follows for cleanup)" >&2
+fi
+
+# C-R7-1 fix: while-read invocation (xargs can NOT call bash functions).
+hits=""
+while IFS= read -r -d '' f; do
+  if scan_sensitive_files "$f" 2>/dev/null | grep -q .; then
+    hits="${hits}${f}"$'\n'
+  fi
+done < "$paths_file"
+hits="${hits%$'\n'}"
+rm -f "$paths_file" "$find_err"
+
+# Compute current fingerprint.
+if [ -z "$hits" ]; then
+  current_fingerprint=$(printf '' | _sha256)
+else
+  current_fingerprint=$(printf '%s\n' "$hits" | sort -u | tr '\n' '\0' | _sha256)
+fi
+
+# Read stored fingerprint from config.
+stored=$(grep '^agy_sensitive_acked_fingerprint:' .deep-review/config.yaml \
+         | sed -E 's/^agy_sensitive_acked_fingerprint: *"?([^"]*)"?$/\1/')
+
+# Decision logic (W-R7-2 fix: special-case empty stored as wildcard for no-hits clean repo).
+if [ "$current_fingerprint" = "$stored" ]; then
+  : # silent proceed (user already saw this exact set)
+elif [ -z "$stored" ] && [ -z "$hits" ]; then
+  # I2: Clean repo first run — silently set sentinel, no prompt.
+  # Also record agy_sensitive_acked_at for audit visibility (when was empty-scan auto-acked).
+  # Fix #3: Two-line atomic Edit (both lines adjacent in schema) — prevents duplicate key.
+  # Replacing only the fingerprint line while inserting ack_at inline left the original
+  # empty agy_sensitive_acked_at: "" line intact below → YAML duplicate key.
+  _ack_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  Edit(file_path: ".deep-review/config.yaml",
+       old_string: "agy_sensitive_acked_fingerprint: \"\"\nagy_sensitive_acked_at: \"\"",
+       new_string: "agy_sensitive_acked_fingerprint: \"${current_fingerprint}\"\nagy_sensitive_acked_at: \"${_ack_at}\"")
+else
+  # Sensitive set differs from last ack (or first ack with hits) — prompt user.
+  # N6 fix: derive hits_summary_max_20 before AskUserQuestion (was orphan variable).
+  hits_summary_max_20=$(printf '%s\n' "$hits" | sort -u | head -20 | sed 's|^|  - |')
+  total_hits=$(printf '%s\n' "$hits" | grep -c . || true)
+  if [ "$total_hits" -gt 20 ]; then
+    hits_summary_max_20="${hits_summary_max_20}"$'\n'"  ... and $((total_hits - 20)) more"
+  fi
+  # AskUserQuestion shown BEFORE any reviewer is spawned (safe — not at synthesis).
+  AskUserQuestion(
+    question: "agy reviewer will walk this repository's filesystem (--add-dir). Sensitive-pattern files detected (compared against last acknowledgment): ${hits_summary_max_20}. Proceed with agy for cross-vendor review?",
+    options: [
+      { label: "Y — proceed and remember this fingerprint",
+        description: "Updates agy_sensitive_acked_fingerprint to ${current_fingerprint}." },
+      { label: "N — skip agy this run, do not persist fingerprint",
+        description: "agy removed from reviewers_planned this run only; you will be re-prompted next run." }
+    ]
+  )
+  if user_choice == "Y":
+    # Fix #2: Edit tool matches LITERAL text, not regex — ".*" is not a wildcard here.
+    # After the first ack the config holds a real SHA-256, so 'agy_sensitive_acked_fingerprint: ".*"'
+    # never matches → subsequent acks silently fail → infinite re-prompts.
+    # Fix: read the current literal values first, then construct an exact two-line atomic Edit.
+    # Two-line atomic replace also eliminates the partial-update race (Fix #3 parallel).
+    _ack_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    prev_fp=$(grep '^agy_sensitive_acked_fingerprint:' .deep-review/config.yaml \
+              | sed -E 's/^agy_sensitive_acked_fingerprint: *"?([^"]*)"?$/\1/')
+    prev_at=$(grep '^agy_sensitive_acked_at:' .deep-review/config.yaml \
+              | sed -E 's/^agy_sensitive_acked_at: *"?([^"]*)"?$/\1/')
+    Edit(file_path: ".deep-review/config.yaml",
+         old_string: "agy_sensitive_acked_fingerprint: \"${prev_fp}\"\nagy_sensitive_acked_at: \"${prev_at}\"",
+         new_string: "agy_sensitive_acked_fingerprint: \"${current_fingerprint}\"\nagy_sensitive_acked_at: \"${_ack_at}\"")
+  else:
+    # User declined exposure this run — set a session flag that §4 enumeration honors.
+    AGY_USER_DECLINED_THIS_RUN=1
+    # W-R7-6: do NOT touch agy_notified — that flag is for install hints, not ack.
+fi
+```
+
+**중요 — 이 코드 블록은 runtime 동작의 문서화**. 실제 실행은 Claude Code 가 본 markdown 의 의도를 읽어 수행. `Edit(...)`, `AskUserQuestion(...)`, `user_choice` 같은 표현은 Edit tool 호출과 user prompt 결과를 의미하는 pseudocode 임.
+
 ### 4. 리뷰 실행 (Stage 3: Deep Review)
 
 **fitness.json 주입 (있으면):**
@@ -211,11 +391,29 @@ deep-work v6.5.0+ 부터 session-receipt 는 M3 envelope-wrapped (`{schema_versi
 
 slice receipt (`.deep-work/<sid>/receipts/SLICE-*.json`) 도 동일 패턴이 필요한 경우 같은 envelope-aware 로직 (`producer=deep-work`, `artifact_kind=slice-receipt`) 으로 unwrap 한다. v1.4.0 에서는 slice receipt 직접 read path 가 없지만 향후 추가 시 본 패턴 미러.
 
+**리뷰어 열거 (reviewer enumeration):**
+
+```text
+reviewers_planned = ["opus"]                   # always
+if codex_plugin && node_available:
+    reviewers_planned += ["codex-review", "codex-adversarial"]
+if agy_cli && agy_enabled && [ -z "${AGY_USER_DECLINED_THIS_RUN:-}" ]:  # config + per-run user choice
+    reviewers_planned += ["agy"]
+N_planned = len(reviewers_planned)             # 1, 2, 3, or 4
+```
+
+**중요 invariant**: `agy_enabled: false` (config opt-out) excludes agy from `reviewers_planned`, AND (per §3.3 mutation gating unchanged) it means `agy_cli=true, agy_enabled=false, codex_plugin=false` triggers **no** mutation prompt — verified by §5.5 scenario #7 (Task 16 manual dogfooding).
+
 **유저 고지 (리뷰어 spawn 직전):**
 
-리뷰어를 spawn하기 직전, 실행되는 리뷰어 구성에 따라 고지:
-- Opus 단독 (Case 1/2): "Opus 리뷰를 백그라운드에서 실행합니다. 완료되면 결과를 알려드리겠습니다."
-- 3-way (Case 3): "3개 리뷰어(Opus, Codex review, Codex adversarial)를 백그라운드에서 실행합니다. 완료되면 결과를 합성하여 알려드리겠습니다."
+리뷰어를 spawn하기 직전, 실행되는 리뷰어 구성(N_planned)에 따라 고지:
+
+| N | Message |
+|---|---|
+| 4 | "4개 리뷰어(Opus, Codex review, Codex adversarial, agy)를 백그라운드에서 실행합니다. 완료되면 결과를 합성하여 알려드리겠습니다." |
+| 3 | "3개 리뷰어(Opus, Codex review, Codex adversarial)를 백그라운드에서 실행합니다. 완료되면 결과를 합성하여 알려드리겠습니다." |
+| 2 | "2개 리뷰어(<composition>)를 백그라운드에서 실행합니다. 완료되면 결과를 합성하여 알려드리겠습니다." |
+| 1 | "Opus 리뷰를 백그라운드에서 실행합니다. 완료되면 결과를 알려드리겠습니다." |
 
 **Claude Opus reviewer (항상 시도):**
 
@@ -249,6 +447,35 @@ slice receipt (`.deep-work/<sid>/receipts/SLICE-*.json`) 도 동일 패턴이 �
 3. 실패 시 (인증 오류, 타임아웃 등): Codex 결과를 "미수행"으로 표시하고 Claude Opus 단독으로 fallback
 4. 합성 시 미수행 리뷰어는 제외 (3-way가 아닌 실제 수행된 리뷰어 수 기준)
 
+**agy preflight (agy가 reviewers_planned에 포함된 경우):**
+```bash
+# C4: _timeout shim MUST be defined inline at the start of every Bash block that uses it.
+# Each Bash tool call is a separate subshell — functions defined in prior calls are invisible.
+_timeout() {
+  local seconds="$1"; shift
+  if command -v gtimeout >/dev/null 2>&1; then gtimeout "$seconds" "$@"; return; fi
+  if command -v timeout  >/dev/null 2>&1; then  timeout  "$seconds" "$@"; return; fi
+  # BLOCKER-1 fix: shift $seconds BEFORE fork so child's @ARGV is the actual command.
+  # fork first; exec only in child. Parent traps SIGALRM, exits 124.
+  perl -e '
+    my $seconds = shift @ARGV;
+    my $pid = fork;
+    if (!defined $pid) { die "fork: $!" }
+    if (!$pid) { exec @ARGV; die "exec: $!" }
+    alarm $seconds;
+    $SIG{ALRM} = sub { kill 15, $pid; exit 124 };
+    wait;
+    exit ($? >> 8)
+  ' "$seconds" "$@"
+}
+# agy preflight (W-R5-1 / W-R7-1 fix: use $agy_cli_path for deterministic binding, NOT literal `agy`).
+_timeout 10 "$agy_cli_path" --version >/dev/null 2>&1 && AGY_PREFLIGHT=OK || AGY_PREFLIGHT=FAIL
+if [ "$AGY_PREFLIGHT" = "FAIL" ]; then
+  AGY_STATUS="not_attempted:agy_preflight_failed"
+  # Remove agy from reviewers_planned, recompute N_planned
+fi
+```
+
 **Stage 3.0: Mutation 허가 플로우 (codex_invisible 감지 시)**
 
 §2.2 에서 `codex_invisible` 이 비어있지 않으면 아래 절차 수행:
@@ -274,7 +501,16 @@ slice receipt (`.deep-work/<sid>/receipts/SLICE-*.json`) 도 동일 패턴이 �
    fi
    ```
    - `MUTATION_OK=1` → Codex review / adversarial 경로 진행.
-   - `MUTATION_OK=0` → Codex 호출 skip, Opus 만 spawn. Summary: `Review Mode: 1-way (Opus only) — mutation failed`.
+   - `MUTATION_OK=0` → Codex 호출 skip, Opus 만 spawn.
+
+**Mutation-failure fallback (C-R7-4 / spec §4.4 update — per-reviewer label)**
+
+`acquire_mutation_lock` 또는 `git add -f -N` 실패 시 (CR3 graceful fallback):
+
+- **codex** 는 git-visible files 만으로 호출 (노출된 gitignored 파일 access 불가)
+- **agy 는 영향 없음** — `--add-dir` filesystem walk 은 mutation 무관 (§3.3 / §4.5 trust-boundary 참조)
+
+Summary 가 `Review Mode: {N}-way — codex visible-only / agy full-tree, mutation failed` 라고 표시 → 사용자가 리포트만 봐도 agy 의 coverage 가 변하지 않고 codex 만 degrade 됐음을 인지.
 
 **F3 — Codex 인증 실패 구분 (stderr 캡처)**:
 
@@ -316,7 +552,16 @@ Codex 리뷰 대상은 change_state에 따라 결정:
   _timeout() { sec=$1; shift
     if command -v gtimeout >/dev/null 2>&1; then gtimeout "$sec" "$@"; return; fi
     if command -v timeout  >/dev/null 2>&1; then  timeout "$sec" "$@"; return; fi
-    perl -e '"'"'alarm shift; exec @ARGV'"'"' "$sec" "$@"
+    perl -e '"'"'
+      my $seconds = shift @ARGV;
+      my $pid = fork;
+      if (!defined $pid) { die "fork: $!" }
+      if (!$pid) { exec @ARGV; die "exec: $!" }
+      alarm $seconds;
+      $SIG{ALRM} = sub { kill 15, $pid; exit 124 };
+      wait;
+      exit ($? >> 8)
+    '"'"' "$sec" "$@"
   }
   _timeout 900 node "{codex_companion_path}" review {codex_target_flag}
   ', run_in_background: true })
@@ -331,7 +576,16 @@ Codex 리뷰 대상은 change_state에 따라 결정:
   _timeout() { sec=$1; shift
     if command -v gtimeout >/dev/null 2>&1; then gtimeout "$sec" "$@"; return; fi
     if command -v timeout  >/dev/null 2>&1; then  timeout "$sec" "$@"; return; fi
-    perl -e '"'"'alarm shift; exec @ARGV'"'"' "$sec" "$@"
+    perl -e '"'"'
+      my $seconds = shift @ARGV;
+      my $pid = fork;
+      if (!defined $pid) { die "fork: $!" }
+      if (!$pid) { exec @ARGV; die "exec: $!" }
+      alarm $seconds;
+      $SIG{ALRM} = sub { kill 15, $pid; exit 124 };
+      wait;
+      exit ($? >> 8)
+    '"'"' "$sec" "$@"
   }
   focus_file=$(mktemp "${TMPDIR:-/tmp}/deep-review-focus.XXXXXX") \
     && chmod 600 "$focus_file" \
@@ -356,6 +610,33 @@ Codex 리뷰 대상은 change_state에 따라 결정:
   - 호출 1에서 `focus_file=$(mktemp …)` 로 변수만 만들고 후속 Bash에서 `$focus_file` 참조 → **subshell 경계 넘지 못해 unset**. 절대 사용 금지.
   - `trap 'rm -f "$focus_file"' EXIT` 을 호출 1에 등록 → 호출 1의 EXIT가 즉시 발생해 background 호출 2가 파일을 읽기 전에 선제 삭제. Option A 내부에서만 trap을 사용한다.
   - `/tmp/deep-review-focus.txt` 같은 predictable name 사용 → race/symlink 공격.
+
+4. **agy reviewer** (Bash tool, run_in_background: true)
+
+  > **LLM substitution note**: `{placeholder}` values (e.g. `{agy_cli_path}`, `{prompt_file}`,
+  > `{output_file}`) are substituted with **literal strings** by the orchestrator (LLM) before
+  > invoking the Bash tool. They are NOT shell variables — the spawned subshell has no memory of
+  > prior Bash calls or LLM-side state. Use Stage 1 detection output (`agy_cli_path`) and mktemp
+  > outputs from earlier in this session as the literal values to substitute.
+
+  **Concrete substitution example** (orchestrator fills before invoking Bash):
+  - `{agy_cli_path}` → `/usr/local/bin/agy` (from Stage 1 `agy_cli_path` detection)
+  - `{project_root}` → `/home/user/myrepo` (from `git rev-parse --show-toplevel`)
+  - `{prompt_file}` → `/tmp/deep-review-agy-prompt.xXxXxX` (from mktemp in earlier Bash call)
+  - `{output_file}` → `/tmp/deep-review-agy-output.xXxXxX` (from mktemp in earlier Bash call)
+
+  ```
+  Bash({ command: '
+  "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-agy-reviewer.sh" \
+    --binary "{agy_cli_path}" \
+    --project-root "{project_root}" \
+    --prompt-file "{prompt_file}" \
+    --output "{output_file}" \
+    --timeout-seconds 900
+  ', run_in_background: true })
+  ```
+
+  Orchestrator passes `--binary {agy_cli_path}` (Stage 1 detection result) for deterministic binding independent of subsequent `$PATH` mutations. Bridge's internal resolution (`--binary` → `$AGY_BINARY` → `command -v agy`) only activates if `--binary` was not passed (e.g., direct CLI tests).
 
 여기서 `{codex_target_flag}`는:
 - clean 또는 WIP 커밋 후: `--base {review_base}`
@@ -415,17 +696,83 @@ restore_mutation
 - Opus background task 실패 시: "미수행"으로 표시, 실행된 리뷰어만으로 합성
 - 부분 성공 시: 성공한 리뷰어 수 기준으로 합성 (3-way가 아닌 실제 수행된 N-way)
 
+```bash
+# Read agy's classified AGY_STATUS from the bridge's terminal status file.
+# (Bridge writes status_file atomically via .tmp + mv — orchestrator can read directly.)
+AGY_STATUS=$(cat "${output_file}.status" 2>/dev/null || echo "not_attempted:bridge_no_notification")
+
+# BLOCKER-3: Read mutation-warning sidecar emitted by bridge C3 detection.
+# If the sidecar exists, agy mutated the worktree — findings may be based on altered state.
+# Override AGY_STATUS to "mutated" and force-degrade Verdict (exclude from N_actual count).
+AGY_MUTATION_WARNING=0
+if [ -f "${output_file}.mutation-warning" ]; then
+  AGY_MUTATION_WARNING=1
+  AGY_STATUS="mutated"
+fi
+
+# Fix #1 (BLOCKER-4): prompt_too_large means agy reviewed a truncated input — exclude from synthesis.
+# The bridge sets AGY_STATUS=prompt_too_large when diff > 200KB was truncated before being sent.
+# Without this gate, a truncated agy review still counted toward N_actual=4 and influenced verdict.
+AGY_TRUNCATED=0
+if [ "$AGY_STATUS" = "prompt_too_large" ]; then
+  AGY_TRUNCATED=1
+fi
+
+# Combined synthesis exclusion gate — replaces the prose-only AGY_MUTATION_WARNING rule below.
+# Any of these conditions means agy's output is unreliable and must NOT count toward N_actual.
+AGY_EXCLUDE_FROM_SYNTHESIS=0
+[ "$AGY_MUTATION_WARNING" = "1" ] && AGY_EXCLUDE_FROM_SYNTHESIS=1
+[ "$AGY_TRUNCATED"        = "1" ] && AGY_EXCLUDE_FROM_SYNTHESIS=1
+[ "$AGY_STATUS"          != "success" ] && AGY_EXCLUDE_FROM_SYNTHESIS=1
+# When AGY_EXCLUDE_FROM_SYNTHESIS=1:
+#   - Exclude agy from N_actual (do NOT count its output as a valid reviewer).
+#   - Inject reason-specific warning into Summary (see conditions above for per-reason text).
+#   - Do NOT promote agy findings into verdict — treat agy as "not_attempted" for synthesis purposes.
+```
+
+> **Synthesis rule (AGY_EXCLUDE_FROM_SYNTHESIS=1)**:
+> - Exclude agy from `N_actual` (do NOT count its output as a valid reviewer).
+> - Per-condition Summary warnings:
+>   - `AGY_MUTATION_WARNING=1`: `⚠️ agy mutated workspace — manually verify before trusting review output`; append `git status`.
+>   - `AGY_TRUNCATED=1` (prompt_too_large): `⚠️ agy reviewed a truncated diff (>200KB) — findings may be incomplete`.
+>   - Other non-success `AGY_STATUS`: `⚠️ agy did not complete successfully (status: ${AGY_STATUS}) — excluded from synthesis`.
+> - Do NOT promote agy findings into verdict — treat agy as "not_attempted" for synthesis purposes.
+
 1. 교차 검증 합성 (Codex 결과가 있을 때):
    - 전원 일치 지적 → 🔴 높은 확신
    - 2/3 지적 → 🟡 중간 확신
    - 단독 지적 → 참고
    - 전원 통과 → 🟢
 
+**4-way verdict synthesis (when N_actual=4)**:
+
+| N_actual | Pattern | Verdict | Per-finding annotation |
+|---|---|---|---|
+| 4 | 4/4 agree | 🔴 high → REQUEST_CHANGES | `agreement: unanimous_4` |
+| 4 | 3/4 agree | 🔴 high | `agreement: majority_3_of_4` + `dissenter: <name>` + `dissenter_family: anthropic\|openai\|google` + `dissent_summary` |
+| 4 | 2/4 agree | 🟡 CONCERN | `agreement: split_2_of_4` (supporters + dissenters listed) |
+| 4 | 1/4 sole | info (single-reviewer note) | `agreement: solo_1_of_4` + `source: <reviewer>` |
+| 4 | 0/4 | 🟢 APPROVE | n/a |
+
+기존 N=3, 2, 1 fallback 행은 그대로 유지 (3-way 이하).
+
 2. Verdict 결정:
    - 🔴 1건 이상 → **REQUEST_CHANGES**
    - 🟡만, 전원 일치 → **REQUEST_CHANGES**
    - 🟡만, 의견 분리 → **CONCERN**
    - 🟢만 → **APPROVE**
+
+### Stage 4.3.1: opus 실패 시 auto-degradation (no AskUserQuestion at synthesis)
+
+`opus_status != success AND N_actual_external ≤ 1` (= Opus 실패 + 외부 reviewer 1개 이하 성공) 시:
+
+1. **합성과 리포트 저장은 항상 진행** (Verdict 강등하더라도 결과 보존).
+2. **Verdict 를 `CONCERN` 으로 강제** (APPROVE 또는 REQUEST_CHANGES 금지).
+3. **Summary 어노테이션**: `degraded: opus_failed_low_confidence` + 실행된 reviewer 목록.
+4. **`last_review` 평소처럼 update**.
+5. **사후 chat 메시지**: "⚠️ Verdict downgraded to CONCERN — Opus failed and only {N} external reviewer(s) responded. Treat findings as advisory."
+
+이는 deterministic — synthesis 단계에서 AskUserQuestion 없음. (R5 C-R5 / R7 §4.3.1 fix — async run_in_background 패러다임과 충돌 회피.)
 
 3. 리포트 저장: `.deep-review/reports/{YYYY-MM-DD}-{HHmmss}-review.md` (Bash `date "+%Y-%m-%d-%H%M%S"`로 파일명 생성 — 같은 날 재실행 시 덮어쓰기 방지)
 
@@ -688,7 +1035,7 @@ Phase 6 구현은 `phase6-implementer` 서브에이전트에 그룹 dispatch. �
 
 **심각도 그룹 loop** (🔴 → 🟡 → ℹ️):
 
-**실행 가능한 e2e 테스트**: 아래 각 Step의 핵심 shell 로직은 `hooks/scripts/test/test-phase6-protocol-e2e.sh`의 11개 테스트(E1~E11)에서 실증 검증됨. pseudocode가 문서로 drift하지 않도록 **CI에서 e2e도 함께 실행**.
+**실행 가능한 e2e 테스트**: 아래 각 Step의 핵심 shell 로직은 `hooks/scripts/test/test-phase6-protocol-e2e.sh`의 12개 테스트(E1~E12)에서 실증 검증됨. pseudocode가 문서로 drift하지 않도록 **CI에서 e2e도 함께 실행**.
 
 **Step ↔ spec 매핑** (단일 mental map 유지용):
 
@@ -1048,6 +1395,10 @@ mkdir -p .deep-review/journeys
 # .deep-review/config.yaml
 review_model: opus
 codex_notified: false
+agy_notified: false
+agy_enabled: true
+agy_sensitive_acked_fingerprint: ""
+agy_sensitive_acked_at: ""
 last_review: null
 app_qa:
   last_command: null

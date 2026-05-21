@@ -1,6 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# N8: _timeout shim for agy --version call (and any future unbounded probes).
+# Uses gtimeout (coreutils) → timeout (GNU/BSD 8.13+) → perl fork/wait fallback.
+# BLOCKER-1 fix applied: shift $seconds before fork so child's @ARGV is the actual command.
+_timeout() {
+  local seconds="$1"; shift
+  if command -v gtimeout >/dev/null 2>&1; then gtimeout "$seconds" "$@"; return; fi
+  if command -v timeout  >/dev/null 2>&1; then  timeout  "$seconds" "$@"; return; fi
+  perl -e '
+    my $seconds = shift @ARGV;
+    my $pid = fork;
+    if (!defined $pid) { die "fork: $!" }
+    if (!$pid) { exec @ARGV; die "exec: $!" }
+    alarm $seconds;
+    $SIG{ALRM} = sub { kill 15, $pid; exit 124 };
+    wait;
+    exit ($? >> 8)
+  ' "$seconds" "$@"
+}
+
 # === F2: Node.js 가용성 helper (모든 출력 분기에서 공유) ===
 # CR7 대응: 하드코딩 금지 — 실제 PATH 에서 node 를 탐지해 값 emit.
 emit_node_availability() {
@@ -26,6 +45,26 @@ emit_claude_cli_availability() {
   echo "claude_cli_path=$claude_cli_path"
 }
 
+# Emits agy_cli / agy_cli_path / agy_version key=value lines.
+# Called before every `exit 0` to ensure all 3 detection paths (non-git, initial-repo,
+# normal-commits) emit these vars uniformly. C-R5-2 fix.
+_emit_agy_vars() {
+  if command -v agy >/dev/null 2>&1; then
+    local p
+    p="$(command -v agy)"
+    local v
+    # N8 fix: wrap in _timeout 3 to prevent unbounded hang if agy --version stalls.
+    v="$(_timeout 3 agy --version 2>/dev/null | head -1 || echo)"
+    echo "agy_cli=true"
+    echo "agy_cli_path=$p"
+    echo "agy_version=$v"
+  else
+    echo "agy_cli=false"
+    echo "agy_cli_path="
+    echo "agy_version="
+  fi
+}
+
 # === 1. Git 리포지터리 여부 ===
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "is_git=false"
@@ -40,6 +79,7 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "codex_installed=false"
   emit_node_availability
   emit_claude_cli_availability
+  _emit_agy_vars
   exit 0
 fi
 
@@ -97,6 +137,7 @@ if ! git rev-parse HEAD >/dev/null 2>&1; then
   fi
   emit_node_availability
   emit_claude_cli_availability
+  _emit_agy_vars
   exit 0
 fi
 
@@ -209,3 +250,7 @@ emit_node_availability
 
 # 5e. Codex/non-Claude runtime에서 Claude reviewer를 실행하기 위한 CLI bridge.
 emit_claude_cli_availability
+
+# 5f. agy reviewer bridge availability. C-R5-2 fix: emit on all 3 paths.
+_emit_agy_vars
+exit 0

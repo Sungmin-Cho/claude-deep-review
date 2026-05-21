@@ -184,6 +184,7 @@ verification:
 | deep-review Opus | evidence와 대조. 코드가 지적과 다르면 반박 가능 |
 | Codex review | evidence와 대조. 코드가 지적과 다르면 반박 가능 |
 | Codex adversarial | 회의적 검증. false positive 가능성 항상 고려 |
+| agy | evidence와 대조. cross-vendor signal로 취급; Opus와 일치 시 확신도 높임 |
 | PR comment (외부) | 5-point 체크리스트 적용 (아래 참조) |
 
 ### 외부 리뷰어(PR comment) 5-Point 체크리스트
@@ -199,8 +200,11 @@ verification:
 | 패턴 | 확신도 | 행동 |
 |------|--------|------|
 | Opus + Codex 일치 | 높음 | 수락 우선. 반박하려면 강한 코드 증거 필요 |
+| Opus + agy 일치 | 높음 | cross-vendor confirmation. 수락 우선 |
+| 3/4 이상 일치 | 높음 | 수락 우선. 반박하려면 강한 코드 증거 필요 |
 | Opus만 지적 | 중간 | VERIFY 결과에 따라 판단 |
 | Codex만 지적 | 낮음 | 회의적 검증. 코드 증거 없으면 기각 가능 |
+| agy만 지적 | 낮음 | 회의적 검증. cross-vendor이지만 단독 지적은 참고 수준 |
 | Adversarial만 지적 | 매우 낮음 | 참고 수준. 기각이 기본, 수락하려면 증거 필요 |
 
 ---
@@ -268,7 +272,7 @@ Phase 6는 심각도 그룹(🔴 → 🟡 → ℹ️)별로 `phase6-implementer`
 | Main↔Subagent 입출력 계약 | `references/phase6-prompt-contract.md` |
 | 설계 배경·결정 사항 | `references/phase6-delegation-spec.md` |
 | Subagent의 구현 절차 | `agents/phase6-implementer.md` 시스템 프롬프트 |
-| 실행 검증 | `hooks/scripts/test/test-phase6-protocol-e2e.sh` (E1~E11) |
+| 실행 검증 | `hooks/scripts/test/test-phase6-protocol-e2e.sh` (E1~E12) |
 
 **불변량 요약** (스킬 단독 로드 시 최소 보장 — 세부는 위 단일 소스 참조):
 

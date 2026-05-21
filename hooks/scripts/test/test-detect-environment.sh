@@ -95,4 +95,60 @@ echo "$output" | grep -q "^codex_installed=" && echo "  ✅ codex_installed stil
 TEST_COUNT=$((TEST_COUNT+1))
 teardown_test_repo
 
+# === agy detection tests ===
+echo ""
+echo "=== agy detection tests ==="
+
+assert_agy_present() {
+  local context="$1"
+  local out="$2"
+  local ok=0
+  for key in agy_cli agy_cli_path agy_version; do
+    if ! echo "$out" | grep -q "^${key}="; then
+      echo "  ❌ $context: missing $key" >&2
+      TEST_FAILURES=$((TEST_FAILURES + 1))
+      ok=1
+    fi
+  done
+  TEST_COUNT=$((TEST_COUNT + 1))
+  [ "$ok" -eq 0 ] && echo "  ✅ $context: agy_cli / agy_cli_path / agy_version all emitted"
+  return 0
+}
+
+# Path 1: normal commits (this repo itself)
+repo=$(setup_test_repo)
+cd "$repo"
+out=$(bash "$DETECT_SCRIPT" 2>&1)
+assert_agy_present "normal-commits" "$out"
+teardown_test_repo
+
+# Path 2: non-git directory
+tmp=$(mktemp -d)
+(
+  cd "$tmp"
+  out=$(bash "$DETECT_SCRIPT" 2>&1)
+  assert_agy_present "non-git" "$out"
+)
+rm -rf "$tmp"
+
+# Path 3: initial-repo (git init only, no commits)
+tmp=$(mktemp -d)
+(
+  cd "$tmp"
+  git init -q
+  out=$(bash "$DETECT_SCRIPT" 2>&1)
+  assert_agy_present "initial-repo" "$out"
+)
+rm -rf "$tmp"
+
+# Path 4: agy absent (PATH stripped) → expect agy_cli=false
+out=$(PATH="/usr/bin:/bin" bash "$DETECT_SCRIPT" 2>&1)
+if echo "$out" | grep -q '^agy_cli=false'; then
+  echo "  ✅ agy absent: agy_cli=false correctly emitted"
+else
+  echo "  ❌ agy absent path did not emit agy_cli=false"
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
+TEST_COUNT=$((TEST_COUNT + 1))
+
 test_summary
