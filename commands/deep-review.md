@@ -417,8 +417,18 @@ _timeout() {
   local seconds="$1"; shift
   if command -v gtimeout >/dev/null 2>&1; then gtimeout "$seconds" "$@"; return; fi
   if command -v timeout  >/dev/null 2>&1; then  timeout  "$seconds" "$@"; return; fi
-  # C1 fix (fork/wait pattern): fork first; exec only in child. Parent traps SIGALRM, exits 124.
-  perl -e 'my $pid = fork; if (!$pid) { exec @ARGV } alarm shift; $SIG{ALRM} = sub { kill 15, $pid; exit 124 }; wait; exit ($? >> 8)' "$seconds" "$@"
+  # BLOCKER-1 fix: shift $seconds BEFORE fork so child's @ARGV is the actual command.
+  # fork first; exec only in child. Parent traps SIGALRM, exits 124.
+  perl -e '
+    my $seconds = shift @ARGV;
+    my $pid = fork;
+    if (!defined $pid) { die "fork: $!" }
+    if (!$pid) { exec @ARGV; die "exec: $!" }
+    alarm $seconds;
+    $SIG{ALRM} = sub { kill 15, $pid; exit 124 };
+    wait;
+    exit ($? >> 8)
+  ' "$seconds" "$@"
 }
 # agy preflight (W-R5-1 / W-R7-1 fix: use $agy_cli_path for deterministic binding, NOT literal `agy`).
 _timeout 10 "$agy_cli_path" --version >/dev/null 2>&1 && AGY_PREFLIGHT=OK || AGY_PREFLIGHT=FAIL
@@ -504,7 +514,16 @@ Codex 리뷰 대상은 change_state에 따라 결정:
   _timeout() { sec=$1; shift
     if command -v gtimeout >/dev/null 2>&1; then gtimeout "$sec" "$@"; return; fi
     if command -v timeout  >/dev/null 2>&1; then  timeout "$sec" "$@"; return; fi
-    perl -e '"'"'alarm shift; exec @ARGV'"'"' "$sec" "$@"
+    perl -e '"'"'
+      my $seconds = shift @ARGV;
+      my $pid = fork;
+      if (!defined $pid) { die "fork: $!" }
+      if (!$pid) { exec @ARGV; die "exec: $!" }
+      alarm $seconds;
+      $SIG{ALRM} = sub { kill 15, $pid; exit 124 };
+      wait;
+      exit ($? >> 8)
+    '"'"' "$sec" "$@"
   }
   _timeout 900 node "{codex_companion_path}" review {codex_target_flag}
   ', run_in_background: true })
@@ -519,7 +538,16 @@ Codex 리뷰 대상은 change_state에 따라 결정:
   _timeout() { sec=$1; shift
     if command -v gtimeout >/dev/null 2>&1; then gtimeout "$sec" "$@"; return; fi
     if command -v timeout  >/dev/null 2>&1; then  timeout "$sec" "$@"; return; fi
-    perl -e '"'"'alarm shift; exec @ARGV'"'"' "$sec" "$@"
+    perl -e '"'"'
+      my $seconds = shift @ARGV;
+      my $pid = fork;
+      if (!defined $pid) { die "fork: $!" }
+      if (!$pid) { exec @ARGV; die "exec: $!" }
+      alarm $seconds;
+      $SIG{ALRM} = sub { kill 15, $pid; exit 124 };
+      wait;
+      exit ($? >> 8)
+    '"'"' "$sec" "$@"
   }
   focus_file=$(mktemp "${TMPDIR:-/tmp}/deep-review-focus.XXXXXX") \
     && chmod 600 "$focus_file" \
@@ -552,20 +580,6 @@ Codex 리뷰 대상은 change_state에 따라 결정:
   > invoking the Bash tool. They are NOT shell variables — the spawned subshell has no memory of
   > prior Bash calls or LLM-side state. Use Stage 1 detection output (`agy_cli_path`) and mktemp
   > outputs from earlier in this session as the literal values to substitute.
-
-  ```
-  Bash({ command: '
-  "{agy_cli_path_literal}/run-agy-reviewer.sh-via-plugin-root" \
-  # ↑ expand to literal: "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-agy-reviewer.sh"
-  # substituting $CLAUDE_PLUGIN_ROOT with its runtime value at spawn time
-  "{CLAUDE_PLUGIN_ROOT_literal}/hooks/scripts/run-agy-reviewer.sh" \
-    --binary "{agy_cli_path}" \
-    --project-root "{project_root}" \
-    --prompt-file "{prompt_file}" \
-    --output "{output_file}" \
-    --timeout-seconds 900
-  ', run_in_background: true })
-  ```
 
   **Concrete substitution example** (orchestrator fills before invoking Bash):
   - `{agy_cli_path}` → `/usr/local/bin/agy` (from Stage 1 `agy_cli_path` detection)

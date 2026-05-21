@@ -27,7 +27,17 @@ timeout_run() {
     timeout "$sec" "$@"
     return
   fi
-  perl -e 'alarm shift; exec @ARGV' "$sec" "$@"
+  # BLOCKER-1/N3 fix: shift $seconds before fork so child's @ARGV is the actual command.
+  perl -e '
+    my $seconds = shift @ARGV;
+    my $pid = fork;
+    if (!defined $pid) { die "fork: $!" }
+    if (!$pid) { exec @ARGV; die "exec: $!" }
+    alarm $seconds;
+    $SIG{ALRM} = sub { kill 15, $pid; exit 124 };
+    wait;
+    exit ($? >> 8)
+  ' "$sec" "$@"
 }
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

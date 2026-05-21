@@ -19,8 +19,18 @@ _timeout() {
   if command -v timeout  >/dev/null 2>&1; then  timeout  "$seconds" "$@"; return; fi
   # C1 fix (fork/wait pattern): bare `exec` resets signal disposition in the child,
   # so SIGALRM kills with rc=142 (signal 14), not 124. Fork first; exec only in child.
-  # Parent installs SIGALRM trap, calls alarm; on SIGALRM kills child with SIGTERM, exits 124.
-  perl -e 'my $pid = fork; if (!$pid) { exec @ARGV } alarm shift; $SIG{ALRM} = sub { kill 15, $pid; exit 124 }; wait; exit ($? >> 8)' "$seconds" "$@"
+  # BLOCKER-1 fix: shift $seconds BEFORE fork so child's @ARGV is the actual command,
+  # not the numeric timeout string. Parent installs SIGALRM, waits, exits 124 on alarm.
+  perl -e '
+    my $seconds = shift @ARGV;
+    my $pid = fork;
+    if (!defined $pid) { die "fork: $!" }
+    if (!$pid) { exec @ARGV; die "exec: $!" }
+    alarm $seconds;
+    $SIG{ALRM} = sub { kill 15, $pid; exit 124 };
+    wait;
+    exit ($? >> 8)
+  ' "$seconds" "$@"
 }
 
 _sha256() {
