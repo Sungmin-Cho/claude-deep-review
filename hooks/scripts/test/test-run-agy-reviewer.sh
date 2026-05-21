@@ -89,4 +89,38 @@ assert_status success
 echo "Test 7 (missing arg)"
 "$BRIDGE" --project-root "$REPO" 2>/dev/null && { echo "FAIL: expected non-zero"; exit 1; } || echo "  ✓ exits non-zero on missing args"
 
+echo "Test 8 (Perl fork/wait fallback — BLOCKER-1 fix — timeout produces rc=124)"
+# Strip PATH of gtimeout and timeout so the Perl fallback is the only path.
+# Build a stripped PATH that excludes any directory containing gtimeout or timeout.
+stripped_path=""
+IFS=: read -ra _dirs <<< "$PATH"
+for _dir in "${_dirs[@]}"; do
+  if [ -x "$_dir/gtimeout" ] || [ -x "$_dir/timeout" ]; then
+    : # skip this dir
+  else
+    stripped_path="${stripped_path:+${stripped_path}:}${_dir}"
+  fi
+done
+# Verify perl is reachable (required for fallback)
+if ! PATH="$stripped_path" command -v perl >/dev/null 2>&1; then
+  echo "  ⚠ perl not in stripped PATH — skipping Perl fallback test"
+else
+  # Before fix: child would exec the timeout number as a command (e.g. "5") → ENOENT
+  # After fix: child execs the actual agy mock in timeout mode → rc=124
+  rc=0
+  PATH="$stripped_path:$WORK/mock-bin" MOCK_BEHAVIOR="timeout" MOCK_ARGS_LOG="$ARGS_LOG" \
+    "$BRIDGE" --project-root "$REPO" --prompt-file "$PROMPT" --output "$OUT" --timeout-seconds 2 \
+    || rc=$?
+  # status file should be "timeout" (rc=124 → classifier maps to timeout)
+  got_status=$(cat "$OUT.status" 2>/dev/null || echo MISSING)
+  if [ "$got_status" = "timeout" ]; then
+    echo "  ✓ Perl fallback: status=timeout (rc=124 correctly mapped)"
+  elif [ "$got_status" = "failed" ] || [ "$got_status" = "MISSING" ]; then
+    echo "FAIL: Perl fallback produced status=$got_status (expected timeout — likely exec of numeric arg)" >&2
+    exit 1
+  else
+    echo "  ✓ Perl fallback: status=$got_status (acceptable — agy mock may have exited before alarm)"
+  fi
+fi
+
 echo "ALL PASS"

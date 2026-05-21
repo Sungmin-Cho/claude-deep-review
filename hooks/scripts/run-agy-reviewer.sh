@@ -79,15 +79,30 @@ AGY_AUTH_REGEX='Reauthentication required|do not currently have an active accoun
 # This snapshot is a sha256 fingerprint of all non-git/non-nodemodules files. It is
 # COARSE (not perfect — races, large trees), but detects most accidental mutations.
 # NOTE: this adds measurable latency on large repos; a future release may make it optional.
+#
+# N5: unified exclusion list (matches §3.5 sensitive-scan find in commands/deep-review.md).
+# N9: use _sha256 shim (defined above) instead of sha256sum — macOS BSD has no sha256sum,
+#     fallback was "unavailable" which silently disabled C3 on every macOS machine.
+#     Order: xargs passes file contents to _sha256; outer _sha256 hashes the concatenation.
 pre_walk_hash=$(cd "$project_root" && find . -type f \
   -not -path './.git/*' \
   -not -path './node_modules/*' \
   -not -path './.venv/*' \
   -not -path './__pycache__/*' \
+  -not -path './.pytest_cache/*' \
   -not -path './dist/*' \
   -not -path './build/*' \
   -not -path './target/*' \
-  -print0 2>/dev/null | sort -z | xargs -0 -n 100 sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1 || echo "unavailable")
+  -not -path './.next/*' \
+  -not -path './.svelte-kit/*' \
+  -not -path './coverage/*' \
+  -not -path './out/*' \
+  -not -path './.gradle/*' \
+  -not -path './.cargo/*' \
+  -not -path './vendor/*' \
+  -not -path './.terraform/*' \
+  -print0 2>/dev/null | sort -z | xargs -0 -n 100 sh -c 'for f in "$@"; do cat "$f" 2>/dev/null; done' _ \
+  | _sha256 2>/dev/null || echo "unavailable")
 
 # ---------- invocation ----------
 stderr_log=$(mktemp "${TMPDIR:-/tmp}/agy-stderr.XXXXXX")
@@ -115,15 +130,26 @@ _timeout "$timeout" "$resolved_binary" -p "$prompt_content" \
     > "$output_file" 2> "$stderr_log" || rc=$?
 
 # ---------- C3: post-spawn mutation check ----------
+# N5/N9: same unified exclusion list + _sha256 shim (matches pre_walk_hash above).
 post_walk_hash=$(cd "$project_root" && find . -type f \
   -not -path './.git/*' \
   -not -path './node_modules/*' \
   -not -path './.venv/*' \
   -not -path './__pycache__/*' \
+  -not -path './.pytest_cache/*' \
   -not -path './dist/*' \
   -not -path './build/*' \
   -not -path './target/*' \
-  -print0 2>/dev/null | sort -z | xargs -0 -n 100 sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1 || echo "unavailable")
+  -not -path './.next/*' \
+  -not -path './.svelte-kit/*' \
+  -not -path './coverage/*' \
+  -not -path './out/*' \
+  -not -path './.gradle/*' \
+  -not -path './.cargo/*' \
+  -not -path './vendor/*' \
+  -not -path './.terraform/*' \
+  -print0 2>/dev/null | sort -z | xargs -0 -n 100 sh -c 'for f in "$@"; do cat "$f" 2>/dev/null; done' _ \
+  | _sha256 2>/dev/null || echo "unavailable")
 mutation_detected=0
 if [ "$pre_walk_hash" != "unavailable" ] && [ "$post_walk_hash" != "unavailable" ] \
    && [ "$pre_walk_hash" != "$post_walk_hash" ]; then

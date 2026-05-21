@@ -1,6 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# N8: _timeout shim for agy --version call (and any future unbounded probes).
+# Uses gtimeout (coreutils) → timeout (GNU/BSD 8.13+) → perl fork/wait fallback.
+# BLOCKER-1 fix applied: shift $seconds before fork so child's @ARGV is the actual command.
+_timeout() {
+  local seconds="$1"; shift
+  if command -v gtimeout >/dev/null 2>&1; then gtimeout "$seconds" "$@"; return; fi
+  if command -v timeout  >/dev/null 2>&1; then  timeout  "$seconds" "$@"; return; fi
+  perl -e '
+    my $seconds = shift @ARGV;
+    my $pid = fork;
+    if (!defined $pid) { die "fork: $!" }
+    if (!$pid) { exec @ARGV; die "exec: $!" }
+    alarm $seconds;
+    $SIG{ALRM} = sub { kill 15, $pid; exit 124 };
+    wait;
+    exit ($? >> 8)
+  ' "$seconds" "$@"
+}
+
 # === F2: Node.js 가용성 helper (모든 출력 분기에서 공유) ===
 # CR7 대응: 하드코딩 금지 — 실제 PATH 에서 node 를 탐지해 값 emit.
 emit_node_availability() {
@@ -34,7 +53,8 @@ _emit_agy_vars() {
     local p
     p="$(command -v agy)"
     local v
-    v="$(agy --version 2>/dev/null | head -1 || echo)"
+    # N8 fix: wrap in _timeout 3 to prevent unbounded hang if agy --version stalls.
+    v="$(_timeout 3 agy --version 2>/dev/null | head -1 || echo)"
     echo "agy_cli=true"
     echo "agy_cli_path=$p"
     echo "agy_version=$v"

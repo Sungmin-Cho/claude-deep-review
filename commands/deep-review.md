@@ -255,9 +255,18 @@ find "$project_root" -type f \
   -not -path '*/node_modules/*' \
   -not -path '*/.venv/*' \
   -not -path '*/__pycache__/*' \
+  -not -path '*/.pytest_cache/*' \
   -not -path '*/dist/*' \
   -not -path '*/build/*' \
   -not -path '*/target/*' \
+  -not -path '*/.next/*' \
+  -not -path '*/.svelte-kit/*' \
+  -not -path '*/coverage/*' \
+  -not -path '*/out/*' \
+  -not -path '*/.gradle/*' \
+  -not -path '*/.cargo/*' \
+  -not -path '*/vendor/*' \
+  -not -path '*/.terraform/*' \
   -print0 2>"$find_err" > "$paths_file"
 if [ -s "$find_err" ]; then
   echo "⚠️ agy scan: find encountered errors:" >&2
@@ -298,6 +307,12 @@ elif [ -z "$stored" ] && [ -z "$hits" ]; then
        new_string: "agy_sensitive_acked_fingerprint: \"${current_fingerprint}\"\nagy_sensitive_acked_at: \"${_ack_at}\"")
 else
   # Sensitive set differs from last ack (or first ack with hits) — prompt user.
+  # N6 fix: derive hits_summary_max_20 before AskUserQuestion (was orphan variable).
+  hits_summary_max_20=$(printf '%s\n' "$hits" | sort -u | head -20 | sed 's|^|  - |')
+  total_hits=$(printf '%s\n' "$hits" | grep -c . || true)
+  if [ "$total_hits" -gt 20 ]; then
+    hits_summary_max_20="${hits_summary_max_20}"$'\n'"  ... and $((total_hits - 20)) more"
+  fi
   # AskUserQuestion shown BEFORE any reviewer is spawned (safe — not at synthesis).
   AskUserQuestion(
     question: "agy reviewer will walk this repository's filesystem (--add-dir). Sensitive-pattern files detected (compared against last acknowledgment): ${hits_summary_max_20}. Proceed with agy for cross-vendor review?",
@@ -309,7 +324,14 @@ else
     ]
   )
   if user_choice == "Y":
-    Edit(... agy_sensitive_acked_fingerprint: "${current_fingerprint}")
+    # N4 fix: persist both fingerprint AND timestamp so audit trail is complete.
+    _ack_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    Edit(file_path: ".deep-review/config.yaml",
+         old_string: 'agy_sensitive_acked_fingerprint: ".*"',
+         new_string: "agy_sensitive_acked_fingerprint: \"${current_fingerprint}\"")
+    Edit(file_path: ".deep-review/config.yaml",
+         old_string: 'agy_sensitive_acked_at: ".*"',
+         new_string: "agy_sensitive_acked_at: \"${_ack_at}\"")
   else:
     reviewers_planned = [r for r in reviewers_planned if r != "agy"]
     # W-R7-6 fix: do NOT touch agy_notified — that flag is for install hints, not ack.
