@@ -128,6 +128,28 @@ resolved_binary="${binary:-${AGY_BINARY:-$(command -v agy 2>/dev/null || true)}}
 # integration test. REJECTED candidates: 'unauthor' partial match (too broad).
 AGY_AUTH_REGEX='Reauthentication required|do not currently have an active account|OAuth token expired|Please run.*agy.*login|Not signed in|Authentication failed'
 
+# ---------- build_find_expr (v1.7.1): sensitive-pattern accumulator ----------
+# Reads lib/sensitive-patterns.list and emits a `-iname A -o -iname B ...`
+# expression for `find -type f \( <expr> \)`. Strips '**/' prefix (find walks
+# recursively by default). Uses -iname for case-insensitive matching to mirror
+# scan_sensitive_files's .lower() semantics. Bash 3.2 portable (no declare -A,
+# no mapfile).
+build_find_expr() {
+  local list_file="$1"
+  local pat expr=""
+  while IFS= read -r pat; do
+    [ -z "$pat" ] && continue
+    case "$pat" in '#'*) continue ;; esac
+    pat="${pat#\*\*/}"
+    if [ -z "$expr" ]; then
+      expr="-iname $(printf '%q' "$pat")"
+    else
+      expr="$expr -o -iname $(printf '%q' "$pat")"
+    fi
+  done < "$list_file"
+  printf '%s' "$expr"
+}
+
 # ---------- _walk_hash: whole-tree SHA-256 fingerprint (v1.7.0 full-walk recipe) ----------
 # Called twice in full-walk mode: once before agy spawn, once after. Same recipe.
 # agy runs with --dangerously-skip-permissions, so mutations would be undetected
