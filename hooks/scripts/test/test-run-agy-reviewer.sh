@@ -438,6 +438,55 @@ else
   matrix_fail "T-M18: no mutation warning for .deep-review/config.yaml"
 fi
 
+# T-M19: hybrid + agy mutates .deep-review/.pending-mutation.json → warning
+make_fixture "$FIXT"
+mkdir -p "$FIXT/.deep-review"
+echo '{}' > "$FIXT/.deep-review/.pending-mutation.json"
+printf '#!/bin/sh\necho "{\\\"mutated\\\":true}" > "%s/.deep-review/.pending-mutation.json"\nexit 0\n' "$FIXT" > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+fresh_out
+"$BRIDGE" \
+  --binary "$FAKE_AGY" \
+  --project-root "$FIXT" \
+  --prompt-file "$PROMPT" \
+  --output "$OUT" \
+  --mode hybrid \
+  --timeout-seconds 60 >/dev/null 2>&1 || true
+if [ -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M19: hybrid catches .deep-review/.pending-mutation.json mutation"
+else
+  matrix_fail "T-M19: no mutation warning for .pending-mutation.json"
+fi
+
+# T-M18b: hybrid + no .deep-review/ directory at all (first-run scenario) → no warning
+#         Locks in the §4.2 arm-4 (else → continue) silent-skip behavior.
+#         If a future refactor changes `[ -e ]` to `[ -f ]` (or breaks arm-4),
+#         T-M18b would warn on every first-run agy invocation.
+make_fixture "$FIXT"
+# Explicitly remove .deep-review/ — the helper does NOT create it (only writes
+# its name into .gitignore). Some prior test in the matrix might have left a
+# stray .deep-review from make_agy_sibling_write; remove it defensively.
+rm -rf "$FIXT/.deep-review"
+# Fake agy emits stdout (required for AGY_STATUS=success — bridge classifier
+# maps empty output to "failed"). Does NOT mutate anything.
+printf '#!/bin/sh\necho "review: no issues found"\nexit 0\n' > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+fresh_out
+"$BRIDGE" \
+  --binary "$FAKE_AGY" \
+  --project-root "$FIXT" \
+  --prompt-file "$PROMPT" \
+  --output "$OUT" \
+  --mode hybrid \
+  --timeout-seconds 60 >/dev/null 2>&1 || true
+AGY_STATUS_T_M18B=$(cat "$OUT.status" 2>/dev/null || echo "missing")
+if [ "$AGY_STATUS_T_M18B" = "success" ] && [ ! -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M18b: hybrid silently skips runtime-state when .deep-review/ absent"
+else
+  matrix_fail "T-M18b: bad outcome (status=$AGY_STATUS_T_M18B, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no))"
+fi
+# Note: status="success" assertion guards against bridge early-exit false-pass.
+
 echo "=========================="
 echo "MATRIX PASS: $MATRIX_PASS"
 echo "MATRIX FAIL: $MATRIX_FAIL"
