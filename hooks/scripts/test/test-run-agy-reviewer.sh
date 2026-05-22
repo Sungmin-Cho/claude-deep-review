@@ -311,6 +311,27 @@ make_agy_no_op
 [ ! -f "$OUT.mutation-warning" ] && matrix_pass "T-M14: hybrid + staged rename → no warning (rename parsing)" \
   || matrix_fail "T-M14: hybrid + staged rename → unexpected warning"
 
+# T-M16: hybrid + gitignored ./secrets/config.json (sensitive token in dir name only) → warning
+#        Closes G1 (bilateral-wildcard -ipath directory-name matching).
+make_fixture "$FIXT"
+mkdir -p "$FIXT/secrets" && echo "old-content" > "$FIXT/secrets/config.json"
+# Fake agy that overwrites the gitignored sensitive file
+printf '#!/bin/sh\necho "new-content" > "%s/secrets/config.json"\nexit 0\n' "$FIXT" > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+fresh_out
+"$BRIDGE" \
+  --binary "$FAKE_AGY" \
+  --project-root "$FIXT" \
+  --prompt-file "$PROMPT" \
+  --output "$OUT" \
+  --mode hybrid \
+  --timeout-seconds 60 >/dev/null 2>&1 || true
+if [ -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M16: hybrid catches dir-name secret mutation (./secrets/config.json)"
+else
+  matrix_fail "T-M16: no mutation warning for dir-name secret"
+fi
+
 echo "=========================="
 echo "MATRIX PASS: $MATRIX_PASS"
 echo "MATRIX FAIL: $MATRIX_FAIL"

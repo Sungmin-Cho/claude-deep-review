@@ -191,15 +191,38 @@ capture_status_with_hashes() {
 build_find_expr() {
   local list_file="$1"
   local pat expr=""
+  local inner iname_term ipath_term
   while IFS= read -r pat; do
     [ -z "$pat" ] && continue
     case "$pat" in '#'*) continue ;; esac
     pat="${pat#\*\*/}"
-    if [ -z "$expr" ]; then
-      expr="-iname $(printf '%q' "$pat")"
-    else
-      expr="$expr -o -iname $(printf '%q' "$pat")"
-    fi
+    case "$pat" in
+      '*'*'*')
+        # Bilateral wildcard pattern (starts AND ends with literal *).
+        # Emit FLAT OR-chain: -iname for basename match + -ipath for
+        # dir-name match. NO nested ( ) because capture_sensitive_hashes
+        # wraps the whole expression in `eval "find ... \( $find_expr \) ..."`
+        # and bare inner ( ) would be parsed as subshell tokens.
+        inner="${pat#\*}"
+        inner="${inner%\*}"
+        iname_term="-iname $(printf '%q' "$pat")"
+        ipath_term="-ipath $(printf '%q' "*/*${inner}*")"
+        if [ -z "$expr" ]; then
+          expr="$iname_term -o $ipath_term"
+        else
+          expr="$expr -o $iname_term -o $ipath_term"
+        fi
+        ;;
+      *)
+        # Non-bilateral pattern (prefix/suffix glob or literal filename).
+        # Emits -iname only — filename intent, not directory-name intent.
+        if [ -z "$expr" ]; then
+          expr="-iname $(printf '%q' "$pat")"
+        else
+          expr="$expr -o -iname $(printf '%q' "$pat")"
+        fi
+        ;;
+    esac
   done < "$list_file"
   printf '%s' "$expr"
 }
