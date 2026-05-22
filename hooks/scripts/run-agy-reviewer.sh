@@ -82,9 +82,17 @@ case "$mode" in
   *) echo "Invalid mode: $mode (expected: hybrid|full-walk|git-status|off)" >&2; exit 2 ;;
 esac
 
+# Required-argument validation FIRST — round-impl-1 W1 (Opus + Codex review P2 +
+# Codex adv MED): pre-validation stderr-tail init would write `.stderr-tail` in
+# the caller's cwd when --output is missing, polluting the user's repo.
+[ -z "$project_root" ] && { echo "Missing --project-root" >&2; exit 2; }
+[ -z "$prompt_file" ]  && { echo "Missing --prompt-file" >&2; exit 2; }
+[ -z "$output_file" ]  && { echo "Missing --output" >&2; exit 2; }
+[ -f "$prompt_file" ]  || { echo "Prompt file not found: $prompt_file" >&2; exit 2; }
+
 # ---------- stderr-tail initialization (v1.7.1) ----------
 # Initialize empty so probes + degrade warnings (below + later) survive the
-# post-spawn agy-stderr append (line ~190 — also changed from > to >>).
+# post-spawn agy-stderr append (also changed from > to >>).
 : > "${output_file}.stderr-tail"
 
 # ---------- startup degrade probes ----------
@@ -112,11 +120,6 @@ if [ "$mode" = "hybrid" ] || [ "$mode" = "git-status" ] || [ "$mode" = "full-wal
   fi
   unset _probe_hash
 fi
-
-[ -z "$project_root" ] && { echo "Missing --project-root" >&2; exit 2; }
-[ -z "$prompt_file" ]  && { echo "Missing --prompt-file" >&2; exit 2; }
-[ -z "$output_file" ]  && { echo "Missing --output" >&2; exit 2; }
-[ -f "$prompt_file" ]  || { echo "Prompt file not found: $prompt_file" >&2; exit 2; }
 
 # C-R7-3: command -v exits non-zero if agy is absent; under set -e that would kill
 # the script before reaching the intended exit 127. Wrap with `|| true`.
@@ -193,13 +196,17 @@ build_find_expr() {
 # failure makes the pipeline non-zero and the if-body cleans up + returns 1.
 # Caller degrades hybrid → full-walk on failure.
 capture_sensitive_hashes() {
-  local out_file="$1" tmp_file find_expr
+  local out_file="$1" tmp_file find_expr orig_pwd
+  orig_pwd=$(pwd)
   tmp_file=$(mktemp "${TMPDIR:-/tmp}/agy-sens-tmp.XXXXXX") || return 1
   find_expr=$(build_find_expr "$_LIB_DIR/sensitive-patterns.list")
   if [ -z "$find_expr" ]; then
     rm -f "$tmp_file"
     return 1
   fi
+  # Round-impl-1 C1 (Opus + Codex review P2): cd was leaking into the caller's
+  # shell because removing the outer subshell (for PIPESTATUS) also removed
+  # the auto-restoration. Save+restore cwd explicitly here.
   cd "$project_root" || { rm -f "$tmp_file"; return 1; }
   # shellcheck disable=SC2086   # intentional word-split of $find_expr
   if ! eval "find . -type f \\( $find_expr \\) \
@@ -218,9 +225,11 @@ capture_sensitive_hashes() {
     | sort > "$tmp_file"
   then
     rm -f "$tmp_file"
+    cd "$orig_pwd"
     return 1
   fi
   mv "$tmp_file" "$out_file"
+  cd "$orig_pwd"
   return 0
 }
 
@@ -329,6 +338,7 @@ _fingerprint_git_status_pre() {
     mode="full-walk"
     pre_walk_hash=$(_walk_hash)
   fi
+  return 0   # round-impl-1 W3: explicit return for consistency with _fingerprint_hybrid_pre
 }
 
 _fingerprint_git_status_post() {
