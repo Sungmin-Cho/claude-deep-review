@@ -86,7 +86,7 @@ agy 는 **mutation 과 직교** — `--add-dir` filesystem walk 으로 gitignore
 
 | Mode | Mechanism | Coverage | Cost (large repo) | When to use |
 |---|---|---|---|---|
-| **hybrid** *(default)* | `git status -z` + per-dirty-file SHA-256 + sensitive-pattern walk via `lib/sensitive-patterns.list` | Tracked files, gitignored sensitive paths (.env, credentials, keys), already-dirty rewrites | ~0.4 s (100k files) | Most users |
+| **hybrid** *(default)* | `git status -z` + per-dirty-file SHA-256 + sensitive-pattern walk via `lib/sensitive-patterns.list` | Tracked files, gitignored sensitive paths (.env, credentials, keys — basename **and** directory-name matching since v1.7.2 for bilateral-wildcard patterns), already-dirty rewrites, plugin self-state (`.deep-review/config.yaml`, `.deep-review/.pending-mutation.json`) since v1.7.2 | ~0.4 s (100k files) | Most users |
 | **full-walk** | SHA-256 of every non-excluded file (v1.7.0 behavior) | Everything except the standard exclusion list (`./.git/`, `./node_modules/`, `./dist/`, etc.) | ~60 s (100k files) | Strict-coverage users needing detection of user-defined gitignored paths outside the standard exclusion list |
 | **git-status** | `git status -z` + per-dirty-file SHA-256 only (no sensitive scan) | Tracked files + already-dirty rewrites; **misses** gitignored sensitive paths | ~0.1 s | Tests, debugging |
 | **off** | (no snapshot) | None | 0 | **DANGEROUS** — only when agy is known not to mutate the worktree |
@@ -103,7 +103,7 @@ agy 는 **mutation 과 직교** — `--add-dir` filesystem walk 으로 gitignore
 
 **C5 trade-off (v1.7.1)**: hybrid mode misses agy writes to **user-defined gitignored paths outside the bridge's standard exclusion list**. Paths inside the standard list (`./dist/`, `./build/`, `./node_modules/`, etc.) are missed by **both** modes (never walked in v1.7.0 either). Set `agy_fingerprint_mode: full-walk` for user-defined gitignored paths outside the standard list.
 
-**Known limitation (v1.7.2 deferred)**: hybrid's sensitive scan uses `find -iname` which matches basenames only. Gitignored sensitive files whose token appears only in a directory name (e.g., `./secrets/config.json`) are not detected.
+**Known limitation (v1.7.2 partial)**: hybrid's sensitive scan applies `-ipath` directory-name matching to bilateral-wildcard patterns (`*secret*`, `*password*`, `*token*` and their `**/*` variants). Non-bilateral patterns (`credentials*`, `bearer_*`, `api-key*.json`, etc.) remain basename-only, so gitignored sensitive files whose token appears only in a directory name *and* the matching pattern is non-bilateral (e.g., `./credentials-store/value.txt` against `credentials*`) are still not detected. Set `agy_fingerprint_mode: full-walk` for complete coverage. Tracked as v1.7.3+ follow-up; see CHANGELOG.
 
 **Repo precondition**: hybrid's "sibling reviewer writes to `.deep-review/reports/` produce no warning" property assumes the target repo has `.deep-review/` in its `.gitignore` (the standard /deep-review usage convention). Without that, sibling-reviewer writes will appear as untracked in `git status` and hybrid will correctly flag them.
 

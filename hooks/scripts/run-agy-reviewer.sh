@@ -191,15 +191,38 @@ capture_status_with_hashes() {
 build_find_expr() {
   local list_file="$1"
   local pat expr=""
+  local inner iname_term ipath_term
   while IFS= read -r pat; do
     [ -z "$pat" ] && continue
     case "$pat" in '#'*) continue ;; esac
     pat="${pat#\*\*/}"
-    if [ -z "$expr" ]; then
-      expr="-iname $(printf '%q' "$pat")"
-    else
-      expr="$expr -o -iname $(printf '%q' "$pat")"
-    fi
+    case "$pat" in
+      '*'*'*')
+        # Bilateral wildcard pattern (starts AND ends with literal *).
+        # Emit FLAT OR-chain: -iname for basename match + -ipath for
+        # dir-name match. NO nested ( ) because capture_sensitive_hashes
+        # wraps the whole expression in `eval "find ... \( $find_expr \) ..."`
+        # and bare inner ( ) would be parsed as subshell tokens.
+        inner="${pat#\*}"
+        inner="${inner%\*}"
+        iname_term="-iname $(printf '%q' "$pat")"
+        ipath_term="-ipath $(printf '%q' "*/*${inner}*")"
+        if [ -z "$expr" ]; then
+          expr="$iname_term -o $ipath_term"
+        else
+          expr="$expr -o $iname_term -o $ipath_term"
+        fi
+        ;;
+      *)
+        # Non-bilateral pattern (prefix/suffix glob or literal filename).
+        # Emits -iname only — filename intent, not directory-name intent.
+        if [ -z "$expr" ]; then
+          expr="-iname $(printf '%q' "$pat")"
+        else
+          expr="$expr -o -iname $(printf '%q' "$pat")"
+        fi
+        ;;
+    esac
   done < "$list_file"
   printf '%s' "$expr"
 }
@@ -243,6 +266,48 @@ capture_sensitive_hashes() {
     cd "$orig_pwd"
     return 1
   fi
+
+  # v1.7.2: append plugin self-state hashes to tmp_file.
+  # Not covered by sensitive-pattern -iname (generic config-like names)
+  # and not visible to git-status (gitignored). Hardcoded snapshot catches
+  # mutations to bridge config + mutation-lock state file.
+  #
+  # Four-arm dispatch by file kind. [ -L ] is checked FIRST (before [ -f ])
+  # because `[ -f ]` follows symlinks — if agy replaces config.yaml with a
+  # symlink to /etc/passwd (or a 10GB file), [ -f ] would return true on
+  # the TARGET, and `_sha256 < $rt` would read that target. Treating any
+  # symlink as "non-regular" prevents this footgun unconditionally
+  # (config.yaml and .pending-mutation.json are not expected to be
+  # symlinks in normal use).
+  #
+  #   1. [ -L $rt ]   → symlink (dangling OR pointing anywhere) → sentinel
+  #   2. elif [ -f $rt ] → regular non-symlink file → hash content
+  #   3. elif [ -e $rt ] → exists but neither symlink nor regular file
+  #       (FIFO/socket/block/char dev/dir) → sentinel
+  #   4. else         → truly absent → continue (no line emitted)
+  local rt rt_hex rt_hash
+  for rt in ".deep-review/config.yaml" ".deep-review/.pending-mutation.json"; do
+    rt_hex=$(printf '%s' "$rt" | od -An -tx1 | tr -d ' \n')
+    if [ -L "$rt" ]; then
+      rt_hash="non-regular"
+    elif [ -f "$rt" ]; then
+      rt_hash=$(_sha256 < "$rt" 2>/dev/null || echo "unavailable")
+    elif [ -e "$rt" ]; then
+      rt_hash="non-regular"
+    else
+      continue
+    fi
+    printf '%s\t%s\n' "$rt_hex" "$rt_hash" >> "$tmp_file"
+  done
+
+  # Re-sort in place after the append (tmp_file was sorted by the prior
+  # pipeline; appended lines could be unsorted).
+  sort -o "$tmp_file" "$tmp_file" || {
+    rm -f "$tmp_file"
+    cd "$orig_pwd"
+    return 1
+  }
+
   mv "$tmp_file" "$out_file"
   cd "$orig_pwd"
   return 0

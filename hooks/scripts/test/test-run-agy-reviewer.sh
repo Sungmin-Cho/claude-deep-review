@@ -157,7 +157,7 @@ make_fixture() {
   local dir="$1"
   rm -rf "$dir" && mkdir -p "$dir"
   ( cd "$dir" && git init -q && git config user.email a@b && git config user.name a \
-    && printf '.deep-review/\n' > .gitignore \
+    && printf '.deep-review/\nsecrets/\ntoken-store/\ninnocuous-public-dir/\n' > .gitignore \
     && echo "init" > README.md \
     && git add . && git commit -q -m init )
 }
@@ -310,6 +310,182 @@ make_agy_no_op
   --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
 [ ! -f "$OUT.mutation-warning" ] && matrix_pass "T-M14: hybrid + staged rename → no warning (rename parsing)" \
   || matrix_fail "T-M14: hybrid + staged rename → unexpected warning"
+
+# T-M16: hybrid + gitignored ./secrets/config.json (sensitive token in dir name only) → warning
+#        Closes G1 (bilateral-wildcard -ipath directory-name matching).
+make_fixture "$FIXT"
+mkdir -p "$FIXT/secrets" && echo "old-content" > "$FIXT/secrets/config.json"
+# Fake agy that overwrites the gitignored sensitive file
+printf '#!/bin/sh\necho "new-content" > "%s/secrets/config.json"\nexit 0\n' "$FIXT" > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+fresh_out
+"$BRIDGE" \
+  --binary "$FAKE_AGY" \
+  --project-root "$FIXT" \
+  --prompt-file "$PROMPT" \
+  --output "$OUT" \
+  --mode hybrid \
+  --timeout-seconds 60 >/dev/null 2>&1 || true
+if [ -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M16: hybrid catches dir-name secret mutation (./secrets/config.json)"
+else
+  matrix_fail "T-M16: no mutation warning for dir-name secret"
+fi
+
+# T-M17: hybrid + gitignored ./token-store/value.txt (Codex's exact example for G1)
+make_fixture "$FIXT"
+mkdir -p "$FIXT/token-store" && echo "old-token" > "$FIXT/token-store/value.txt"
+printf '#!/bin/sh\necho "new-token" > "%s/token-store/value.txt"\nexit 0\n' "$FIXT" > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+fresh_out
+"$BRIDGE" \
+  --binary "$FAKE_AGY" \
+  --project-root "$FIXT" \
+  --prompt-file "$PROMPT" \
+  --output "$OUT" \
+  --mode hybrid \
+  --timeout-seconds 60 >/dev/null 2>&1 || true
+if [ -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M17: hybrid catches dir-name token mutation (./token-store/value.txt)"
+else
+  matrix_fail "T-M17: no mutation warning for dir-name token"
+fi
+
+# T-M20: hybrid + gitignored ./innocuous-public-dir/foo.txt (no sensitive substring anywhere)
+#        Negative regression — -ipath must NOT over-match unrelated directories.
+# CRITICAL: fake agy must emit stdout. The bridge classifier maps `rc=0 + empty
+# output_file` to AGY_STATUS=failed (run-agy-reviewer.sh classifier — see
+# "elif [ ! -s "$output_file" ]; then AGY_STATUS=failed"). Without the stdout
+# echo, the status assertion below always fails. Real agy emits a review
+# summary, so this matches production semantics.
+make_fixture "$FIXT"
+mkdir -p "$FIXT/innocuous-public-dir" && echo "old-data" > "$FIXT/innocuous-public-dir/foo.txt"
+printf '#!/bin/sh\necho "review: no issues found"\necho "new-data" > "%s/innocuous-public-dir/foo.txt"\nexit 0\n' "$FIXT" > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+fresh_out
+"$BRIDGE" \
+  --binary "$FAKE_AGY" \
+  --project-root "$FIXT" \
+  --prompt-file "$PROMPT" \
+  --output "$OUT" \
+  --mode hybrid \
+  --timeout-seconds 60 >/dev/null 2>&1 || true
+AGY_STATUS_T_M20=$(cat "$OUT.status" 2>/dev/null || echo "missing")
+if [ "$AGY_STATUS_T_M20" = "success" ] && [ ! -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M20: hybrid correctly ignores non-sensitive dir mutation (negative regression)"
+else
+  matrix_fail "T-M20: bad outcome (status=$AGY_STATUS_T_M20, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no))"
+fi
+# Note: status="success" assertion guards against bridge early-exit false-pass
+# (e.g., if --prompt-file validation fails, $OUT.mutation-warning is absent
+# but $OUT.status != "success" — the conjunction catches both ways).
+
+# T-M16b: pure unit test of build_find_expr output shape.
+#         Locks in the §4.1 contract that bilateral patterns emit BOTH
+#         -iname and -ipath arms. Cannot be a behavioral test — `-ipath '*/*secret*'`
+#         alone would match root-level basenames per BSD/GNU find semantics.
+_bridge_path="$BRIDGE"  # defined at test-run-agy-reviewer.sh:6 as "$REPO/hooks/scripts/run-agy-reviewer.sh"
+_func_src=$(awk '/^build_find_expr\(\) \{/,/^\}$/' "$_bridge_path")
+eval "$_func_src"
+if ! type build_find_expr >/dev/null 2>&1; then
+  matrix_fail "T-M16b: build_find_expr not callable after awk-extract + eval"
+else
+  _tmp_list=$(mktemp "${TMPDIR:-/tmp}/v172-t-m16b-list.XXXXXX")
+  echo '*secret*' > "$_tmp_list"
+  _result=$(build_find_expr "$_tmp_list")
+  rm -f "$_tmp_list"
+  # printf '%q' on bash 3.2.57 (macOS) emits backslash-escaped form (\*secret\*).
+  # bash 4+/5 (some Ubuntu/Debian versions) may emit single-quote form ('*secret*').
+  # Both forms semantically pass the literal *secret* to find.
+  #
+  # The find expression has the shape: `-iname <space> <pattern> -o -ipath <space> <pattern>`.
+  # Regex must explicitly allow [[:space:]]+ between the predicate name and its
+  # pattern arg, then [^[:space:]]* to cross the (possibly-escaped) leading `*`
+  # before "secret". A pattern of `-iname[^[:space:]]*secret` (without the
+  # mandatory space) cannot match because [^[:space:]]* cannot cross the
+  # literal space between `-iname` and its argument — empirically verified
+  # on bash 3.2.57 (NO MATCH for that pattern).
+  if ! echo "$_result" | grep -qE -- '-iname[[:space:]]+[^[:space:]]*secret'; then
+    matrix_fail "T-M16b: missing -iname arm in output: $_result"
+  elif ! echo "$_result" | grep -qE -- '-ipath[[:space:]]+[^[:space:]]*secret'; then
+    matrix_fail "T-M16b: missing -ipath arm in output: $_result"
+  else
+    matrix_pass "T-M16b: bilateral pattern emits both -iname and -ipath terms"
+  fi
+  # Defensive: clear the extracted function so it doesn't leak to later tests.
+  unset -f build_find_expr 2>/dev/null || true
+fi
+
+# T-M18: hybrid + agy mutates .deep-review/config.yaml (gitignored runtime state) → warning
+#        Closes G2 first half.
+make_fixture "$FIXT"
+mkdir -p "$FIXT/.deep-review"
+echo 'agy_fingerprint_mode: hybrid' > "$FIXT/.deep-review/config.yaml"
+# Fake agy overwrites the config (the "agy mutates its own bridge config" attack)
+printf '#!/bin/sh\necho "agy_fingerprint_mode: off" > "%s/.deep-review/config.yaml"\nexit 0\n' "$FIXT" > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+fresh_out
+"$BRIDGE" \
+  --binary "$FAKE_AGY" \
+  --project-root "$FIXT" \
+  --prompt-file "$PROMPT" \
+  --output "$OUT" \
+  --mode hybrid \
+  --timeout-seconds 60 >/dev/null 2>&1 || true
+if [ -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M18: hybrid catches .deep-review/config.yaml mutation"
+else
+  matrix_fail "T-M18: no mutation warning for .deep-review/config.yaml"
+fi
+
+# T-M19: hybrid + agy mutates .deep-review/.pending-mutation.json → warning
+make_fixture "$FIXT"
+mkdir -p "$FIXT/.deep-review"
+echo '{}' > "$FIXT/.deep-review/.pending-mutation.json"
+printf '#!/bin/sh\necho "{\\\"mutated\\\":true}" > "%s/.deep-review/.pending-mutation.json"\nexit 0\n' "$FIXT" > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+fresh_out
+"$BRIDGE" \
+  --binary "$FAKE_AGY" \
+  --project-root "$FIXT" \
+  --prompt-file "$PROMPT" \
+  --output "$OUT" \
+  --mode hybrid \
+  --timeout-seconds 60 >/dev/null 2>&1 || true
+if [ -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M19: hybrid catches .deep-review/.pending-mutation.json mutation"
+else
+  matrix_fail "T-M19: no mutation warning for .pending-mutation.json"
+fi
+
+# T-M18b: hybrid + no .deep-review/ directory at all (first-run scenario) → no warning
+#         Locks in the §4.2 arm-4 (else → continue) silent-skip behavior.
+#         If a future refactor changes `[ -e ]` to `[ -f ]` (or breaks arm-4),
+#         T-M18b would warn on every first-run agy invocation.
+make_fixture "$FIXT"
+# Explicitly remove .deep-review/ — the helper does NOT create it (only writes
+# its name into .gitignore). Some prior test in the matrix might have left a
+# stray .deep-review from make_agy_sibling_write; remove it defensively.
+rm -rf "$FIXT/.deep-review"
+# Fake agy emits stdout (required for AGY_STATUS=success — bridge classifier
+# maps empty output to "failed"). Does NOT mutate anything.
+printf '#!/bin/sh\necho "review: no issues found"\nexit 0\n' > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+fresh_out
+"$BRIDGE" \
+  --binary "$FAKE_AGY" \
+  --project-root "$FIXT" \
+  --prompt-file "$PROMPT" \
+  --output "$OUT" \
+  --mode hybrid \
+  --timeout-seconds 60 >/dev/null 2>&1 || true
+AGY_STATUS_T_M18B=$(cat "$OUT.status" 2>/dev/null || echo "missing")
+if [ "$AGY_STATUS_T_M18B" = "success" ] && [ ! -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M18b: hybrid silently skips runtime-state when .deep-review/ absent"
+else
+  matrix_fail "T-M18b: bad outcome (status=$AGY_STATUS_T_M18B, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no))"
+fi
+# Note: status="success" assertion guards against bridge early-exit false-pass.
 
 echo "=========================="
 echo "MATRIX PASS: $MATRIX_PASS"
