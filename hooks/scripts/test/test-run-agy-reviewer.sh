@@ -332,6 +332,54 @@ else
   matrix_fail "T-M16: no mutation warning for dir-name secret"
 fi
 
+# T-M17: hybrid + gitignored ./token-store/value.txt (Codex's exact example for G1)
+make_fixture "$FIXT"
+mkdir -p "$FIXT/token-store" && echo "old-token" > "$FIXT/token-store/value.txt"
+printf '#!/bin/sh\necho "new-token" > "%s/token-store/value.txt"\nexit 0\n' "$FIXT" > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+fresh_out
+"$BRIDGE" \
+  --binary "$FAKE_AGY" \
+  --project-root "$FIXT" \
+  --prompt-file "$PROMPT" \
+  --output "$OUT" \
+  --mode hybrid \
+  --timeout-seconds 60 >/dev/null 2>&1 || true
+if [ -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M17: hybrid catches dir-name token mutation (./token-store/value.txt)"
+else
+  matrix_fail "T-M17: no mutation warning for dir-name token"
+fi
+
+# T-M20: hybrid + gitignored ./innocuous-public-dir/foo.txt (no sensitive substring anywhere)
+#        Negative regression — -ipath must NOT over-match unrelated directories.
+# CRITICAL: fake agy must emit stdout. The bridge classifier maps `rc=0 + empty
+# output_file` to AGY_STATUS=failed (run-agy-reviewer.sh classifier — see
+# "elif [ ! -s "$output_file" ]; then AGY_STATUS=failed"). Without the stdout
+# echo, the status assertion below always fails. Real agy emits a review
+# summary, so this matches production semantics.
+make_fixture "$FIXT"
+mkdir -p "$FIXT/innocuous-public-dir" && echo "old-data" > "$FIXT/innocuous-public-dir/foo.txt"
+printf '#!/bin/sh\necho "review: no issues found"\necho "new-data" > "%s/innocuous-public-dir/foo.txt"\nexit 0\n' "$FIXT" > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+fresh_out
+"$BRIDGE" \
+  --binary "$FAKE_AGY" \
+  --project-root "$FIXT" \
+  --prompt-file "$PROMPT" \
+  --output "$OUT" \
+  --mode hybrid \
+  --timeout-seconds 60 >/dev/null 2>&1 || true
+AGY_STATUS_T_M20=$(cat "$OUT.status" 2>/dev/null || echo "missing")
+if [ "$AGY_STATUS_T_M20" = "success" ] && [ ! -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M20: hybrid correctly ignores non-sensitive dir mutation (negative regression)"
+else
+  matrix_fail "T-M20: bad outcome (status=$AGY_STATUS_T_M20, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no))"
+fi
+# Note: status="success" assertion guards against bridge early-exit false-pass
+# (e.g., if --prompt-file validation fails, $OUT.mutation-warning is absent
+# but $OUT.status != "success" — the conjunction catches both ways).
+
 echo "=========================="
 echo "MATRIX PASS: $MATRIX_PASS"
 echo "MATRIX FAIL: $MATRIX_FAIL"
