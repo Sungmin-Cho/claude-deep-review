@@ -186,6 +186,44 @@ build_find_expr() {
   printf '%s' "$expr"
 }
 
+# ---------- capture_sensitive_hashes (v1.7.1) ----------
+# Walks the project tree for files matching lib/sensitive-patterns.list, emits
+# "hex_path\tsha256" lines, sorted. Pipeline wrapped in `if ! ... then` to
+# shield from `set -Eeuo pipefail`'s errexit; with `pipefail` set, any stage
+# failure makes the pipeline non-zero and the if-body cleans up + returns 1.
+# Caller degrades hybrid → full-walk on failure.
+capture_sensitive_hashes() {
+  local out_file="$1" tmp_file find_expr
+  tmp_file=$(mktemp "${TMPDIR:-/tmp}/agy-sens-tmp.XXXXXX") || return 1
+  find_expr=$(build_find_expr "$_LIB_DIR/sensitive-patterns.list")
+  if [ -z "$find_expr" ]; then
+    rm -f "$tmp_file"
+    return 1
+  fi
+  cd "$project_root" || { rm -f "$tmp_file"; return 1; }
+  # shellcheck disable=SC2086   # intentional word-split of $find_expr
+  if ! eval "find . -type f \\( $find_expr \\) \
+    -not -path './.git/*' -not -path './node_modules/*' -not -path './.venv/*' \
+    -not -path './dist/*' -not -path './build/*' -not -path './target/*' \
+    -not -path './.next/*' -not -path './.svelte-kit/*' -not -path './coverage/*' \
+    -not -path './out/*' -not -path './.gradle/*' -not -path './.cargo/*' \
+    -not -path './vendor/*' -not -path './.terraform/*' \
+    -not -path './__pycache__/*' -not -path './.pytest_cache/*' \
+    -print0 2>/dev/null" \
+    | while IFS= read -r -d '' f; do
+        h=$(_sha256 < "$f" 2>/dev/null || echo "unavailable")
+        f_hex=$(printf '%s' "$f" | od -An -tx1 | tr -d ' \n')
+        printf '%s\t%s\n' "$f_hex" "$h"
+      done \
+    | sort > "$tmp_file"
+  then
+    rm -f "$tmp_file"
+    return 1
+  fi
+  mv "$tmp_file" "$out_file"
+  return 0
+}
+
 # ---------- _walk_hash: whole-tree SHA-256 fingerprint (v1.7.0 full-walk recipe) ----------
 # Called twice in full-walk mode: once before agy spawn, once after. Same recipe.
 # agy runs with --dangerously-skip-permissions, so mutations would be undetected
