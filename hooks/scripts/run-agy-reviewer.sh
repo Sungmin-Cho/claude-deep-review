@@ -128,6 +128,42 @@ resolved_binary="${binary:-${AGY_BINARY:-$(command -v agy 2>/dev/null || true)}}
 # integration test. REJECTED candidates: 'unauthor' partial match (too broad).
 AGY_AUTH_REGEX='Reauthentication required|do not currently have an active account|OAuth token expired|Please run.*agy.*login|Not signed in|Authentication failed'
 
+# ---------- capture_status_with_hashes (v1.7.1, decision 12.1-A) ----------
+# git status -z + per-dirty-file SHA-256, hex-encoded paths.
+# Uses temp-file intermediate so git status's exit code is propagated
+# (process substitution would swallow it).
+# Rename/copy entries: in -z mode, dest path comes first, source second.
+# We hash dest and discard source.
+capture_status_with_hashes() {
+  local out="$1" git_tmp git_rc record code path expect_source=0 h path_hex
+  git_tmp=$(mktemp "${TMPDIR:-/tmp}/agy-git-status.XXXXXX") || return 1
+  ( cd "$project_root" && git status -z --porcelain --untracked-files=all 2>/dev/null ) > "$git_tmp"
+  git_rc=$?
+  if [ "$git_rc" -ne 0 ]; then
+    rm -f "$git_tmp"
+    return 1
+  fi
+  while IFS= read -r -d '' record; do
+    if [ "$expect_source" = 1 ]; then
+      expect_source=0
+      continue
+    fi
+    code="${record:0:2}"
+    path="${record:3}"
+    case "$code" in R?|C?) expect_source=1 ;; esac
+    # Hex-encode path bytes so newline/tab/backslash do not corrupt sort/diff.
+    path_hex=$(printf '%s' "$path" | od -An -tx1 | tr -d ' \n')
+    if [ -f "$project_root/$path" ]; then
+      h=$(_sha256 < "$project_root/$path" 2>/dev/null || echo "unavailable")
+      printf '%s\t%s\t%s\n' "$code" "$path_hex" "$h"
+    else
+      printf '%s\t%s\t-\n' "$code" "$path_hex"
+    fi
+  done < "$git_tmp" > "$out"
+  rm -f "$git_tmp"
+  return 0
+}
+
 # ---------- build_find_expr (v1.7.1): sensitive-pattern accumulator ----------
 # Reads lib/sensitive-patterns.list and emits a `-iname A -o -iname B ...`
 # expression for `find -type f \( <expr> \)`. Strips '**/' prefix (find walks
