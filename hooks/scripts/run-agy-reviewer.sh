@@ -95,6 +95,12 @@ esac
 # post-spawn agy-stderr append (also changed from > to >>).
 : > "${output_file}.stderr-tail"
 
+# Initialize mutation_detected here so the sha256-probe fallback can set it
+# without being clobbered by the mode-dispatcher's later 0-init. Otherwise
+# the conservative .mutation-warning written by the probe + AGY_STATUS=success
+# (from agy's exit 0) would disagree (impl-r3 Codex review P3).
+mutation_detected=0
+
 # ---------- startup degrade probes ----------
 # 1. lib/sensitive-patterns.list — hybrid ONLY (git-status doesn't read it).
 if [ "$mode" = "hybrid" ]; then
@@ -117,6 +123,7 @@ if [ "$mode" = "hybrid" ] || [ "$mode" = "git-status" ] || [ "$mode" = "full-wal
     echo "$msg" >> "${output_file}.stderr-tail"
     mode="off"
     echo "mutated (no sha256 backend available — conservative)" > "${output_file}.mutation-warning"
+    mutation_detected=1   # impl-r3 Codex review P3: keep status/sidecar consistent
   fi
   unset _probe_hash
 fi
@@ -375,7 +382,7 @@ _fingerprint_git_status_post() {
 }
 
 # ---------- mode-driven pre-spawn dispatcher (v1.7.1) ----------
-mutation_detected=0
+# mutation_detected initialized earlier (before probes) so probe-set value survives.
 pre_walk_hash=""
 post_walk_hash=""
 
