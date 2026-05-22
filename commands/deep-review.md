@@ -40,6 +40,7 @@ agy_notified: false
 agy_enabled: true
 agy_sensitive_acked_fingerprint: ""
 agy_sensitive_acked_at: ""
+agy_fingerprint_mode: hybrid
 last_review: null
 app_qa:
   last_command: null
@@ -73,12 +74,14 @@ grep -q '^agy_notified:'                    .deep-review/config.yaml || NEED_NOT
 grep -q '^agy_enabled:'                     .deep-review/config.yaml || NEED_ENABLED=1
 grep -q '^agy_sensitive_acked_fingerprint:' .deep-review/config.yaml || NEED_ACK=1
 grep -q '^agy_sensitive_acked_at:'          .deep-review/config.yaml || NEED_ACK_AT=1
+grep -q '^agy_fingerprint_mode:'            .deep-review/config.yaml || NEED_FP_MODE=1   # v1.7.1
 
 block=""
 [ "${NEED_NOTIFIED:-0}" = 1 ] && block="${block}agy_notified: false"$'\n'
 [ "${NEED_ENABLED:-0}"  = 1 ] && block="${block}agy_enabled: true"$'\n'
 [ "${NEED_ACK:-0}"      = 1 ] && block="${block}agy_sensitive_acked_fingerprint: \"\""$'\n'
 [ "${NEED_ACK_AT:-0}"   = 1 ] && block="${block}agy_sensitive_acked_at: \"\""$'\n'
+[ "${NEED_FP_MODE:-0}"  = 1 ] && block="${block}agy_fingerprint_mode: hybrid"$'\n'   # v1.7.1
 
 if [ -n "$block" ]; then
   # Use Edit tool, not Write — preserve user-customized review_model / last_review / app_qa
@@ -625,6 +628,24 @@ Codex 리뷰 대상은 change_state에 따라 결정:
   - `{prompt_file}` → `/tmp/deep-review-agy-prompt.xXxXxX` (from mktemp in earlier Bash call)
   - `{output_file}` → `/tmp/deep-review-agy-output.xXxXxX` (from mktemp in earlier Bash call)
 
+  **v1.7.1 mode resolution** (orchestrator owns the chain, then passes resolved value as `--mode`):
+
+  ```bash
+  # Order: AGY_FINGERPRINT_MODE env var > .deep-review/config.yaml field > built-in default 'hybrid'
+  agy_fingerprint_mode="${AGY_FINGERPRINT_MODE:-}"
+  if [ -z "$agy_fingerprint_mode" ] && [ -f .deep-review/config.yaml ]; then
+    agy_fingerprint_mode=$(sed -nE 's/^agy_fingerprint_mode:[[:space:]]*["'\'']?([^"'\''#[:space:]]+)["'\'']?.*$/\1/p' .deep-review/config.yaml | head -1)
+  fi
+  agy_fingerprint_mode="${agy_fingerprint_mode:-hybrid}"
+  case "$agy_fingerprint_mode" in
+    hybrid|full-walk|git-status|off) ;;
+    *)
+      echo "⚠️ Invalid agy_fingerprint_mode '$agy_fingerprint_mode' — falling back to 'hybrid'" >&2
+      agy_fingerprint_mode=hybrid
+      ;;
+  esac
+  ```
+
   ```
   Bash({ command: '
   "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-agy-reviewer.sh" \
@@ -632,11 +653,14 @@ Codex 리뷰 대상은 change_state에 따라 결정:
     --project-root "{project_root}" \
     --prompt-file "{prompt_file}" \
     --output "{output_file}" \
+    --mode "{agy_fingerprint_mode}" \
     --timeout-seconds 900
   ', run_in_background: true })
   ```
 
   Orchestrator passes `--binary {agy_cli_path}` (Stage 1 detection result) for deterministic binding independent of subsequent `$PATH` mutations. Bridge's internal resolution (`--binary` → `$AGY_BINARY` → `command -v agy`) only activates if `--binary` was not passed (e.g., direct CLI tests).
+
+  Orchestrator passes `--mode {agy_fingerprint_mode}` (resolved chain above). The env-var slot (`AGY_FINGERPRINT_MODE`) lets CI pin a mode without per-developer config edits even though `.deep-review/config.yaml` is `.gitignore`d.
 
 여기서 `{codex_target_flag}`는:
 - clean 또는 WIP 커밋 후: `--base {review_base}`
@@ -1399,6 +1423,7 @@ agy_notified: false
 agy_enabled: true
 agy_sensitive_acked_fingerprint: ""
 agy_sensitive_acked_at: ""
+agy_fingerprint_mode: hybrid
 last_review: null
 app_qa:
   last_command: null

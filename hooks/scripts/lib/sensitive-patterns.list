@@ -1,0 +1,76 @@
+# Single source of truth for sensitive-file patterns.
+# Read by hooks/scripts/mutation-protocol.sh (scan_sensitive_files) AND
+# hooks/scripts/run-agy-reviewer.sh (hybrid-mode sensitive scan).
+# DO NOT inline these patterns elsewhere — extend this file instead.
+#
+# Convention:
+# - One pattern per line (fnmatch-style: '*', '?', '[…]', and the recursive '**/').
+# - The '**/' prefix means "match at any directory depth"; mutation-protocol.sh's
+#   Python honors it via fnmatch; the bridge's bash uses `find` which walks
+#   recursively by default — when reading patterns for the bash consumer,
+#   strip a leading '**/' (find walks all depths regardless).
+# - Lines starting with '#' are comments. Blank lines are ignored.
+
+# dotenv (nested for monorepos)
+.env
+.env.*
+.envrc
+**/.env
+**/.env.*
+**/.envrc
+
+# generic credential names
+credentials*
+**/credentials*
+*secret*
+**/*secret*
+*password*
+**/*password*
+*token*
+**/*token*
+bearer_*
+**/bearer_*
+
+# SSH / TLS keys
+*.key
+*.pem
+*.pfx
+*.p12
+*.ovpn
+*_rsa
+*_dsa
+*_ecdsa
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+
+# cloud / service accounts
+serviceAccount*.json
+**/serviceAccount*.json
+*-service-account*.json
+**/*-service-account*.json
+*-key.json
+**/*-key.json
+api-key*.json
+**/api-key*.json
+firebase-adminsdk*.json
+**/firebase-adminsdk*.json
+wrangler.toml
+wrangler.jsonc
+**/wrangler.toml
+**/wrangler.jsonc
+
+# unix auth
+.pgpass
+.netrc
+.htpasswd
+**/.pgpass
+**/.netrc
+**/.htpasswd
+
+# JWT / OAuth files
+*.jwt
+*.token
+**/*.jwt
+**/*.token

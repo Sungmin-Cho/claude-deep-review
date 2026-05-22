@@ -45,6 +45,9 @@ jobs:
       - name: Run mutation-protocol bash regression (M5.5 #5 + stat cross-platform fix)
         run: bash hooks/scripts/test/test-mutation-protocol.sh
 
+      - name: Run sensitive-patterns library tests
+        run: bash hooks/scripts/test/test-sensitive-patterns-lib.sh
+
       - name: detect-environment smoke test
         run: bash hooks/scripts/test/test-detect-environment.sh
 

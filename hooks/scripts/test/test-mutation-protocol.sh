@@ -224,6 +224,42 @@ line_count=$(printf '%s\n' "$matches" | grep -c .)
   || { echo "  ❌ expected 4, got $line_count: $matches"; TEST_FAILURES=$((TEST_FAILURES+1)); }
 TEST_COUNT=$((TEST_COUNT+1))
 
+# === Pattern family assertions (v1.7.1 — exercise the canonical set so
+# the "remains green = bit-for-bit parity" claim is meaningful when
+# scan_sensitive_files reads patterns from lib/sensitive-patterns.list).
+# Per round-1 plan-review C1 fix.) ===
+
+# Test F1: credentials* family
+matches=$(scan_sensitive_files "config/credentials.json" "src/main.rs")
+[ "$matches" = "config/credentials.json" ] && echo "  ✅ F1: credentials* family matched" \
+  || { echo "  ❌ F1: expected config/credentials.json, got: $matches"; TEST_FAILURES=$((TEST_FAILURES+1)); }
+TEST_COUNT=$((TEST_COUNT+1))
+
+# Test F2: *secret* family
+matches=$(scan_sensitive_files "db-secret.yaml" "cfg/app-secret.json" "README.md")
+line_count=$(printf '%s\n' "$matches" | grep -c .)
+[ "$line_count" = "2" ] && echo "  ✅ F2: *secret* family matched" \
+  || { echo "  ❌ F2: expected 2, got $line_count: $matches"; TEST_FAILURES=$((TEST_FAILURES+1)); }
+TEST_COUNT=$((TEST_COUNT+1))
+
+# Test F3: *password* family
+matches=$(scan_sensitive_files "cfg/db_password.txt" "cfg/db_host.txt")
+[ "$matches" = "cfg/db_password.txt" ] && echo "  ✅ F3: *password* family matched" \
+  || { echo "  ❌ F3: expected cfg/db_password.txt, got: $matches"; TEST_FAILURES=$((TEST_FAILURES+1)); }
+TEST_COUNT=$((TEST_COUNT+1))
+
+# Test F4: bearer_* family
+matches=$(scan_sensitive_files "cfg/bearer_token.txt" "cfg/app.yaml")
+[ "$matches" = "cfg/bearer_token.txt" ] && echo "  ✅ F4: bearer_* family matched" \
+  || { echo "  ❌ F4: expected cfg/bearer_token.txt, got: $matches"; TEST_FAILURES=$((TEST_FAILURES+1)); }
+TEST_COUNT=$((TEST_COUNT+1))
+
+# Test F5: .htpasswd
+matches=$(scan_sensitive_files "/etc/apache/.htpasswd" "/etc/apache/httpd.conf")
+[ "$matches" = "/etc/apache/.htpasswd" ] && echo "  ✅ F5: .htpasswd matched" \
+  || { echo "  ❌ F5: expected /etc/apache/.htpasswd, got: $matches"; TEST_FAILURES=$((TEST_FAILURES+1)); }
+TEST_COUNT=$((TEST_COUNT+1))
+
 # === 4회차 regression guards (FR1, FR2, FR3, W1) ===
 echo ""
 echo "=== FR1: precondition failure releases lock ==="

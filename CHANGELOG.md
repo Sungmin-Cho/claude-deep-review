@@ -2,6 +2,69 @@
 
 **English** | [한국어](./CHANGELOG.ko.md)
 
+## [1.7.1] — 2026-05-22 (agy fingerprint hybrid mode)
+
+### Behavior change (default)
+
+**The default agy fingerprint mode changes from `full-walk` to `hybrid`. To restore the previous behavior, set `agy_fingerprint_mode: full-walk` in `.deep-review/config.yaml` (or `AGY_FINGERPRINT_MODE=full-walk` env var).**
+
+In hybrid mode the bridge uses `git status -z` + per-dirty-file SHA-256 + a focused sensitive-pattern scan (~100× faster on large repos than the v1.7.0 whole-tree walk). Coverage is preserved for tracked files and gitignored sensitive paths matched by **basename** (e.g., `.env`, `id_rsa`, `firebase-adminsdk-*.json`); **user-defined gitignored non-sensitive paths outside the bridge's standard exclusion list** (e.g., custom `tmp/` directories) are no longer flagged by default.
+
+**Known limitations** (deferred to v1.7.2):
+
+- **Directory-name secrets**: hybrid's sensitive scan uses `find -iname` which matches basenames only, so gitignored sensitive files whose sensitive token is *only in a directory name* (e.g., `./secrets/config.json`, `./token-store/value.txt`) are not detected.
+- **Symlinks**: `find -type f` excludes symlinks; a gitignored symlink whose target is a sensitive file is not snapshotted in either mode (pre-existing v1.7.0 behavior — not a v1.7.1 regression). Flagged here for visibility.
+- **`.deep-review/` runtime state**: hybrid's git-status snapshot does not see gitignored content, and the sensitive-pattern scan does not match `.deep-review/config.yaml` / `.deep-review/.pending-mutation.json`. In principle agy could mutate the bridge's own config/state without warning. v1.7.0 full-walk hashed these files; v1.7.1 hybrid loses this coverage.
+
+Set `agy_fingerprint_mode: full-walk` for any repo where the above coverage gaps matter.
+
+### Added
+
+- `hooks/scripts/lib/sensitive-patterns.list` — data-only canonical sensitive-pattern list, read by both `scan_sensitive_files` (Python) and `run-agy-reviewer.sh` (Bash). 52 patterns.
+- `run-agy-reviewer.sh --mode <hybrid|full-walk|git-status|off>` argv.
+- `agy_fingerprint_mode` config field (defaults to `hybrid`, migrated automatically from v1.7.0 configs).
+- `AGY_FINGERPRINT_MODE` env var override (highest priority in the resolution chain).
+- Symlink-safe `_LIB_DIR` resolution (`_resolve_symlink` loop using `readlink`).
+- Startup degrade probes: missing `lib/sensitive-patterns.list` (hybrid only) → degrade to full-walk; missing `_sha256` backend → mode override to `off` + conservative mutation-warning. All degrades append a one-line warning to `${output_file}.stderr-tail`.
+- Hybrid `capture_status_with_hashes` (closes finding C4 — already-dirty tracked file rewrites are now detected via content hash). Uses `git status -z` (NUL-separated, path-safe) and hex-encodes paths in the snapshot.
+- Hybrid `capture_sensitive_hashes` with pipefail + `if !` guard (any stage failure cleanly degrades hybrid → full-walk).
+- `off` mode: explicit opt-out of mutation detection. **WARNING**: only use when agy is known not to mutate the worktree.
+
+### Changed
+
+- `hooks/scripts/mutation-protocol.sh:scan_sensitive_files` — reads its PATTERNS list from `lib/sensitive-patterns.list` instead of inlining (external behavior unchanged; verified by the existing 54-assertion test suite remaining green plus 5 new pattern-family assertions).
+- `commands/deep-review.md` — orchestrator now resolves the mode chain (env → config → default) before invoking the bridge and passes the resolved value via `--mode`.
+- Post-spawn `tail -5 stderr > stderr-tail` changed to `>> stderr-tail` so pre-spawn bridge degrade warnings are preserved.
+
+### Tests
+
+- `hooks/scripts/test/test-sensitive-patterns-lib.sh` (new) — cross-consumer parity test for the `.list` file. 11 assertions including fixed-point pattern count (52).
+- `hooks/scripts/test/test-mutation-protocol.sh` — 5 new pattern-family assertions (`credentials*`, `*secret*`, `*password*`, `bearer_*`, `.htpasswd`). 59 total.
+- `hooks/scripts/test/test-run-agy-reviewer.sh` — 14 new §7 matrix assertions covering all four modes, the C4 dirty-rewrite regression, the sibling-write false-positive fix (T-M13), and the rename-status case-statement (T-M14). Existing 8 assertions retain `--mode full-walk` for parity.
+
+### Deferred to v1.7.2
+
+- `find -ipath` for substring patterns (closes the `secrets/config.json`-style basename-vs-fullpath divergence — Codex review round 5 P1).
+- `_resolve_symlink` cycle guard (currently benign timeout).
+- Symlink coverage in fingerprint walk (`-type f` excludes symlinks in both modes).
+- `.deep-review/` runtime-state hashing in hybrid mode (config/pending-mutation files).
+- Semver re-verification against deep-suite marketplace contract.
+
+### Carry-forward from v1.7.0 known issues
+
+The 8 v1.7.0 known issues are re-evaluated for v1.7.1:
+
+| # | v1.7.0 issue | v1.7.1 status |
+|---|---|---|
+| 1 | agy live-workspace write capability | Still applies — agy still writes to live workspace. Hybrid mode adds *detection* (mutation-warning) for tracked + sensitive paths; v1.7.2 should consider read-only snapshot. |
+| 2 | Sensitive scan ≠ agy access domain | Still applies (same exclusion lists; `.deep-review/` gap surfaced above). |
+| 3 | Acknowledgment fingerprint path-only | Unchanged (separate from fingerprint mode work). |
+| 4 | Perl shim signal-killed = success | Unchanged (separate from fingerprint mode work). |
+| 5 | Synthesis gate redundancy (Opus W#1) | Unchanged — polish only, no correctness impact. |
+| 6 | Atomic Edit assumes schema adjacency | Mitigated — v1.7.1 §0.2 migration now uses a dynamic `block` construction that does not require key adjacency. |
+| 7 | output_file undefined when preflight fails | Unchanged. |
+| 8 | Misleading comment line 240-242 | Mitigated — v1.7.1 refactor removed the inlined pre/post walk; the misleading comment is gone. |
+
 ## [1.7.0] — 2026-05-20 (agy 4-way Review Integration)
 
 ### Added

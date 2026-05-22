@@ -15,7 +15,7 @@ To check the current version: `jq -r .version .claude-plugin/plugin.json`
 **The 5-stage review pipeline** runs in fixed order:
 1. **Collect** — git state detection (`change_state`, `review_base`, diff content)
 2. **Contract Check** — load `.deep-review/contracts/*.yaml` (status: active), verify each criterion
-3. **Deep Review** — spawn the Opus subagent + optional Codex in parallel
+3. **Deep Review** — spawn the Opus subagent + optional Codex (review + adversarial) + optional agy in parallel
 4. **Verdict** — synthesize findings into `APPROVE` / `CONCERN` / `REQUEST_CHANGES`
 5. **Respond** (optional via `--respond`) — 6-phase READ / UNDERSTAND / VERIFY / EVALUATE / RESPOND / IMPLEMENT, with the IMPLEMENT phase delegated to a dedicated `phase6-implementer` Sonnet subagent
 
@@ -66,22 +66,29 @@ deep-review/
 ├── hooks/
 │   ├── hooks.json                 # empty (no active hooks since v1.3.1)
 │   └── scripts/
-│       ├── detect-environment.sh  # Stage 1: git state detection (non-git / initial / clean / staged / unstaged / mixed / untracked)
+│       ├── detect-environment.sh  # Stage 1: git state + codex / claude_cli / agy probes
 │       ├── mutation-protocol.sh   # Codex auto-exposure lock / mutation / recovery protocol
+│       ├── run-claude-reviewer.sh # Claude CLI bridge — Opus reviewer for Codex / non-Claude runtimes
+│       ├── run-agy-reviewer.sh    # agy CLI bridge — 4th reviewer (v1.7.0+); own _timeout / _sha256 / pre+post fingerprint
 │       ├── envelope.js            # M3 envelope library (zero-dep CommonJS)
 │       ├── wrap-recurring-findings-envelope.js  # CLI for recurring-findings emission
 │       └── test/
 │           ├── test-mutation-protocol.sh         # 54 assertions, macOS + ubuntu CI
+│           ├── test-detect-environment.sh        # CI: env probes (codex / claude_cli / agy)
+│           ├── test-codex-claude-reviewer.sh     # CI: run-claude-reviewer.sh bridge
+│           ├── test-run-agy-reviewer.sh          # CI: agy bridge classifier + fingerprint
+│           ├── test-phase6-subagent.sh           # agents/phase6-implementer.md frontmatter contract
 │           └── test-phase6-protocol-e2e.sh       # E1–E12 structural + protocol tests
 ├── scripts/
 │   └── validate-envelope-emit.js  # release-lint (mirrors suite envelope schema)
 ├── skills/
-│   ├── deep-review-workflow/      # Stage 3 review logic, Codex integration reference
+│   ├── deep-review-workflow/      # Stage 3 review logic, Codex / agy integration references
 │   │   └── references/
 │   │       ├── review-criteria.md     # Correctness, Architecture, Entropy, Test coverage, Readability
 │   │       ├── contract-schema.md     # Sprint Contract YAML shape + auto/manual/mixed verification
-│   │       ├── report-format.md       # Findings output (🔴 Critical, 🟡 Warning, ℹ️ Info)
-│   │       └── codex-integration.md   # Preflight, 최대 4-way parallel, timeout/auth handling
+│   │       ├── report-format.md       # Findings output (🔴 Critical, 🟡 Warning, ℹ️ Info) + dissenter annotation
+│   │       ├── codex-integration.md   # Preflight, 최대 4-way parallel, timeout/auth handling
+│   │       └── agy-integration.md     # 4th reviewer — trust-boundary, status matrix, fingerprint mitigation
 │   ├── deep-review-loop/          # v1.6.0+ — user-invocable skill: review ↔ respond auto-iteration (was commands/deep-review-loop.md in v1.5.x)
 │   │   └── SKILL.md
 │   └── receiving-review/          # Stage 5 response protocol
@@ -162,6 +169,7 @@ Seven categories: `error-handling`, `naming-convention`, `type-safety`, `test-co
 - **Stale window**: `REVIEW_TIMEOUT_SECONDS=1200` (must remain `> codex_timeout` to avoid misclassifying active reviewers as orphaned; current codex timeout is 900s)
 - **Recovery**: auto-triggered on `/deep-review` entry; validates lock mtime, restores user staging, cleans own intent-to-add entries, releases lock
 - **Sensitive patterns**: `.env*`, `credentials*`, `*secret*`, `.key`, `.pem`, `.netrc`, `.pgpass`, `wrangler.toml`, JWT (scanned case-insensitively; all-sensitive set auto-skipped)
+- **agy is orthogonal to this lock** — `run-agy-reviewer.sh` ships its own coarse pre/post SHA-256 worktree fingerprint (`--add-dir` walks filesystem, not git index). On mismatch it emits `${output_file}.mutation-warning` and the reviewer is excluded from N-way synthesis. Mutation gating condition `(codex_plugin=true AND is_git=true)` is unaffected by agy. See `skills/deep-review-workflow/references/agy-integration.md`.
 
 ### Phase 6 delegation
 
@@ -203,6 +211,7 @@ The subagent only does **execution mechanics** (Edit, test, commit). If the `imp
 - `agy_notified: false` — 1-time install hint suppression
 - `agy_enabled: true` — permanent opt-out (set false to skip agy regardless of detection)
 - `agy_sensitive_acked_fingerprint: ""` — SHA-256 of last-acked sensitive-file scan (§4.5.1)
+- `agy_fingerprint_mode: hybrid` — fingerprint mode (`hybrid` | `full-walk` | `git-status` | `off`). v1.7.1+. Default `hybrid`. Override via `AGY_FINGERPRINT_MODE` env var (e.g., CI pinning). See [`agy-integration.md`](skills/deep-review-workflow/references/agy-integration.md) "Fingerprint modes" for cost/coverage table.
 
 ---
 
@@ -238,7 +247,7 @@ Per-call value is 900s (set at the top of `mutation-protocol.sh`); per-review lo
 
 | Entry | Kind | Description |
 |---|---|---|
-| `/deep-review` | command | Review current changes with the Opus subagent (Codex optional) |
+| `/deep-review` | command | Review current changes with the Opus subagent (Codex + agy optional, up to 4-way) |
 | `/deep-review --contract [SLICE-NNN]` | command | Sprint Contract-based verification |
 | `/deep-review --entropy` | command | Entropy scan → `.deep-review/entropy-log.jsonl` |
 | `/deep-review --respond <REPORT_PATH>` | command | 6-phase response protocol on a saved report |
@@ -271,6 +280,8 @@ CI matrix: `ubuntu-latest` + `macos-latest`. Triggers on main push + PRs touchin
 | Recurring findings missing? | Need 2+ reports in `.deep-review/reports/`, and category must appear 3+ times |
 | Cross-plugin chain broken? | `recurring-findings.envelope.parent_run_id` must mirror the consumed session-receipt's `run_id` from Stage 3 |
 | Partial-hunk staging lost during recovery? | Step 7 emits a warning — re-run `git add -p` manually; full hunk restore is deferred |
+| agy emitted `${output_file}.mutation-warning`? | Bridge detected worktree SHA-256 drift between pre/post spawn — agy result is excluded from N-way synthesis. Investigate with `git status`; coarse fingerprint may miss renames/races. See `agy-integration.md` Status Matrix. |
+| agy reviewer noticeably slower than Opus / Codex? | Pre-v1.7.1: bridge walked the entire worktree pre/post for SHA-256 fingerprint. Since v1.7.1, hybrid mode (default) uses `git status -z` + per-dirty-file SHA-256 + sensitive-pattern scan via `lib/sensitive-patterns.list` — ~100× faster on large repos. Set `agy_fingerprint_mode: full-walk` to restore v1.7.0 behavior. |
 
 ---
 

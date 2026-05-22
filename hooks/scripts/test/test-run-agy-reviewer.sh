@@ -28,11 +28,13 @@ ARGS_LOG="$WORK/args.log"
 echo "test prompt" > "$PROMPT"
 
 # --- Mechanism A: PATH injection ---
+# v1.7.1: existing tests use --mode full-walk to preserve v1.7.0 fingerprint semantics.
+# Matrix tests (T-M1..T-M14 below) exercise hybrid/git-status/off/full-walk explicitly.
 run_a() {
   local behavior="$1"
   > "$ARGS_LOG"
   PATH="$WORK/mock-bin:$PATH" MOCK_BEHAVIOR="$behavior" MOCK_ARGS_LOG="$ARGS_LOG" \
-    "$BRIDGE" --project-root "$REPO" --prompt-file "$PROMPT" --output "$OUT" --timeout-seconds 5
+    "$BRIDGE" --project-root "$REPO" --prompt-file "$PROMPT" --output "$OUT" --mode full-walk --timeout-seconds 5
 }
 
 # --- Mechanism B: --binary override ---
@@ -40,7 +42,7 @@ run_b() {
   local behavior="$1"
   > "$ARGS_LOG"
   MOCK_BEHAVIOR="$behavior" MOCK_ARGS_LOG="$ARGS_LOG" \
-    "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" --prompt-file "$PROMPT" --output "$OUT" --timeout-seconds 5
+    "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" --prompt-file "$PROMPT" --output "$OUT" --mode full-walk --timeout-seconds 5
 }
 
 assert_status() {
@@ -109,7 +111,7 @@ else
   # After fix: child execs the actual agy mock in timeout mode → rc=124
   rc=0
   PATH="$stripped_path:$WORK/mock-bin" MOCK_BEHAVIOR="timeout" MOCK_ARGS_LOG="$ARGS_LOG" \
-    "$BRIDGE" --project-root "$REPO" --prompt-file "$PROMPT" --output "$OUT" --timeout-seconds 2 \
+    "$BRIDGE" --project-root "$REPO" --prompt-file "$PROMPT" --output "$OUT" --mode full-walk --timeout-seconds 2 \
     || rc=$?
   # status file should be "timeout" (rc=124 → classifier maps to timeout)
   got_status=$(cat "$OUT.status" 2>/dev/null || echo MISSING)
@@ -122,5 +124,197 @@ else
     echo "  ✓ Perl fallback: status=$got_status (acceptable — agy mock may have exited before alarm)"
   fi
 fi
+
+# ============================================================
+# §7 matrix (v1.7.1) — hybrid / full-walk / git-status / off coverage
+# ============================================================
+echo ""
+echo "=== §7 matrix (hybrid / full-walk / git-status / off) ==="
+
+MATRIX_PASS=0
+MATRIX_FAIL=0
+matrix_pass() { MATRIX_PASS=$((MATRIX_PASS+1)); echo "  ✓ $1"; }
+matrix_fail() { MATRIX_FAIL=$((MATRIX_FAIL+1)); echo "  ✗ $1"; }
+
+# Fake-agy binary that performs a configured mutation when invoked
+FAKE_AGY="$WORK/fake-agy"
+chmod +x "$WORK"
+make_agy_no_op() { printf '#!/bin/sh\nexit 0\n' > "$FAKE_AGY"; chmod +x "$FAKE_AGY"; }
+make_agy_modify() { printf '#!/bin/sh\necho "%s" > "%s"\nexit 0\n' "$2" "$1" > "$FAKE_AGY"; chmod +x "$FAKE_AGY"; }
+make_agy_create() { make_agy_modify "$1" "$2"; }
+make_agy_sibling_write() {
+  local fixt="$1"
+  printf '#!/bin/sh\nmkdir -p "%s/.deep-review/reports" && echo "x" > "%s/.deep-review/reports/sibling.json"\nexit 0\n' "$fixt" "$fixt" > "$FAKE_AGY"
+  chmod +x "$FAKE_AGY"
+}
+
+# Fresh fixture repo per matrix case.
+# CRITICAL: mirror real /deep-review usage by gitignoring .deep-review/ in the
+# fixture's first commit. Otherwise T-M13's sibling-write would appear as
+# untracked drift and hybrid mode would correctly flag it — making T-M13
+# self-contradictory.
+make_fixture() {
+  local dir="$1"
+  rm -rf "$dir" && mkdir -p "$dir"
+  ( cd "$dir" && git init -q && git config user.email a@b && git config user.name a \
+    && printf '.deep-review/\n' > .gitignore \
+    && echo "init" > README.md \
+    && git add . && git commit -q -m init )
+}
+
+# Fresh OUT per case avoids stale ${OUT}.mutation-warning leaks
+fresh_out() {
+  rm -f "$OUT" "$OUT.mutation-warning" "$OUT.status" "$OUT.stderr-tail" 2>/dev/null
+  OUT=$(mktemp)
+}
+
+FIXT="$WORK/fixt"
+
+# Lib backup/restore for T-M12 — chained cleanup (preserves WORK trap above)
+SAVED_LIB="$REPO/hooks/scripts/lib/sensitive-patterns.list"
+SAVED_LIB_BACKUP=""
+cleanup_matrix() {
+  if [ -n "$SAVED_LIB_BACKUP" ] && [ -f "$SAVED_LIB_BACKUP" ]; then
+    mv "$SAVED_LIB_BACKUP" "$SAVED_LIB"
+  fi
+  rm -rf "$WORK"   # preserve original test harness trap behavior
+}
+trap cleanup_matrix EXIT
+
+# T-M1: hybrid + no change → no warning
+fresh_out; make_fixture "$FIXT"; make_agy_no_op
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+[ ! -f "$OUT.mutation-warning" ] && matrix_pass "T-M1: hybrid + no change → no warning" \
+  || matrix_fail "T-M1: hybrid + no change → unexpected warning"
+
+# T-M2: hybrid + tracked file modified → warning
+fresh_out; make_fixture "$FIXT"; make_agy_modify "$FIXT/README.md" "modified-by-agy"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+[ -f "$OUT.mutation-warning" ] && matrix_pass "T-M2: hybrid + tracked mod → warning" \
+  || matrix_fail "T-M2: hybrid + tracked mod → MISSED"
+
+# T-M3: hybrid + new untracked file → warning
+fresh_out; make_fixture "$FIXT"; make_agy_create "$FIXT/newfile.txt" "content"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+[ -f "$OUT.mutation-warning" ] && matrix_pass "T-M3: hybrid + new untracked → warning" \
+  || matrix_fail "T-M3: hybrid + new untracked → MISSED"
+
+# T-M4 (C4 regression): hybrid + already-dirty tracked file rewritten by agy → warning
+fresh_out; make_fixture "$FIXT"
+( cd "$FIXT" && echo "dirty1" > README.md )
+make_agy_modify "$FIXT/README.md" "dirty2-by-agy"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+[ -f "$OUT.mutation-warning" ] && matrix_pass "T-M4: hybrid + dirty rewrite → warning (C4 closed)" \
+  || matrix_fail "T-M4: hybrid + dirty rewrite → MISSED (C4 regression)"
+
+# T-M5: hybrid + gitignored .env modified → warning (sensitive-pattern catch)
+fresh_out; make_fixture "$FIXT"
+( cd "$FIXT" && printf '.deep-review/\n.env\n' > .gitignore && echo "v1" > .env && git add .gitignore && git commit -q -m gi )
+make_agy_modify "$FIXT/.env" "v2"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+[ -f "$OUT.mutation-warning" ] && matrix_pass "T-M5: hybrid + .env mod → warning (sensitive)" \
+  || matrix_fail "T-M5: hybrid + .env mod → MISSED"
+
+# T-M6: hybrid + gitignored non-sensitive (dist/foo) modified → no warning
+fresh_out; make_fixture "$FIXT"
+( cd "$FIXT" && printf '.deep-review/\ndist/\n' > .gitignore && mkdir dist && echo "x" > dist/foo && git add .gitignore && git commit -q -m gi )
+make_agy_modify "$FIXT/dist/foo" "modified"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+[ ! -f "$OUT.mutation-warning" ] && matrix_pass "T-M6: hybrid + dist/foo mod → no warning (intended)" \
+  || matrix_fail "T-M6: hybrid + dist/foo mod → unexpected warning"
+
+# T-M7: full-walk + no change → no warning (v1.7.0 parity)
+fresh_out; make_fixture "$FIXT"; make_agy_no_op
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode full-walk --timeout-seconds 30 >/dev/null 2>&1 || true
+[ ! -f "$OUT.mutation-warning" ] && matrix_pass "T-M7: full-walk + no change → no warning" \
+  || matrix_fail "T-M7: full-walk + no change → unexpected warning"
+
+# T-M8: full-walk + tracked mod → warning
+fresh_out; make_fixture "$FIXT"; make_agy_modify "$FIXT/README.md" "v2"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode full-walk --timeout-seconds 30 >/dev/null 2>&1 || true
+[ -f "$OUT.mutation-warning" ] && matrix_pass "T-M8: full-walk + tracked mod → warning" \
+  || matrix_fail "T-M8: full-walk + tracked mod → MISSED"
+
+# T-M9: git-status + .env modified → no warning (sensitive miss by design)
+fresh_out; make_fixture "$FIXT"
+( cd "$FIXT" && printf '.deep-review/\n.env\n' > .gitignore && echo "v1" > .env && git add .gitignore && git commit -q -m gi )
+make_agy_modify "$FIXT/.env" "v2"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode git-status --timeout-seconds 30 >/dev/null 2>&1 || true
+[ ! -f "$OUT.mutation-warning" ] && matrix_pass "T-M9: git-status + .env mod → no warning (intended)" \
+  || matrix_fail "T-M9: git-status + .env mod → unexpected warning"
+
+# T-M10: off + any change → no warning
+fresh_out; make_fixture "$FIXT"; make_agy_modify "$FIXT/README.md" "v2"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 30 >/dev/null 2>&1 || true
+[ ! -f "$OUT.mutation-warning" ] && matrix_pass "T-M10: off + any change → no warning" \
+  || matrix_fail "T-M10: off mode unexpectedly warned"
+
+# T-M11: invalid mode → bridge exits 2 (rc=0 then capture via || rc=$?)
+fresh_out; make_fixture "$FIXT"
+rc=0
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode bogus --timeout-seconds 30 >/dev/null 2>&1 || rc=$?
+[ "$rc" = 2 ] && matrix_pass "T-M11: invalid mode → exit 2" \
+  || matrix_fail "T-M11: invalid mode → exit $rc (expected 2)"
+
+# T-M12: missing lib → degrade hybrid → full-walk + stderr-tail entry
+fresh_out; make_fixture "$FIXT"
+SAVED_LIB_BACKUP="${SAVED_LIB}.bak.$$"
+mv "$SAVED_LIB" "$SAVED_LIB_BACKUP"
+make_agy_modify "$FIXT/README.md" "v2"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+mv "$SAVED_LIB_BACKUP" "$SAVED_LIB"
+SAVED_LIB_BACKUP=""
+if [ -f "$OUT.mutation-warning" ] && grep -q "sensitive-patterns.list missing" "$OUT.stderr-tail" 2>/dev/null; then
+  matrix_pass "T-M12: missing lib → degrade to full-walk + stderr-tail entry"
+else
+  warn_present=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no)
+  matrix_fail "T-M12: missing lib degrade misbehaved (warning=$warn_present; tail=$(head -1 "$OUT.stderr-tail" 2>/dev/null || echo MISSING))"
+fi
+
+# T-M13: hybrid + sibling-write to .deep-review/reports/ → no warning (v1.7.1 key win)
+fresh_out; make_fixture "$FIXT"; make_agy_sibling_write "$FIXT"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+[ ! -f "$OUT.mutation-warning" ] && matrix_pass "T-M13: hybrid + sibling reports/ write → no warning (v1.7.1 win)" \
+  || matrix_fail "T-M13: hybrid + sibling write → unexpected warning (regression to v1.7.0 false-positive)"
+
+# T-M15: hybrid + agy commits its mutation → warning (HEAD-sha regression test)
+# Without HEAD capture, modify+add+commit leaves git status clean pre/post
+# and hybrid would miss the mutation (round-impl-2 Codex review P2).
+fresh_out; make_fixture "$FIXT"
+# Fake agy modifies + commits
+printf '#!/bin/sh\ncd "%s" && echo "modified" > README.md && git add README.md && git -c user.email=a@b -c user.name=a commit -q -m "agy commit"\nexit 0\n' "$FIXT" > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+[ -f "$OUT.mutation-warning" ] && matrix_pass "T-M15: hybrid + agy commits → warning (HEAD-sha)" \
+  || matrix_fail "T-M15: hybrid + agy commits → MISSED (HEAD-sha regression)"
+
+# T-M14: hybrid + staged rename → no warning (R?/C? case-statement coverage)
+fresh_out; make_fixture "$FIXT"
+( cd "$FIXT" && git mv README.md README.txt )  # staged, NOT committed
+make_agy_no_op
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+[ ! -f "$OUT.mutation-warning" ] && matrix_pass "T-M14: hybrid + staged rename → no warning (rename parsing)" \
+  || matrix_fail "T-M14: hybrid + staged rename → unexpected warning"
+
+echo "=========================="
+echo "MATRIX PASS: $MATRIX_PASS"
+echo "MATRIX FAIL: $MATRIX_FAIL"
+echo "=========================="
+[ "$MATRIX_FAIL" -eq 0 ] || exit 1
 
 echo "ALL PASS"

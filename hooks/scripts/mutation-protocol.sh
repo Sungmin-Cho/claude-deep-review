@@ -322,40 +322,32 @@ PY
 #   Patterns cover dotenv, credentials, SSH keys, GCP/Firebase, wrangler, etc.
 scan_sensitive_files() {
   [ "$#" -eq 0 ] && return 0
-  python3 - "$@" <<'PY'
+  local _lib_dir
+  _lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/lib" 2>/dev/null && pwd)" || _lib_dir=""
+  if [ -z "$_lib_dir" ] || [ ! -r "$_lib_dir/sensitive-patterns.list" ]; then
+    # Fallback: library directory unresolvable. Use a minimal hardcoded set so
+    # callers never get a silent "no sensitive files" result.
+    echo "mutation-protocol: lib/sensitive-patterns.list not found; using minimal fallback pattern set" >&2
+    python3 - "$@" <<'PY'
 import sys, fnmatch
-
-PATTERNS = [
-    # dotenv (nested for monorepos)
-    ".env", ".env.*", ".envrc",
-    "**/.env", "**/.env.*", "**/.envrc",
-    # generic credential names
-    "credentials*", "**/credentials*",
-    "*secret*", "**/*secret*",
-    "*password*", "**/*password*",
-    "*token*", "**/*token*",
-    "bearer_*", "**/bearer_*",
-    # SSH / TLS keys
-    "*.key", "*.pem", "*.pfx", "*.p12", "*.ovpn",
-    "*_rsa", "*_dsa", "*_ecdsa",
-    "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*",
-    # cloud / service accounts
-    "serviceAccount*.json", "**/serviceAccount*.json",
-    "*-service-account*.json", "**/*-service-account*.json",
-    "*-key.json", "**/*-key.json",
-    "api-key*.json", "**/api-key*.json",
-    "firebase-adminsdk*.json", "**/firebase-adminsdk*.json",
-    "wrangler.toml", "wrangler.jsonc",
-    "**/wrangler.toml", "**/wrangler.jsonc",
-    # unix auth
-    ".pgpass", ".netrc", ".htpasswd",
-    "**/.pgpass", "**/.netrc", "**/.htpasswd",
-    # JWT / OAuth
-    "*.jwt", "*.token",
-    "**/*.jwt", "**/*.token",
-]
-
+PATTERNS = [".env", ".env.*", "credentials*", "*secret*", "*.key", "*.pem", ".netrc", ".pgpass"]
 for f in sys.argv[1:]:
+    fl = f.lower()
+    bn = fl.rsplit("/", 1)[-1]
+    for p in PATTERNS:
+        pl = p.lower()
+        if fnmatch.fnmatch(bn, pl) or fnmatch.fnmatch(fl, pl):
+            print(f); break
+PY
+    return
+  fi
+  python3 - "$_lib_dir/sensitive-patterns.list" "$@" <<'PY'
+import sys, fnmatch
+list_path = sys.argv[1]
+with open(list_path) as fh:
+    PATTERNS = [ln.strip() for ln in fh
+                if ln.strip() and not ln.lstrip().startswith('#')]
+for f in sys.argv[2:]:
     fl = f.lower()
     bn = fl.rsplit("/", 1)[-1]
     matched = False

@@ -27,14 +27,22 @@ agy 호출 전 반드시 확인:
 
 ## 호출 패턴
 
-`hooks/scripts/run-agy-reviewer.sh` 를 백그라운드 호출:
+`hooks/scripts/run-agy-reviewer.sh` 를 백그라운드 호출. **`--mode`** 인자는 호출자(orchestrator)가 env→config→default 체인으로 미리 해결해서 전달해야 한다. bridge 자체의 내부 default(`hybrid`)에만 의지하면 사용자의 `AGY_FINGERPRINT_MODE` env var이나 config 설정이 무시된다 (impl-r4 Codex adv MED).
 
 ```bash
+# 호출자가 resolution 체인 적용 (orchestrator pattern)
+mode="${AGY_FINGERPRINT_MODE:-}"
+if [ -z "$mode" ] && [ -f .deep-review/config.yaml ]; then
+  mode=$(sed -nE 's/^agy_fingerprint_mode:[[:space:]]*["'\'']?([^"'\''#[:space:]]+)["'\'']?.*$/\1/p' .deep-review/config.yaml | head -1)
+fi
+mode="${mode:-hybrid}"
+
 "$CLAUDE_PLUGIN_ROOT/hooks/scripts/run-agy-reviewer.sh" \
   --binary "$agy_cli_path" \
   --project-root "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" \
   --prompt-file "$prompt_file" \
   --output "$output_file" \
+  --mode "$mode" \
   --timeout-seconds 900
 ```
 
@@ -71,6 +79,33 @@ N=3, 2, 1 fallback 표는 `codex-integration.md` 참조 — agy 가 없을 때 �
 ## Mutation Protocol 참조
 
 agy 는 **mutation 과 직교** — `--add-dir` filesystem walk 으로 gitignored 파일도 자연스럽게 봄. Mutation gating 조건 `(codex_plugin=true AND is_git=true)` 는 **변경 없음**. agy 로 인해 mutation 이 트리거되지 않음 (R5/R6 fix). 자세한 rationale: spec §3.3.
+
+## Fingerprint modes (v1.7.1+)
+
+`agy_fingerprint_mode` in `.deep-review/config.yaml` (or `AGY_FINGERPRINT_MODE` env var) selects the mutation-detection mechanism. Default: `hybrid`.
+
+| Mode | Mechanism | Coverage | Cost (large repo) | When to use |
+|---|---|---|---|---|
+| **hybrid** *(default)* | `git status -z` + per-dirty-file SHA-256 + sensitive-pattern walk via `lib/sensitive-patterns.list` | Tracked files, gitignored sensitive paths (.env, credentials, keys), already-dirty rewrites | ~0.4 s (100k files) | Most users |
+| **full-walk** | SHA-256 of every non-excluded file (v1.7.0 behavior) | Everything except the standard exclusion list (`./.git/`, `./node_modules/`, `./dist/`, etc.) | ~60 s (100k files) | Strict-coverage users needing detection of user-defined gitignored paths outside the standard exclusion list |
+| **git-status** | `git status -z` + per-dirty-file SHA-256 only (no sensitive scan) | Tracked files + already-dirty rewrites; **misses** gitignored sensitive paths | ~0.1 s | Tests, debugging |
+| **off** | (no snapshot) | None | 0 | **DANGEROUS** — only when agy is known not to mutate the worktree |
+
+**Resolution chain**: `AGY_FINGERPRINT_MODE` env var > config field > built-in default `hybrid`. The orchestrator (`commands/deep-review.md`) resolves before invoking the bridge; the bridge receives the resolved value via `--mode`.
+
+**Degrade paths** (all append a one-line warning to `${output_file}.stderr-tail`):
+- `lib/sensitive-patterns.list` missing → degrade **hybrid only** → full-walk (git-status mode does not read the list)
+- `_sha256` backend absent → mode override to `off` + conservative `mutation_warning`
+- `git status -z` failure → degrade hybrid/git-status → full-walk
+- snapshot capture failure (pre or post) → conservative `mutation_warning` (post) or fresh full-walk (pre)
+
+**C4 closed (v1.7.1)**: hybrid mode now appends per-file SHA-256 to each dirty/untracked `git status` line. An already-dirty tracked file rewritten by agy during the spawn window (` M foo` → ` M foo` with different content) is detected via content hash divergence.
+
+**C5 trade-off (v1.7.1)**: hybrid mode misses agy writes to **user-defined gitignored paths outside the bridge's standard exclusion list**. Paths inside the standard list (`./dist/`, `./build/`, `./node_modules/`, etc.) are missed by **both** modes (never walked in v1.7.0 either). Set `agy_fingerprint_mode: full-walk` for user-defined gitignored paths outside the standard list.
+
+**Known limitation (v1.7.2 deferred)**: hybrid's sensitive scan uses `find -iname` which matches basenames only. Gitignored sensitive files whose token appears only in a directory name (e.g., `./secrets/config.json`) are not detected.
+
+**Repo precondition**: hybrid's "sibling reviewer writes to `.deep-review/reports/` produce no warning" property assumes the target repo has `.deep-review/` in its `.gitignore` (the standard /deep-review usage convention). Without that, sibling-reviewer writes will appear as untracked in `git status` and hybrid will correctly flag them.
 
 ## Permanent opt-out
 
