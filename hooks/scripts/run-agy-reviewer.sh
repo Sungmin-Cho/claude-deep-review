@@ -40,6 +40,21 @@ _sha256() {
   fi
 }
 
+# ---------- symlink-resolving helper (v1.7.1) ----------
+# BASH_SOURCE[0] alone does NOT auto-resolve symlinks for executed scripts.
+# Walk the chain explicitly via readlink until we hit the real file.
+_resolve_symlink() {
+  local p="$1" t
+  while [ -L "$p" ]; do
+    t="$(readlink "$p")" || return 1
+    case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+  done
+  printf '%s' "$p"
+}
+
+_REAL_BRIDGE="$(_resolve_symlink "${BASH_SOURCE[0]}" 2>/dev/null)" || _REAL_BRIDGE="${BASH_SOURCE[0]}"
+_LIB_DIR="$(cd "$(dirname "$_REAL_BRIDGE")/lib" 2>/dev/null && pwd)" || _LIB_DIR=""
+
 # ---------- argv parsing ----------
 binary=""
 project_root=""
@@ -66,6 +81,37 @@ case "$mode" in
   hybrid|full-walk|git-status|off) ;;
   *) echo "Invalid mode: $mode (expected: hybrid|full-walk|git-status|off)" >&2; exit 2 ;;
 esac
+
+# ---------- stderr-tail initialization (v1.7.1) ----------
+# Initialize empty so probes + degrade warnings (below + later) survive the
+# post-spawn agy-stderr append (line ~190 — also changed from > to >>).
+: > "${output_file}.stderr-tail"
+
+# ---------- startup degrade probes ----------
+# 1. lib/sensitive-patterns.list — hybrid ONLY (git-status doesn't read it).
+if [ "$mode" = "hybrid" ]; then
+  if [ -z "$_LIB_DIR" ] || [ ! -r "$_LIB_DIR/sensitive-patterns.list" ]; then
+    msg="agy bridge: lib/sensitive-patterns.list missing — degrading hybrid → full-walk"
+    echo "$msg" >&2
+    echo "$msg" >> "${output_file}.stderr-tail"
+    mode="full-walk"
+  fi
+fi
+
+# 2. _sha256 backend probe — length check on empty-input digest (64 hex chars).
+#    A bare `if ! _sha256 < /dev/null` returns 0 even with no backend because
+#    the function's tail-pipeline `cut` exits 0; the length check is reliable.
+if [ "$mode" = "hybrid" ] || [ "$mode" = "git-status" ] || [ "$mode" = "full-walk" ]; then
+  _probe_hash=$(_sha256 < /dev/null 2>/dev/null || true)
+  if [ "${#_probe_hash}" -ne 64 ]; then
+    msg="agy bridge: no sha256 backend (sha256sum/shasum/openssl all absent) — mutation detection cannot run; emitting conservative mutation-warning"
+    echo "$msg" >&2
+    echo "$msg" >> "${output_file}.stderr-tail"
+    mode="off"
+    echo "mutated (no sha256 backend available — conservative)" > "${output_file}.mutation-warning"
+  fi
+  unset _probe_hash
+fi
 
 [ -z "$project_root" ] && { echo "Missing --project-root" >&2; exit 2; }
 [ -z "$prompt_file" ]  && { echo "Missing --prompt-file" >&2; exit 2; }
@@ -177,7 +223,7 @@ mv "${status_file}.tmp" "$status_file"
 # I3: Preserve last 5 stderr lines for caller (per agy-integration.md Status Matrix —
 # AGY_STATUS=failed shows stderr tail-5 to user). Caller reads ${output_file}.stderr-tail.
 if [ -s "$stderr_log" ]; then
-  tail -5 "$stderr_log" > "${output_file}.stderr-tail"
+  tail -5 "$stderr_log" >> "${output_file}.stderr-tail"
 fi
 rm -f "$stderr_log"
 exit "$rc"
