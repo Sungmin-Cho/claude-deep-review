@@ -251,8 +251,122 @@ _walk_hash() {
     | _sha256 2>/dev/null || echo "unavailable"
 }
 
-# ---------- pre-spawn snapshot (full-walk mode for now; mode dispatch added in later tasks) ----------
-pre_walk_hash=$(_walk_hash)
+# ---------- hybrid mode (v1.7.1): split pre/post with degrade ----------
+_HYBRID_PRE_STATUS=""
+_HYBRID_PRE_SENS=""
+
+_fingerprint_hybrid_pre() {
+  _HYBRID_PRE_STATUS=$(mktemp "${TMPDIR:-/tmp}/agy-pre-status.XXXXXX") || return 1
+  _HYBRID_PRE_SENS=$(mktemp "${TMPDIR:-/tmp}/agy-pre-sens.XXXXXX") || return 1
+  if ! capture_status_with_hashes "$_HYBRID_PRE_STATUS"; then
+    local m="agy bridge: git-status pre-snapshot failed — degrading hybrid → full-walk"
+    echo "$m" >&2
+    echo "$m" >> "${output_file}.stderr-tail"
+    rm -f "$_HYBRID_PRE_STATUS" "$_HYBRID_PRE_SENS"
+    _HYBRID_PRE_STATUS=""; _HYBRID_PRE_SENS=""
+    mode="full-walk"
+    pre_walk_hash=$(_walk_hash)
+    return 0
+  fi
+  if ! capture_sensitive_hashes "$_HYBRID_PRE_SENS"; then
+    local m="agy bridge: sensitive-pattern pre-snapshot failed — degrading hybrid → full-walk"
+    echo "$m" >&2
+    echo "$m" >> "${output_file}.stderr-tail"
+    rm -f "$_HYBRID_PRE_STATUS" "$_HYBRID_PRE_SENS"
+    _HYBRID_PRE_STATUS=""; _HYBRID_PRE_SENS=""
+    mode="full-walk"
+    pre_walk_hash=$(_walk_hash)
+    return 0
+  fi
+  return 0
+}
+
+_fingerprint_hybrid_post() {
+  if [ -z "$_HYBRID_PRE_STATUS" ]; then
+    # Pre-snapshot failed and we already switched to full-walk
+    post_walk_hash=$(_walk_hash)
+    if [ "$pre_walk_hash" != "unavailable" ] && [ "$post_walk_hash" != "unavailable" ] \
+       && [ "$pre_walk_hash" != "$post_walk_hash" ]; then
+      mutation_detected=1
+      echo "mutated (full-walk fallback after hybrid degrade)" > "${output_file}.mutation-warning"
+    fi
+    return 0
+  fi
+  local post_status post_sens reason=""
+  post_status=$(mktemp "${TMPDIR:-/tmp}/agy-post-status.XXXXXX") || return 1
+  post_sens=$(mktemp "${TMPDIR:-/tmp}/agy-post-sens.XXXXXX") || return 1
+  if ! capture_status_with_hashes "$post_status" || ! capture_sensitive_hashes "$post_sens"; then
+    local m="agy bridge: post-snapshot failed — conservative mutation-warning emitted"
+    echo "$m" >&2
+    echo "$m" >> "${output_file}.stderr-tail"
+    mutation_detected=1
+    echo "mutated (post-snapshot failed; conservative)" > "${output_file}.mutation-warning"
+    rm -f "$_HYBRID_PRE_STATUS" "$_HYBRID_PRE_SENS" "$post_status" "$post_sens"
+    return 0
+  fi
+  if ! diff -q "$_HYBRID_PRE_STATUS" "$post_status" >/dev/null 2>&1; then
+    mutation_detected=1; reason="git-status-drift"
+  fi
+  if ! diff -q "$_HYBRID_PRE_SENS" "$post_sens" >/dev/null 2>&1; then
+    mutation_detected=1; reason="${reason:+$reason,}sensitive-pattern-drift"
+  fi
+  if [ "$mutation_detected" = 1 ]; then
+    echo "mutated ($reason)" > "${output_file}.mutation-warning"
+  fi
+  rm -f "$_HYBRID_PRE_STATUS" "$_HYBRID_PRE_SENS" "$post_status" "$post_sens"
+}
+
+# ---------- git-status mode (v1.7.1) ----------
+_GS_PRE_STATUS=""
+
+_fingerprint_git_status_pre() {
+  _GS_PRE_STATUS=$(mktemp "${TMPDIR:-/tmp}/agy-gs-pre.XXXXXX") || return 1
+  if ! capture_status_with_hashes "$_GS_PRE_STATUS"; then
+    local m="agy bridge: git-status pre-snapshot failed — degrading git-status → full-walk"
+    echo "$m" >&2
+    echo "$m" >> "${output_file}.stderr-tail"
+    rm -f "$_GS_PRE_STATUS"; _GS_PRE_STATUS=""
+    mode="full-walk"
+    pre_walk_hash=$(_walk_hash)
+  fi
+}
+
+_fingerprint_git_status_post() {
+  if [ -z "$_GS_PRE_STATUS" ]; then
+    post_walk_hash=$(_walk_hash)
+    if [ "$pre_walk_hash" != "unavailable" ] && [ "$post_walk_hash" != "unavailable" ] \
+       && [ "$pre_walk_hash" != "$post_walk_hash" ]; then
+      mutation_detected=1
+      echo "mutated (full-walk fallback after git-status degrade)" > "${output_file}.mutation-warning"
+    fi
+    return 0
+  fi
+  local post_status
+  post_status=$(mktemp "${TMPDIR:-/tmp}/agy-gs-post.XXXXXX") || return 1
+  if ! capture_status_with_hashes "$post_status"; then
+    mutation_detected=1
+    echo "mutated (git-status post-snapshot failed; conservative)" > "${output_file}.mutation-warning"
+    rm -f "$_GS_PRE_STATUS" "$post_status"
+    return 0
+  fi
+  if ! diff -q "$_GS_PRE_STATUS" "$post_status" >/dev/null 2>&1; then
+    mutation_detected=1
+    echo "mutated (git-status-drift)" > "${output_file}.mutation-warning"
+  fi
+  rm -f "$_GS_PRE_STATUS" "$post_status"
+}
+
+# ---------- mode-driven pre-spawn dispatcher (v1.7.1) ----------
+mutation_detected=0
+pre_walk_hash=""
+post_walk_hash=""
+
+case "$mode" in
+  hybrid)     _fingerprint_hybrid_pre ;;
+  git-status) _fingerprint_git_status_pre ;;
+  full-walk)  pre_walk_hash=$(_walk_hash) ;;
+  off)        : ;;
+esac
 
 # ---------- invocation ----------
 stderr_log=$(mktemp "${TMPDIR:-/tmp}/agy-stderr.XXXXXX")
@@ -279,16 +393,28 @@ _timeout "$timeout" "$resolved_binary" -p "$prompt_content" \
     --dangerously-skip-permissions \
     > "$output_file" 2> "$stderr_log" || rc=$?
 
-# ---------- post-spawn snapshot ----------
-post_walk_hash=$(_walk_hash)
-mutation_detected=0
-if [ "$pre_walk_hash" != "unavailable" ] && [ "$post_walk_hash" != "unavailable" ] \
-   && [ "$pre_walk_hash" != "$post_walk_hash" ]; then
+# ---------- mode-driven post-spawn dispatcher (v1.7.1) ----------
+case "$mode" in
+  hybrid)
+    _fingerprint_hybrid_post
+    ;;
+  git-status)
+    _fingerprint_git_status_post
+    ;;
+  full-walk)
+    post_walk_hash=$(_walk_hash)
+    if [ "$pre_walk_hash" != "unavailable" ] && [ "$post_walk_hash" != "unavailable" ] \
+       && [ "$pre_walk_hash" != "$post_walk_hash" ]; then
+      mutation_detected=1
+      echo "mutated" > "${output_file}.mutation-warning"
+    fi
+    ;;
+  off)
+    : # explicit opt-out — no detection
+    ;;
+esac
+if [ "$mutation_detected" = 1 ]; then
   echo "⚠️  agy mutated workspace files. Investigate before trusting review output." >&2
-  # BLOCKER-3: write mutation-warning sidecar so orchestrator Stage 5.1 can detect it
-  # via .mutation-warning file check (independent of .status). Set flag for classifier.
-  echo "mutated" > "${output_file}.mutation-warning"
-  mutation_detected=1
 fi
 
 # ---------- classifier (same logic as §4.2 standalone — single source of truth) ----------
