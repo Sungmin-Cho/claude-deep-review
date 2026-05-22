@@ -157,7 +157,7 @@ make_fixture() {
   local dir="$1"
   rm -rf "$dir" && mkdir -p "$dir"
   ( cd "$dir" && git init -q && git config user.email a@b && git config user.name a \
-    && printf '.deep-review/\n' > .gitignore \
+    && printf '.deep-review/\nsecrets/\ntoken-store/\ninnocuous-public-dir/\n' > .gitignore \
     && echo "init" > README.md \
     && git add . && git commit -q -m init )
 }
