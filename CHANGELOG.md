@@ -2,6 +2,35 @@
 
 **English** | [한국어](./CHANGELOG.ko.md)
 
+## [1.7.2] — 2026-05-22 (hybrid coverage gaps)
+
+### Fixed
+
+- **Bilateral-wildcard directory-name secrets** — hybrid mode's sensitive scan now emits `-ipath '*/*<inner>*'` alongside the existing `-iname` for bilateral-wildcard patterns (`*secret*`, `*password*`, `*token*` and their `**/*` variants). Gitignored sensitive files whose token appears only in a directory name (e.g., `./secrets/config.json`, `./token-store/value.txt`) are now detected. The emission is a flat OR-chain — no nested `(` `)` inside `find_expr` (would otherwise fail under the existing `eval "find ... \( $find_expr \) ..."` wrapper). Closes the bilateral-pattern half of v1.7.1's "Directory-name secrets" deferred bullet.
+
+- **`.deep-review/` runtime state hashing** — hybrid mode now hardcodes SHA-256 of `.deep-review/config.yaml` and `.deep-review/.pending-mutation.json` into the pre/post sensitive-hash snapshot. agy mutations to its own bridge config or mutation-lock state file are now detected. The dispatch is 4-arm: `[ -L ]` first (any symlink → `non-regular` sentinel — blocks the symlink-to-arbitrary-file attack vector), then `[ -f ]` (regular file → hash), then `[ -e ]` (FIFO/socket/dev → sentinel), then `else continue` (absent → silent skip). Closes v1.7.1's "`.deep-review/` runtime state" deferred bullet.
+
+### Carried forward from v1.7.1
+
+- **Symlinks**: `find -type f` excludes symlinks; a gitignored symlink whose target is a sensitive file is not snapshotted in either mode (pre-existing v1.7.0 behavior — not a v1.7.1 regression).
+
+### Known limitations (v1.7.2 partial)
+
+- **Non-bilateral directory-name coverage**: only bilateral-wildcard patterns (`*X*`, `**/*X*`) gain `-ipath` directory-name matching. Non-bilateral patterns (`credentials*`, `bearer_*`, `api-key*.json`, `*.key`, etc.) remain basename-only and miss tokens in directory names (e.g., `./credentials-store/value.txt` against `credentials*`). Set `agy_fingerprint_mode: full-walk` for complete coverage. Tracked as v1.7.3+ per-family opt-in.
+
+### Changed
+
+- `hooks/scripts/run-agy-reviewer.sh:build_find_expr` — flat OR-chain emission `-iname X -o -ipath '*/*<inner>*'` for bilateral-wildcard patterns. Non-bilateral patterns unchanged. Bash 3.2 portable.
+- `hooks/scripts/run-agy-reviewer.sh:capture_sensitive_hashes` — appends runtime-state hardcoded snapshot (4-arm dispatch by file kind) + `sort -o` in-place after the existing pipefail-guarded find pipeline. Pre-existing `mv "$tmp_file" "$out_file"` preserved.
+- `hooks/scripts/test/test-run-agy-reviewer.sh:make_fixture` — `.gitignore` first-commit content extended to include `secrets/`, `token-store/`, `innocuous-public-dir/`. README.md tracking preserved (T-M14 unaffected).
+
+### Tests
+
+- T-M16, T-M16b, T-M17, T-M18, T-M18b, T-M19, T-M20 added to the matrix.
+- T-M16b is a pure unit test of `build_find_expr` output shape (locks in the contract that bilateral patterns emit BOTH `-iname` AND `-ipath` terms — extracted via awk + eval since the bridge has no source-guard).
+- T-M20 is a negative regression: `-ipath` must NOT over-match unrelated directories.
+- T-M18b is a first-run-absence regression: arm-4 silent-skip must fire when `.deep-review/` does not exist.
+
 ## [1.7.1] — 2026-05-22 (agy fingerprint hybrid mode)
 
 ### Behavior change (default)
