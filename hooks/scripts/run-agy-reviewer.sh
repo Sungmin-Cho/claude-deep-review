@@ -46,6 +46,7 @@ project_root=""
 prompt_file=""
 output_file=""
 timeout="900"
+mode=""   # v1.7.1: hybrid | full-walk | git-status | off (default: hybrid)
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -54,9 +55,17 @@ while [ $# -gt 0 ]; do
     --prompt-file)       prompt_file="$2"; shift 2 ;;
     --output)            output_file="$2"; shift 2 ;;
     --timeout-seconds)   timeout="$2"; shift 2 ;;
+    --mode)              mode="$2"; shift 2 ;;
     *) echo "Unknown arg: $1" >&2; exit 2 ;;
   esac
 done
+
+# Default + validate mode (v1.7.1)
+mode="${mode:-hybrid}"
+case "$mode" in
+  hybrid|full-walk|git-status|off) ;;
+  *) echo "Invalid mode: $mode (expected: hybrid|full-walk|git-status|off)" >&2; exit 2 ;;
+esac
 
 [ -z "$project_root" ] && { echo "Missing --project-root" >&2; exit 2; }
 [ -z "$prompt_file" ]  && { echo "Missing --prompt-file" >&2; exit 2; }
@@ -73,36 +82,35 @@ resolved_binary="${binary:-${AGY_BINARY:-$(command -v agy 2>/dev/null || true)}}
 # integration test. REJECTED candidates: 'unauthor' partial match (too broad).
 AGY_AUTH_REGEX='Reauthentication required|do not currently have an active account|OAuth token expired|Please run.*agy.*login|Not signed in|Authentication failed'
 
-# ---------- C3: pre-spawn worktree snapshot (coarse mutation detection) ----------
-# agy runs with --dangerously-skip-permissions, giving it filesystem write capability.
-# mutation-protocol.sh only gates Codex mutations, so agy mutations would be undetected.
-# This snapshot is a sha256 fingerprint of all non-git/non-nodemodules files. It is
-# COARSE (not perfect — races, large trees), but detects most accidental mutations.
-# NOTE: this adds measurable latency on large repos; a future release may make it optional.
-#
-# N5: unified exclusion list (matches §3.5 sensitive-scan find in commands/deep-review.md).
-# N9: use _sha256 shim (defined above) instead of sha256sum — macOS BSD has no sha256sum,
-#     fallback was "unavailable" which silently disabled C3 on every macOS machine.
-#     Order: xargs passes file contents to _sha256; outer _sha256 hashes the concatenation.
-pre_walk_hash=$(cd "$project_root" && find . -type f \
-  -not -path './.git/*' \
-  -not -path './node_modules/*' \
-  -not -path './.venv/*' \
-  -not -path './__pycache__/*' \
-  -not -path './.pytest_cache/*' \
-  -not -path './dist/*' \
-  -not -path './build/*' \
-  -not -path './target/*' \
-  -not -path './.next/*' \
-  -not -path './.svelte-kit/*' \
-  -not -path './coverage/*' \
-  -not -path './out/*' \
-  -not -path './.gradle/*' \
-  -not -path './.cargo/*' \
-  -not -path './vendor/*' \
-  -not -path './.terraform/*' \
-  -print0 2>/dev/null | sort -z | xargs -0 -n 100 sh -c 'for f in "$@"; do cat "$f" 2>/dev/null; done' _ \
-  | _sha256 2>/dev/null || echo "unavailable")
+# ---------- _walk_hash: whole-tree SHA-256 fingerprint (v1.7.0 full-walk recipe) ----------
+# Called twice in full-walk mode: once before agy spawn, once after. Same recipe.
+# agy runs with --dangerously-skip-permissions, so mutations would be undetected
+# without this. COARSE (races, large trees) but detects most accidental writes.
+# Standard exclusion list — common build/cache/vendor dirs.
+_walk_hash() {
+  cd "$project_root" && find . -type f \
+    -not -path './.git/*' \
+    -not -path './node_modules/*' \
+    -not -path './.venv/*' \
+    -not -path './__pycache__/*' \
+    -not -path './.pytest_cache/*' \
+    -not -path './dist/*' \
+    -not -path './build/*' \
+    -not -path './target/*' \
+    -not -path './.next/*' \
+    -not -path './.svelte-kit/*' \
+    -not -path './coverage/*' \
+    -not -path './out/*' \
+    -not -path './.gradle/*' \
+    -not -path './.cargo/*' \
+    -not -path './vendor/*' \
+    -not -path './.terraform/*' \
+    -print0 2>/dev/null | sort -z | xargs -0 -n 100 sh -c 'for f in "$@"; do cat "$f" 2>/dev/null; done' _ \
+    | _sha256 2>/dev/null || echo "unavailable"
+}
+
+# ---------- pre-spawn snapshot (full-walk mode for now; mode dispatch added in later tasks) ----------
+pre_walk_hash=$(_walk_hash)
 
 # ---------- invocation ----------
 stderr_log=$(mktemp "${TMPDIR:-/tmp}/agy-stderr.XXXXXX")
@@ -129,27 +137,8 @@ _timeout "$timeout" "$resolved_binary" -p "$prompt_content" \
     --dangerously-skip-permissions \
     > "$output_file" 2> "$stderr_log" || rc=$?
 
-# ---------- C3: post-spawn mutation check ----------
-# N5/N9: same unified exclusion list + _sha256 shim (matches pre_walk_hash above).
-post_walk_hash=$(cd "$project_root" && find . -type f \
-  -not -path './.git/*' \
-  -not -path './node_modules/*' \
-  -not -path './.venv/*' \
-  -not -path './__pycache__/*' \
-  -not -path './.pytest_cache/*' \
-  -not -path './dist/*' \
-  -not -path './build/*' \
-  -not -path './target/*' \
-  -not -path './.next/*' \
-  -not -path './.svelte-kit/*' \
-  -not -path './coverage/*' \
-  -not -path './out/*' \
-  -not -path './.gradle/*' \
-  -not -path './.cargo/*' \
-  -not -path './vendor/*' \
-  -not -path './.terraform/*' \
-  -print0 2>/dev/null | sort -z | xargs -0 -n 100 sh -c 'for f in "$@"; do cat "$f" 2>/dev/null; done' _ \
-  | _sha256 2>/dev/null || echo "unavailable")
+# ---------- post-spawn snapshot ----------
+post_walk_hash=$(_walk_hash)
 mutation_detected=0
 if [ "$pre_walk_hash" != "unavailable" ] && [ "$post_walk_hash" != "unavailable" ] \
    && [ "$pre_walk_hash" != "$post_walk_hash" ]; then
