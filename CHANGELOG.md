@@ -17,6 +17,7 @@
 ### Known limitations (v1.7.2 partial)
 
 - **Non-bilateral directory-name coverage**: only bilateral-wildcard patterns (`*X*`, `**/*X*`) gain `-ipath` directory-name matching. Non-bilateral patterns (`credentials*`, `bearer_*`, `api-key*.json`, `*.key`, etc.) remain basename-only and miss tokens in directory names (e.g., `./credentials-store/value.txt` against `credentials*`). Set `agy_fingerprint_mode: full-walk` for complete coverage. Tracked as v1.7.3+ per-family opt-in.
+- **Pre-existing runtime-state symlinks**: if `.deep-review/config.yaml` or `.deep-review/.pending-mutation.json` is already a symlink before agy runs, the bridge emits the same `non-regular` sentinel for both pre and post snapshots — a mutation through the symlink (write to the target) is therefore not detected. The 4-arm dispatch specifically blocks the *new* attack vector (agy *replacing* a regular file with a symlink), which is the v1.7.2 closure goal. Pre-existing symlink semantics is out of scope because these paths are not expected to be symlinks in normal /deep-review usage. Workaround for repos that intentionally symlink these paths: `agy_fingerprint_mode: full-walk`.
 
 ### Changed
 
