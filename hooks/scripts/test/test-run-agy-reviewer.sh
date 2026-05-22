@@ -416,6 +416,28 @@ else
   unset -f build_find_expr 2>/dev/null || true
 fi
 
+# T-M18: hybrid + agy mutates .deep-review/config.yaml (gitignored runtime state) → warning
+#        Closes G2 first half.
+make_fixture "$FIXT"
+mkdir -p "$FIXT/.deep-review"
+echo 'agy_fingerprint_mode: hybrid' > "$FIXT/.deep-review/config.yaml"
+# Fake agy overwrites the config (the "agy mutates its own bridge config" attack)
+printf '#!/bin/sh\necho "agy_fingerprint_mode: off" > "%s/.deep-review/config.yaml"\nexit 0\n' "$FIXT" > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+fresh_out
+"$BRIDGE" \
+  --binary "$FAKE_AGY" \
+  --project-root "$FIXT" \
+  --prompt-file "$PROMPT" \
+  --output "$OUT" \
+  --mode hybrid \
+  --timeout-seconds 60 >/dev/null 2>&1 || true
+if [ -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M18: hybrid catches .deep-review/config.yaml mutation"
+else
+  matrix_fail "T-M18: no mutation warning for .deep-review/config.yaml"
+fi
+
 echo "=========================="
 echo "MATRIX PASS: $MATRIX_PASS"
 echo "MATRIX FAIL: $MATRIX_FAIL"
