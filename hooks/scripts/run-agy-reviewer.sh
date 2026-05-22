@@ -138,7 +138,7 @@ AGY_AUTH_REGEX='Reauthentication required|do not currently have an active accoun
 # Rename/copy entries: in -z mode, dest path comes first, source second.
 # We hash dest and discard source.
 capture_status_with_hashes() {
-  local out="$1" git_tmp git_rc record code path expect_source=0 h path_hex
+  local out="$1" git_tmp git_rc record code path expect_source=0 h path_hex head_sha
   git_tmp=$(mktemp "${TMPDIR:-/tmp}/agy-git-status.XXXXXX") || return 1
   ( cd "$project_root" && git status -z --porcelain --untracked-files=all 2>/dev/null ) > "$git_tmp"
   git_rc=$?
@@ -146,6 +146,14 @@ capture_status_with_hashes() {
     rm -f "$git_tmp"
     return 1
   fi
+  # Capture HEAD sha so agy mutations that commit/reset are detected even when
+  # the working tree is clean before and after. Round-impl-2 Codex review P2:
+  # without this, "modify + git add + git commit" leaves git status empty both
+  # pre and post, hybrid sees no drift, agy gets counted as success despite
+  # changing HEAD. v1.7.0 full-walk caught this because it hashed file CONTENTS
+  # regardless of git state.
+  head_sha=$(cd "$project_root" && git rev-parse HEAD 2>/dev/null || echo "no-head")
+  printf 'HEAD\t%s\n' "$head_sha" > "$out"
   while IFS= read -r -d '' record; do
     if [ "$expect_source" = 1 ]; then
       expect_source=0
@@ -162,7 +170,7 @@ capture_status_with_hashes() {
     else
       printf '%s\t%s\t-\n' "$code" "$path_hex"
     fi
-  done < "$git_tmp" > "$out"
+  done < "$git_tmp" >> "$out"
   rm -f "$git_tmp"
   return 0
 }

@@ -10,7 +10,13 @@
 
 In hybrid mode the bridge uses `git status -z` + per-dirty-file SHA-256 + a focused sensitive-pattern scan (~100× faster on large repos than the v1.7.0 whole-tree walk). Coverage is preserved for tracked files and gitignored sensitive paths matched by **basename** (e.g., `.env`, `id_rsa`, `firebase-adminsdk-*.json`); **user-defined gitignored non-sensitive paths outside the bridge's standard exclusion list** (e.g., custom `tmp/` directories) are no longer flagged by default.
 
-**Known limitation (deferred to v1.7.2)**: hybrid's sensitive scan uses `find -iname` which matches basenames only, so gitignored sensitive files whose sensitive token is *only in a directory name* (e.g., `./secrets/config.json`, `./token-store/value.txt`) are not detected. Set `agy_fingerprint_mode: full-walk` for repos where directory-name secrets matter.
+**Known limitations** (deferred to v1.7.2):
+
+- **Directory-name secrets**: hybrid's sensitive scan uses `find -iname` which matches basenames only, so gitignored sensitive files whose sensitive token is *only in a directory name* (e.g., `./secrets/config.json`, `./token-store/value.txt`) are not detected.
+- **Symlinks**: `find -type f` excludes symlinks; a gitignored symlink whose target is a sensitive file is not snapshotted in either mode (pre-existing v1.7.0 behavior — not a v1.7.1 regression). Flagged here for visibility.
+- **`.deep-review/` runtime state**: hybrid's git-status snapshot does not see gitignored content, and the sensitive-pattern scan does not match `.deep-review/config.yaml` / `.deep-review/.pending-mutation.json`. In principle agy could mutate the bridge's own config/state without warning. v1.7.0 full-walk hashed these files; v1.7.1 hybrid loses this coverage.
+
+Set `agy_fingerprint_mode: full-walk` for any repo where the above coverage gaps matter.
 
 ### Added
 
@@ -40,7 +46,24 @@ In hybrid mode the bridge uses `git status -z` + per-dirty-file SHA-256 + a focu
 
 - `find -ipath` for substring patterns (closes the `secrets/config.json`-style basename-vs-fullpath divergence — Codex review round 5 P1).
 - `_resolve_symlink` cycle guard (currently benign timeout).
+- Symlink coverage in fingerprint walk (`-type f` excludes symlinks in both modes).
+- `.deep-review/` runtime-state hashing in hybrid mode (config/pending-mutation files).
 - Semver re-verification against deep-suite marketplace contract.
+
+### Carry-forward from v1.7.0 known issues
+
+The 8 v1.7.0 known issues are re-evaluated for v1.7.1:
+
+| # | v1.7.0 issue | v1.7.1 status |
+|---|---|---|
+| 1 | agy live-workspace write capability | Still applies — agy still writes to live workspace. Hybrid mode adds *detection* (mutation-warning) for tracked + sensitive paths; v1.7.2 should consider read-only snapshot. |
+| 2 | Sensitive scan ≠ agy access domain | Still applies (same exclusion lists; `.deep-review/` gap surfaced above). |
+| 3 | Acknowledgment fingerprint path-only | Unchanged (separate from fingerprint mode work). |
+| 4 | Perl shim signal-killed = success | Unchanged (separate from fingerprint mode work). |
+| 5 | Synthesis gate redundancy (Opus W#1) | Unchanged — polish only, no correctness impact. |
+| 6 | Atomic Edit assumes schema adjacency | Mitigated — v1.7.1 §0.2 migration now uses a dynamic `block` construction that does not require key adjacency. |
+| 7 | output_file undefined when preflight fails | Unchanged. |
+| 8 | Misleading comment line 240-242 | Mitigated — v1.7.1 refactor removed the inlined pre/post walk; the misleading comment is gone. |
 
 ## [1.7.0] — 2026-05-20 (agy 4-way Review Integration)
 

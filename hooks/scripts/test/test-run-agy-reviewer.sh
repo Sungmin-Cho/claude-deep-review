@@ -290,6 +290,18 @@ fresh_out; make_fixture "$FIXT"; make_agy_sibling_write "$FIXT"
 [ ! -f "$OUT.mutation-warning" ] && matrix_pass "T-M13: hybrid + sibling reports/ write → no warning (v1.7.1 win)" \
   || matrix_fail "T-M13: hybrid + sibling write → unexpected warning (regression to v1.7.0 false-positive)"
 
+# T-M15: hybrid + agy commits its mutation → warning (HEAD-sha regression test)
+# Without HEAD capture, modify+add+commit leaves git status clean pre/post
+# and hybrid would miss the mutation (round-impl-2 Codex review P2).
+fresh_out; make_fixture "$FIXT"
+# Fake agy modifies + commits
+printf '#!/bin/sh\ncd "%s" && echo "modified" > README.md && git add README.md && git -c user.email=a@b -c user.name=a commit -q -m "agy commit"\nexit 0\n' "$FIXT" > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+[ -f "$OUT.mutation-warning" ] && matrix_pass "T-M15: hybrid + agy commits → warning (HEAD-sha)" \
+  || matrix_fail "T-M15: hybrid + agy commits → MISSED (HEAD-sha regression)"
+
 # T-M14: hybrid + staged rename → no warning (R?/C? case-statement coverage)
 fresh_out; make_fixture "$FIXT"
 ( cd "$FIXT" && git mv README.md README.txt )  # staged, NOT committed
