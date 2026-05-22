@@ -27,14 +27,22 @@ agy 호출 전 반드시 확인:
 
 ## 호출 패턴
 
-`hooks/scripts/run-agy-reviewer.sh` 를 백그라운드 호출:
+`hooks/scripts/run-agy-reviewer.sh` 를 백그라운드 호출. **`--mode`** 인자는 호출자(orchestrator)가 env→config→default 체인으로 미리 해결해서 전달해야 한다. bridge 자체의 내부 default(`hybrid`)에만 의지하면 사용자의 `AGY_FINGERPRINT_MODE` env var이나 config 설정이 무시된다 (impl-r4 Codex adv MED).
 
 ```bash
+# 호출자가 resolution 체인 적용 (orchestrator pattern)
+mode="${AGY_FINGERPRINT_MODE:-}"
+if [ -z "$mode" ] && [ -f .deep-review/config.yaml ]; then
+  mode=$(sed -nE 's/^agy_fingerprint_mode:[[:space:]]*["'\'']?([^"'\''#[:space:]]+)["'\'']?.*$/\1/p' .deep-review/config.yaml | head -1)
+fi
+mode="${mode:-hybrid}"
+
 "$CLAUDE_PLUGIN_ROOT/hooks/scripts/run-agy-reviewer.sh" \
   --binary "$agy_cli_path" \
   --project-root "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" \
   --prompt-file "$prompt_file" \
   --output "$output_file" \
+  --mode "$mode" \
   --timeout-seconds 900
 ```
 
