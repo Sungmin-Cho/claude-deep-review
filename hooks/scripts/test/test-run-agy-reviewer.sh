@@ -380,6 +380,42 @@ fi
 # (e.g., if --prompt-file validation fails, $OUT.mutation-warning is absent
 # but $OUT.status != "success" — the conjunction catches both ways).
 
+# T-M16b: pure unit test of build_find_expr output shape.
+#         Locks in the §4.1 contract that bilateral patterns emit BOTH
+#         -iname and -ipath arms. Cannot be a behavioral test — `-ipath '*/*secret*'`
+#         alone would match root-level basenames per BSD/GNU find semantics.
+_bridge_path="$BRIDGE"  # defined at test-run-agy-reviewer.sh:6 as "$REPO/hooks/scripts/run-agy-reviewer.sh"
+_func_src=$(awk '/^build_find_expr\(\) \{/,/^\}$/' "$_bridge_path")
+eval "$_func_src"
+if ! type build_find_expr >/dev/null 2>&1; then
+  matrix_fail "T-M16b: build_find_expr not callable after awk-extract + eval"
+else
+  _tmp_list=$(mktemp "${TMPDIR:-/tmp}/v172-t-m16b-list.XXXXXX")
+  echo '*secret*' > "$_tmp_list"
+  _result=$(build_find_expr "$_tmp_list")
+  rm -f "$_tmp_list"
+  # printf '%q' on bash 3.2.57 (macOS) emits backslash-escaped form (\*secret\*).
+  # bash 4+/5 (some Ubuntu/Debian versions) may emit single-quote form ('*secret*').
+  # Both forms semantically pass the literal *secret* to find.
+  #
+  # The find expression has the shape: `-iname <space> <pattern> -o -ipath <space> <pattern>`.
+  # Regex must explicitly allow [[:space:]]+ between the predicate name and its
+  # pattern arg, then [^[:space:]]* to cross the (possibly-escaped) leading `*`
+  # before "secret". A pattern of `-iname[^[:space:]]*secret` (without the
+  # mandatory space) cannot match because [^[:space:]]* cannot cross the
+  # literal space between `-iname` and its argument — empirically verified
+  # on bash 3.2.57 (NO MATCH for that pattern).
+  if ! echo "$_result" | grep -qE -- '-iname[[:space:]]+[^[:space:]]*secret'; then
+    matrix_fail "T-M16b: missing -iname arm in output: $_result"
+  elif ! echo "$_result" | grep -qE -- '-ipath[[:space:]]+[^[:space:]]*secret'; then
+    matrix_fail "T-M16b: missing -ipath arm in output: $_result"
+  else
+    matrix_pass "T-M16b: bilateral pattern emits both -iname and -ipath terms"
+  fi
+  # Defensive: clear the extracted function so it doesn't leak to later tests.
+  unset -f build_find_expr 2>/dev/null || true
+fi
+
 echo "=========================="
 echo "MATRIX PASS: $MATRIX_PASS"
 echo "MATRIX FAIL: $MATRIX_FAIL"
