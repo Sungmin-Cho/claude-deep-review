@@ -431,9 +431,16 @@ _walk_hash() {
         -not -path './vendor/*' \
         -not -path './.terraform/*' \
         -print0 2>/dev/null)
-    } | LC_ALL=C sort
+    } | LC_ALL=C sort | _sha256
   ) || echo "unavailable"
 }
+# impl-r1 W1 closure: pipe sorted per-path listing through _sha256 to restore the
+# v1.7.2 caller contract (single 64-char digest stored in $pre_walk_hash / $post_walk_hash;
+# comparison via != stays O(64) instead of O(file_count × line_size)). Mutation
+# detection is functionally equivalent: any per-file content drift or symlink
+# linkhex change still alters the sorted listing → digest changes → !=. T-M8 /
+# T-M7b / T-M25b all keep passing (the digest input now includes linkhex changes
+# that the old `cat | _sha256` form missed — strictly stronger drift detection).
 
 # ---------- hybrid mode (v1.7.1): split pre/post with degrade ----------
 _HYBRID_PRE_STATUS=""
