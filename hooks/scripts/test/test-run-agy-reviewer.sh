@@ -110,8 +110,8 @@ else
   # Before fix: child would exec the timeout number as a command (e.g. "5") → ENOENT
   # After fix: child execs the actual agy mock in timeout mode → rc=124
   rc=0
-  PATH="$stripped_path:$WORK/mock-bin" MOCK_BEHAVIOR="timeout" MOCK_ARGS_LOG="$ARGS_LOG" \
-    "$BRIDGE" --project-root "$REPO" --prompt-file "$PROMPT" --output "$OUT" --mode full-walk --timeout-seconds 2 \
+  PATH="$WORK/mock-bin:$stripped_path" MOCK_BEHAVIOR="timeout" MOCK_ARGS_LOG="$ARGS_LOG" \
+    "$BRIDGE" --project-root "$REPO" --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 2 \
     || rc=$?
   # status file should be "timeout" (rc=124 → classifier maps to timeout)
   got_status=$(cat "$OUT.status" 2>/dev/null || echo MISSING)
@@ -140,6 +140,7 @@ matrix_fail() { MATRIX_FAIL=$((MATRIX_FAIL+1)); echo "  ✗ $1"; }
 FAKE_AGY="$WORK/fake-agy"
 chmod +x "$WORK"
 make_agy_no_op() { printf '#!/bin/sh\nexit 0\n' > "$FAKE_AGY"; chmod +x "$FAKE_AGY"; }
+make_agy_no_op_stdout() { printf '#!/bin/sh\necho "review: no issues found"\nexit 0\n' > "$FAKE_AGY"; chmod +x "$FAKE_AGY"; }
 make_agy_modify() { printf '#!/bin/sh\necho "%s" > "%s"\nexit 0\n' "$2" "$1" > "$FAKE_AGY"; chmod +x "$FAKE_AGY"; }
 make_agy_create() { make_agy_modify "$1" "$2"; }
 make_agy_sibling_write() {
@@ -173,9 +174,14 @@ FIXT="$WORK/fixt"
 # Lib backup/restore for T-M12 — chained cleanup (preserves WORK trap above)
 SAVED_LIB="$REPO/hooks/scripts/lib/sensitive-patterns.list"
 SAVED_LIB_BACKUP=""
+SAVED_DIR_MATCH_LIB="$REPO/hooks/scripts/lib/sensitive-patterns-dir-match.list"
+SAVED_DIR_MATCH_LIB_BACKUP=""
 cleanup_matrix() {
   if [ -n "$SAVED_LIB_BACKUP" ] && [ -f "$SAVED_LIB_BACKUP" ]; then
     mv "$SAVED_LIB_BACKUP" "$SAVED_LIB"
+  fi
+  if [ -n "$SAVED_DIR_MATCH_LIB_BACKUP" ] && [ -f "$SAVED_DIR_MATCH_LIB_BACKUP" ]; then
+    mv "$SAVED_DIR_MATCH_LIB_BACKUP" "$SAVED_DIR_MATCH_LIB"
   fi
   rm -rf "$WORK"   # preserve original test harness trap behavior
 }
@@ -235,6 +241,19 @@ fresh_out; make_fixture "$FIXT"; make_agy_no_op
   --prompt-file "$PROMPT" --output "$OUT" --mode full-walk --timeout-seconds 30 >/dev/null 2>&1 || true
 [ ! -f "$OUT.mutation-warning" ] && matrix_pass "T-M7: full-walk + no change → no warning" \
   || matrix_fail "T-M7: full-walk + no change → unexpected warning"
+
+# T-M7b: full-walk + symlink + no change → no warning (deterministic sorted snapshot)
+fresh_out; make_fixture "$FIXT"; make_agy_no_op_stdout
+echo "payload" > "$FIXT/target.txt"
+( cd "$FIXT" && ln -s target.txt credentials-link )
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode full-walk --timeout-seconds 30 >/dev/null 2>&1 || true
+AGY_STATUS_T_M7B=$(cat "$OUT.status" 2>/dev/null || echo "missing")
+if [ "$AGY_STATUS_T_M7B" = "success" ] && [ ! -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M7b: full-walk symlink snapshot is deterministic when unchanged"
+else
+  matrix_fail "T-M7b: bad outcome (status=$AGY_STATUS_T_M7B, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no))"
+fi
 
 # T-M8: full-walk + tracked mod → warning
 fresh_out; make_fixture "$FIXT"; make_agy_modify "$FIXT/README.md" "v2"
@@ -381,19 +400,24 @@ fi
 # but $OUT.status != "success" — the conjunction catches both ways).
 
 # T-M16b: pure unit test of build_find_expr output shape.
-#         Locks in the §4.1 contract that bilateral patterns emit BOTH
-#         -iname and -ipath arms. Cannot be a behavioral test — `-ipath '*/*secret*'`
-#         alone would match root-level basenames per BSD/GNU find semantics.
+#         Locks in the §4.1 contract for bilateral patterns, sidecar-opted
+#         non-bilateral patterns, and non-opted non-bilateral patterns.
 _bridge_path="$BRIDGE"  # defined at test-run-agy-reviewer.sh:6 as "$REPO/hooks/scripts/run-agy-reviewer.sh"
-_func_src=$(awk '/^build_find_expr\(\) \{/,/^\}$/' "$_bridge_path")
+_func_src=$(awk '
+  /^_normalize_pattern_line\(\) \{/ {capture=1}
+  /^_hash_path_with_symlink_handling\(\) \{/ {capture=0}
+  capture {print}
+' "$_bridge_path")
 eval "$_func_src"
 if ! type build_find_expr >/dev/null 2>&1; then
   matrix_fail "T-M16b: build_find_expr not callable after awk-extract + eval"
 else
+  _tmp_lib=$(mktemp -d "${TMPDIR:-/tmp}/v180-t-m16b-lib.XXXXXX")
+  _LIB_DIR="$_tmp_lib"
+  DIR_MATCH_LIST_DISABLED=0
   _tmp_list=$(mktemp "${TMPDIR:-/tmp}/v172-t-m16b-list.XXXXXX")
   echo '*secret*' > "$_tmp_list"
   _result=$(build_find_expr "$_tmp_list")
-  rm -f "$_tmp_list"
   # printf '%q' on bash 3.2.57 (macOS) emits backslash-escaped form (\*secret\*).
   # bash 4+/5 (some Ubuntu/Debian versions) may emit single-quote form ('*secret*').
   # Both forms semantically pass the literal *secret* to find.
@@ -412,8 +436,29 @@ else
   else
     matrix_pass "T-M16b: bilateral pattern emits both -iname and -ipath terms"
   fi
+  printf 'credentials*\n' > "$_tmp_lib/sensitive-patterns-dir-match.list"
+  echo 'credentials*' > "$_tmp_list"
+  _result=$(build_find_expr "$_tmp_list")
+  if ! echo "$_result" | grep -qE -- '-iname[[:space:]]+[^[:space:]]*credentials'; then
+    matrix_fail "T-M16b-dm1: missing -iname arm in sidecar output: $_result"
+  elif ! echo "$_result" | grep -qE -- '-ipath[[:space:]]+[^[:space:]]*credentials'; then
+    matrix_fail "T-M16b-dm1: missing -ipath arm in sidecar output: $_result"
+  else
+    matrix_pass "T-M16b-dm1: sidecar-opted non-bilateral pattern emits -iname and -ipath"
+  fi
+  : > "$_tmp_lib/sensitive-patterns-dir-match.list"
+  echo 'bearer_*' > "$_tmp_list"
+  _result=$(build_find_expr "$_tmp_list")
+  if echo "$_result" | grep -qE -- '-ipath[[:space:]]+'; then
+    matrix_fail "T-M16b-dm0: non-opted non-bilateral pattern unexpectedly emitted -ipath: $_result"
+  elif ! echo "$_result" | grep -qE -- '-iname[[:space:]]+[^[:space:]]*bearer'; then
+    matrix_fail "T-M16b-dm0: missing -iname arm in non-opted output: $_result"
+  else
+    matrix_pass "T-M16b-dm0: non-opted non-bilateral pattern emits -iname only"
+  fi
+  rm -rf "$_tmp_list" "$_tmp_lib"
   # Defensive: clear the extracted function so it doesn't leak to later tests.
-  unset -f build_find_expr 2>/dev/null || true
+  unset -f _normalize_pattern_line _is_dir_match_opted_in build_find_term build_find_expr 2>/dev/null || true
 fi
 
 # T-M18: hybrid + agy mutates .deep-review/config.yaml (gitignored runtime state) → warning
@@ -486,6 +531,209 @@ else
   matrix_fail "T-M18b: bad outcome (status=$AGY_STATUS_T_M18B, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no))"
 fi
 # Note: status="success" assertion guards against bridge early-exit false-pass.
+
+# T-M21: arm-1 pre-existing symlink at .deep-review/config.yaml, no mutation → no warning
+fresh_out; make_fixture "$FIXT"; make_agy_no_op_stdout
+mkdir -p "$FIXT/.deep-review"
+echo "k: v" > "$FIXT/.deep-review/target.yaml"
+( cd "$FIXT/.deep-review" && ln -s target.yaml config.yaml )
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+AGY_STATUS_T_M21=$(cat "$OUT.status" 2>/dev/null || echo "missing")
+if [ "$AGY_STATUS_T_M21" = "success" ] && [ ! -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M21: arm-1 symlink regression (no mutation → no warning)"
+else
+  matrix_fail "T-M21: bad outcome (status=$AGY_STATUS_T_M21, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no))"
+fi
+
+# T-M21b: arm-1 observes link-target swap even when target content is identical.
+fresh_out; make_fixture "$FIXT"
+mkdir -p "$FIXT/.deep-review"
+echo "k: v" > "$FIXT/.deep-review/target_a.yaml"
+echo "k: v" > "$FIXT/.deep-review/target_b.yaml"
+( cd "$FIXT/.deep-review" && ln -s target_a.yaml config.yaml )
+FAKE_AGY_SWAP=$(mktemp "$WORK/fake-agy-swap.XXXXXX.sh")
+cat > "$FAKE_AGY_SWAP" <<EOF
+#!/bin/sh
+echo "review: no issues found"
+cd "${FIXT}/.deep-review" && rm config.yaml && ln -s target_b.yaml config.yaml
+exit 0
+EOF
+chmod +x "$FAKE_AGY_SWAP"
+"$BRIDGE" --binary "$FAKE_AGY_SWAP" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+AGY_STATUS_T_M21B=$(cat "$OUT.status" 2>/dev/null || echo "missing")
+if [ "$AGY_STATUS_T_M21B" = "mutated" ] && [ -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M21b: arm-1 link-target swap with identical content → warning"
+else
+  matrix_fail "T-M21b: bad outcome (status=$AGY_STATUS_T_M21B, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no))"
+fi
+
+# T-M22: sidecar-listed credentials* catches directory-name mutation.
+fresh_out; make_fixture "$FIXT"
+( cd "$FIXT" && printf '\ncredentials-store/\n' >> .gitignore && git add .gitignore && git commit -q -m "ignore credentials-store" )
+mkdir -p "$FIXT/credentials-store"
+echo "old" > "$FIXT/credentials-store/value.txt"
+printf '#!/bin/sh\necho "review: no issues found"\necho "new" > "%s/credentials-store/value.txt"\nexit 0\n' "$FIXT" > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+AGY_STATUS_T_M22=$(cat "$OUT.status" 2>/dev/null || echo "missing")
+if [ "$AGY_STATUS_T_M22" = "mutated" ] && [ -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M22: sidecar credentials* catches directory-name mutation"
+else
+  matrix_fail "T-M22: bad outcome (status=$AGY_STATUS_T_M22, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no))"
+fi
+
+# T-M23: non-bilateral bearer_* is not auto-promoted when sidecar is empty.
+fresh_out; make_fixture "$FIXT"
+( cd "$FIXT" && printf '\nbearer_store/\n' >> .gitignore && git add .gitignore && git commit -q -m "ignore bearer_store" )
+mkdir -p "$FIXT/bearer_store"
+echo "old" > "$FIXT/bearer_store/foo.txt"
+SAVED_LIB_BACKUP=$(mktemp "$WORK/sensitive-patterns.XXXXXX")
+cp "$SAVED_LIB" "$SAVED_LIB_BACKUP"
+SAVED_DIR_MATCH_LIB_BACKUP=$(mktemp "$WORK/sensitive-patterns-dir-match.XXXXXX")
+cp "$SAVED_DIR_MATCH_LIB" "$SAVED_DIR_MATCH_LIB_BACKUP"
+printf 'bearer_*\n' > "$SAVED_LIB"
+: > "$SAVED_DIR_MATCH_LIB"
+printf '#!/bin/sh\necho "review: no issues found"\necho "new" > "%s/bearer_store/foo.txt"\nexit 0\n' "$FIXT" > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+mv "$SAVED_LIB_BACKUP" "$SAVED_LIB"; SAVED_LIB_BACKUP=""
+mv "$SAVED_DIR_MATCH_LIB_BACKUP" "$SAVED_DIR_MATCH_LIB"; SAVED_DIR_MATCH_LIB_BACKUP=""
+AGY_STATUS_T_M23=$(cat "$OUT.status" 2>/dev/null || echo "missing")
+if [ "$AGY_STATUS_T_M23" = "success" ] && [ ! -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M23: non-opted bearer_* directory-name mutation is ignored"
+else
+  matrix_fail "T-M23: bad outcome (status=$AGY_STATUS_T_M23, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no))"
+fi
+
+# T-M24: runtime-state symlink target inside the repo is content-hashed.
+fresh_out; make_fixture "$FIXT"
+mkdir -p "$FIXT/.deep-review"
+echo "k: v" > "$FIXT/.deep-review/target.yaml"
+( cd "$FIXT/.deep-review" && ln -s target.yaml config.yaml )
+printf '#!/bin/sh\necho "review: no issues found"\necho "k: changed" > "%s/.deep-review/config.yaml"\nexit 0\n' "$FIXT" > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+AGY_STATUS_T_M24=$(cat "$OUT.status" 2>/dev/null || echo "missing")
+if [ "$AGY_STATUS_T_M24" = "mutated" ] && [ -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M24: runtime-state in-repo symlink target mutation → warning"
+else
+  matrix_fail "T-M24: bad outcome (status=$AGY_STATUS_T_M24, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no))"
+fi
+
+# T-M24-external: runtime-state symlink target outside the repo is linkhex-only.
+fresh_out; make_fixture "$FIXT"; make_agy_no_op_stdout
+mkdir -p "$FIXT/.deep-review" "$WORK/external-target"
+echo "k: v" > "$WORK/external-target/external.yaml"
+( cd "$FIXT/.deep-review" && ln -s "$WORK/external-target/external.yaml" config.yaml )
+printf '#!/bin/sh\necho "review: no issues found"\necho "k: changed" > "%s/external-target/external.yaml"\nexit 0\n' "$WORK" > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+AGY_STATUS_T_M24_EXT=$(cat "$OUT.status" 2>/dev/null || echo "missing")
+if [ "$AGY_STATUS_T_M24_EXT" = "success" ] && [ ! -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M24-external: external runtime-state target content drift is intentionally ignored"
+else
+  matrix_fail "T-M24-external: bad outcome (status=$AGY_STATUS_T_M24_EXT, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no))"
+fi
+
+# T-M25: sensitive-scan find path includes symlinks and hashes in-repo targets.
+fresh_out; make_fixture "$FIXT"
+( cd "$FIXT" && printf '\ncredentials-link\ndata-store/\n' >> .gitignore && git add .gitignore && git commit -q -m "ignore credentials symlink" )
+mkdir -p "$FIXT/data-store"
+echo "secret" > "$FIXT/data-store/payload.txt"
+( cd "$FIXT" && ln -s data-store/payload.txt credentials-link )
+printf '#!/bin/sh\necho "review: no issues found"\necho "changed" > "%s/credentials-link"\nexit 0\n' "$FIXT" > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+AGY_STATUS_T_M25=$(cat "$OUT.status" 2>/dev/null || echo "missing")
+if [ "$AGY_STATUS_T_M25" = "mutated" ] && [ -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M25: sensitive scan catches gitignored symlink target mutation"
+else
+  matrix_fail "T-M25: bad outcome (status=$AGY_STATUS_T_M25, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no))"
+fi
+
+# T-M25-external: sensitive-scan symlink to external target is linkhex-only when unchanged.
+fresh_out; make_fixture "$FIXT"
+( cd "$FIXT" && printf '\ncredentials-outside\n' >> .gitignore && git add .gitignore && git commit -q -m "ignore external credentials symlink" )
+mkdir -p "$WORK/external-sensitive"
+echo "outside" > "$WORK/external-sensitive/external.yaml"
+echo "unrelated-old" > "$WORK/external-sensitive/unrelated.yaml"
+( cd "$FIXT" && ln -s "$WORK/external-sensitive/external.yaml" credentials-outside )
+printf '#!/bin/sh\necho "review: no issues found"\necho "unrelated-new" > "%s/external-sensitive/unrelated.yaml"\nexit 0\n' "$WORK" > "$FAKE_AGY"
+chmod +x "$FAKE_AGY"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+AGY_STATUS_T_M25_EXT=$(cat "$OUT.status" 2>/dev/null || echo "missing")
+if [ "$AGY_STATUS_T_M25_EXT" = "success" ] && [ ! -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M25-external: sensitive-scan external symlink target is ignored when link target is stable"
+else
+  matrix_fail "T-M25-external: bad outcome (status=$AGY_STATUS_T_M25_EXT, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no))"
+fi
+
+# T-M25b: full-walk catches symlink link-target swap with identical content.
+fresh_out; make_fixture "$FIXT"
+echo "data" > "$FIXT/target_a.txt"
+echo "data" > "$FIXT/target_b.txt"
+( cd "$FIXT" && ln -s target_a.txt credentials-link )
+FAKE_AGY_FULL_SWAP=$(mktemp "$WORK/fake-agy-full-swap.XXXXXX.sh")
+cat > "$FAKE_AGY_FULL_SWAP" <<EOF
+#!/bin/sh
+echo "review: no issues found"
+cd "${FIXT}" && rm credentials-link && ln -s target_b.txt credentials-link
+exit 0
+EOF
+chmod +x "$FAKE_AGY_FULL_SWAP"
+"$BRIDGE" --binary "$FAKE_AGY_FULL_SWAP" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode full-walk --timeout-seconds 30 >/dev/null 2>&1 || true
+AGY_STATUS_T_M25B=$(cat "$OUT.status" 2>/dev/null || echo "missing")
+if [ "$AGY_STATUS_T_M25B" = "mutated" ] && [ -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M25b: full-walk catches symlink-target swap via linkhex"
+else
+  matrix_fail "T-M25b: bad outcome (status=$AGY_STATUS_T_M25B, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no))"
+fi
+
+# T-M26: _resolve_symlink self-loop is bounded and emits the cycle message.
+_resolve_src=$(awk '/^_resolve_symlink\(\) \{/,/^\}$/' "$BRIDGE")
+eval "$_resolve_src"
+mkdir -p "$WORK/self-loop"
+( cd "$WORK/self-loop" && ln -s a a )
+_resolve_err="$WORK/resolve-loop.err"
+rc=0
+_resolve_symlink "$WORK/self-loop/a" >/dev/null 2>"$_resolve_err" || rc=$?
+if [ "$rc" = "1" ] && grep -q "cycle or chain > 40" "$_resolve_err"; then
+  matrix_pass "T-M26: _resolve_symlink self-loop is bounded at MAXSYMLINKS"
+else
+  matrix_fail "T-M26: bad outcome (rc=$rc, err=$(cat "$_resolve_err" 2>/dev/null || echo missing))"
+fi
+unset -f _resolve_symlink 2>/dev/null || true
+
+# T-M27: >16KB runtime-state symlink target is downgraded to linkhex-only.
+fresh_out; make_fixture "$FIXT"
+mkdir -p "$FIXT/.deep-review"
+perl -e 'print "a" x 17000' > "$FIXT/.deep-review/large-target.yaml"
+( cd "$FIXT/.deep-review" && ln -s large-target.yaml config.yaml )
+FAKE_AGY_LARGE=$(mktemp "$WORK/fake-agy-large.XXXXXX.sh")
+cat > "$FAKE_AGY_LARGE" <<EOF
+#!/bin/sh
+echo "review: no issues found"
+perl -e 'print "b" x 17000' > "${FIXT}/.deep-review/config.yaml"
+exit 0
+EOF
+chmod +x "$FAKE_AGY_LARGE"
+"$BRIDGE" --binary "$FAKE_AGY_LARGE" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid --timeout-seconds 30 >/dev/null 2>&1 || true
+AGY_STATUS_T_M27=$(cat "$OUT.status" 2>/dev/null || echo "missing")
+if [ "$AGY_STATUS_T_M27" = "success" ] && [ ! -f "$OUT.mutation-warning" ]; then
+  matrix_pass "T-M27: >16KB runtime-state symlink target content drift is intentionally ignored"
+else
+  matrix_fail "T-M27: bad outcome (status=$AGY_STATUS_T_M27, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no))"
+fi
 
 echo "=========================="
 echo "MATRIX PASS: $MATRIX_PASS"

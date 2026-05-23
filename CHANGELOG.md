@@ -2,6 +2,26 @@
 
 **English** | [한국어](./CHANGELOG.ko.md)
 
+## [1.8.0] — 2026-05-22 (symlink and directory-name coverage)
+
+### Added
+
+- **Sidecar-driven directory-name matching** — added `hooks/scripts/lib/sensitive-patterns-dir-match.list` so selected non-bilateral sensitive patterns can opt into directory-name matching without changing `sensitive-patterns.list`. The shipped sidecar enables `credentials*` and `bearer_*`; `api-key*.json` remains basename-only by default.
+- **Symlink-aware fingerprint helper** — `run-agy-reviewer.sh` now fingerprints regular files and symlinks through one shared helper used by hybrid sensitive scans, runtime-state snapshots, and full-walk mode.
+- **Symlink regression coverage** — the agy bridge matrix now covers pre-existing runtime-state symlinks, identical-content symlink target swaps, sidecar positive/negative directory matching, external-target non-detection, full-walk symlink parity, `_resolve_symlink` cycle bounds, and the 16 KB symlink-target cap.
+
+### Fixed
+
+- **Pre-existing runtime-state symlink mutations** — `.deep-review/config.yaml` and `.deep-review/.pending-mutation.json` symlinks whose targets are regular files inside the project root and at or below 16 KB now emit `symlink:<sha>:<linkhex>` snapshots, so writes through the symlink are detected.
+- **Symlink omission in bridge walks** — full-walk and hybrid sensitive scans now enumerate `-type l` alongside `-type f`, allowing gitignored sensitive symlinks to be snapshotted.
+- **Unbounded symlink resolution** — `_resolve_symlink` is now capped at 40 links and fails with a clear cycle/chain message instead of waiting for the outer timeout.
+
+### Notes
+
+- This is a **minor** release because the default hybrid-mode detection scope expands: default-on sidecar opt-ins now detect directory-name matches for `credentials*` and `bearer_*`.
+- External symlink targets and targets larger than 16 KB intentionally use `symlink-unbounded:<linkhex>` and do not hash target content. Link-target swaps are still detected; external target content drift is not.
+- `hooks/scripts/lib/sensitive-patterns.list` remains byte-identical for compatibility with `mutation-protocol.sh`.
+
 ## [1.7.2] — 2026-05-22 (hybrid coverage gaps)
 
 ### Fixed
