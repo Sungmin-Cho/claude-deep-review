@@ -22,6 +22,13 @@
 - External symlink targets and targets larger than 16 KB intentionally use `symlink-unbounded:<linkhex>` and do not hash target content. Link-target swaps are still detected; external target content drift is not.
 - `hooks/scripts/lib/sensitive-patterns.list` remains byte-identical for compatibility with `mutation-protocol.sh`.
 
+### Known limitations (v1.8.1 backlog)
+
+- **Full-walk per-file fork overhead** (impl-r4 Codex P2): `_walk_hash` now forks `_sha256` per regular file (vs v1.7.2's batched stream digest). Required for the new per-file `<hex_path>\t<sha>` granularity that enables T-M25b symlink-linkhex detection. Acceptable on typical deep-review project sizes (<10k files); large monorepos (>30k files) may see noticeable agy-spawn overhead. v1.8.1 candidate: batch regular-file hashing via `sha256sum file1 file2 ...` (GNU) / `shasum -a 256 ...` (BSD) per-platform path.
+- **`capture_status_with_hashes` symlink follow** (impl-r2 + r3 + r4 Codex adversarial): git-status path still uses `[ -f ]` (follows symlinks) without the 16 KB cap; can read unbounded external target via dirty/untracked symlink. Scope expansion deferred — the v1.8.0 symlink hardening was specifically scoped to `capture_sensitive_hashes` + `_walk_hash` per spec §3.3. v1.8.1 candidate: extend `_hash_path_with_symlink_handling` integration to `capture_status_with_hashes`.
+- **Directory symlink recursive snapshot**: symlinks resolving to in-repo directories fall into arm-1b (linkhex-only); writes through to `<dir>/<file>` are undetected unless the dir is also walked separately. v1.8.1 candidate: recursive directory-symlink fingerprinting.
+- **External symlink target content writes** (Codex adversarial recurring across 4 rounds): per R5-C1 spec-gate **Option A** (user-confirmed): external runtime-state symlink target content drift is intentionally NOT detected, to avoid env-drift false positives. T-M24-external + T-M25-external + T-M27 pin this as negative regression tests. v1.8.1+ candidates may revisit if user demand emerges.
+
 ## [1.7.2] — 2026-05-22 (hybrid coverage gaps)
 
 ### Fixed
