@@ -311,8 +311,16 @@ _hash_path_with_symlink_handling() {
 
   if [ -L "$path" ]; then
     local raw_link readlink_rc link_hex resolved size
-    raw_link=$(readlink "$path" 2>/dev/null)
-    readlink_rc=$?
+    # impl-r3 P3 closure (CR): wrap the readlink in a guarded `if ... ; then`
+    # branch. The previous form `raw_link=$(readlink ... 2>/dev/null); readlink_rc=$?`
+    # treats the assignment as a simple command under `set -Eeuo pipefail`, so a
+    # readlink failure (symlink deleted/replaced mid-call) would abort the bridge
+    # BEFORE reaching the rc capture — silently bypassing arm-1c sentinel emission.
+    if raw_link=$(readlink "$path" 2>/dev/null); then
+      readlink_rc=0
+    else
+      readlink_rc=$?
+    fi
     if [ "$readlink_rc" -ne 0 ]; then
       printf '%s\tsymlink-readlink-failed\n' "$hex_path"
       return 0
