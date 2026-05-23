@@ -552,7 +552,7 @@ mkdir -p "$FIXT/.deep-review"
 echo "k: v" > "$FIXT/.deep-review/target_a.yaml"
 echo "k: v" > "$FIXT/.deep-review/target_b.yaml"
 ( cd "$FIXT/.deep-review" && ln -s target_a.yaml config.yaml )
-FAKE_AGY_SWAP=$(mktemp "$WORK/fake-agy-swap.XXXXXX.sh")
+FAKE_AGY_SWAP=$(mktemp "$WORK/fake-agy-swap-XXXXXX")
 cat > "$FAKE_AGY_SWAP" <<EOF
 #!/bin/sh
 echo "review: no issues found"
@@ -681,7 +681,7 @@ fresh_out; make_fixture "$FIXT"
 echo "data" > "$FIXT/target_a.txt"
 echo "data" > "$FIXT/target_b.txt"
 ( cd "$FIXT" && ln -s target_a.txt credentials-link )
-FAKE_AGY_FULL_SWAP=$(mktemp "$WORK/fake-agy-full-swap.XXXXXX.sh")
+FAKE_AGY_FULL_SWAP=$(mktemp "$WORK/fake-agy-full-swap-XXXXXX")
 cat > "$FAKE_AGY_FULL_SWAP" <<EOF
 #!/bin/sh
 echo "review: no issues found"
@@ -718,7 +718,7 @@ fresh_out; make_fixture "$FIXT"
 mkdir -p "$FIXT/.deep-review"
 perl -e 'print "a" x 17000' > "$FIXT/.deep-review/large-target.yaml"
 ( cd "$FIXT/.deep-review" && ln -s large-target.yaml config.yaml )
-FAKE_AGY_LARGE=$(mktemp "$WORK/fake-agy-large.XXXXXX.sh")
+FAKE_AGY_LARGE=$(mktemp "$WORK/fake-agy-large-XXXXXX")
 cat > "$FAKE_AGY_LARGE" <<EOF
 #!/bin/sh
 echo "review: no issues found"
