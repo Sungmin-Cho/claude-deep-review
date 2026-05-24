@@ -12,6 +12,8 @@
 #   - I3: preserve stderr tail-5 before cleanup
 set -Eeuo pipefail
 
+RUNTIME_STATE_SYMLINK_TARGET_MAX_BYTES=16384
+
 # ---------- shims ----------
 _timeout() {
   local seconds="$1"; shift
@@ -40,16 +42,58 @@ _sha256() {
   fi
 }
 
-# ---------- symlink-resolving helper (v1.7.1) ----------
+# ---------- symlink helpers ----------
 # BASH_SOURCE[0] alone does NOT auto-resolve symlinks for executed scripts.
 # Walk the chain explicitly via readlink until we hit the real file.
 _resolve_symlink() {
   local p="$1" t
+  local i=0
+  local max=40
   while [ -L "$p" ]; do
+    if [ "$i" -ge "$max" ]; then
+      printf 'agy bridge: _resolve_symlink: cycle or chain > %d (kernel MAXSYMLINKS bound) at %s\n' "$max" "$1" >&2
+      return 1
+    fi
     t="$(readlink "$p")" || return 1
     case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+    i=$((i + 1))
   done
   printf '%s' "$p"
+}
+
+_inside_project_root() {
+  local target="$1"
+  local target_abs target_canon
+  case "$target" in
+    /*) target_abs="$target" ;;
+    *)  target_abs="$PROJECT_ROOT_CANON/$target" ;;
+  esac
+  if target_canon=$(cd "$(dirname "$target_abs")" 2>/dev/null && pwd -P); then
+    target_canon="$target_canon/$(basename "$target_abs")"
+  else
+    target_canon="$target_abs"
+  fi
+  case "$target_canon/" in "${PROJECT_ROOT_CANON%/}/"*) return 0 ;; esac
+  return 1
+}
+
+_stat_size() {
+  stat -c %s "$1" 2>/dev/null || stat -f %z "$1"
+}
+
+_hex_encode() {
+  if command -v xxd >/dev/null 2>&1; then
+    xxd -p -c 0
+  else
+    od -An -tx1 | tr -d ' \n'
+  fi
+}
+
+_has_utf8_bom() {
+  local file="$1" prefix
+  [ -r "$file" ] || return 1
+  prefix=$(LC_ALL=C dd if="$file" bs=3 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+  [ "$prefix" = "efbbbf" ]
 }
 
 _REAL_BRIDGE="$(_resolve_symlink "${BASH_SOURCE[0]}" 2>/dev/null)" || _REAL_BRIDGE="${BASH_SOURCE[0]}"
@@ -90,6 +134,11 @@ esac
 [ -z "$output_file" ]  && { echo "Missing --output" >&2; exit 2; }
 [ -f "$prompt_file" ]  || { echo "Prompt file not found: $prompt_file" >&2; exit 2; }
 
+PROJECT_ROOT_CANON=$(cd "$project_root" 2>/dev/null && pwd -P) || {
+  echo "agy bridge: project_root unresolvable: $project_root" >&2
+  exit 2
+}
+
 # ---------- stderr-tail initialization (v1.7.1) ----------
 # Initialize empty so probes + degrade warnings (below + later) survive the
 # post-spawn agy-stderr append (also changed from > to >>).
@@ -100,6 +149,7 @@ esac
 # the conservative .mutation-warning written by the probe + AGY_STATUS=success
 # (from agy's exit 0) would disagree (impl-r3 Codex review P3).
 mutation_detected=0
+DIR_MATCH_LIST_DISABLED=0
 
 # ---------- startup degrade probes ----------
 # 1. lib/sensitive-patterns.list — hybrid ONLY (git-status doesn't read it).
@@ -109,6 +159,16 @@ if [ "$mode" = "hybrid" ]; then
     echo "$msg" >&2
     echo "$msg" >> "${output_file}.stderr-tail"
     mode="full-walk"
+  elif _has_utf8_bom "$_LIB_DIR/sensitive-patterns.list"; then
+    msg="agy bridge: lib/sensitive-patterns.list has UTF-8 BOM — degrading hybrid → full-walk"
+    echo "$msg" >&2
+    echo "$msg" >> "${output_file}.stderr-tail"
+    mode="full-walk"
+  elif [ -r "$_LIB_DIR/sensitive-patterns-dir-match.list" ] && _has_utf8_bom "$_LIB_DIR/sensitive-patterns-dir-match.list"; then
+    msg="agy bridge: lib/sensitive-patterns-dir-match.list has UTF-8 BOM — disabling directory-name sidecar opt-ins"
+    echo "$msg" >&2
+    echo "$msg" >> "${output_file}.stderr-tail"
+    DIR_MATCH_LIST_DISABLED=1
   fi
 fi
 
@@ -182,57 +242,120 @@ capture_status_with_hashes() {
   return 0
 }
 
-# ---------- build_find_expr (v1.7.1): sensitive-pattern accumulator ----------
-# Reads lib/sensitive-patterns.list and emits a `-iname A -o -iname B ...`
-# expression for `find -type f \( <expr> \)`. Strips '**/' prefix (find walks
-# recursively by default). Uses -iname for case-insensitive matching to mirror
-# scan_sensitive_files's .lower() semantics. Bash 3.2 portable (no declare -A,
-# no mapfile).
+# ---------- build_find_expr (v1.8.0): sensitive-pattern accumulator ----------
+# Reads lib/sensitive-patterns.list and emits a flat `find` OR-chain. The
+# sidecar list controls directory-name matching for selected non-bilateral
+# patterns without changing sensitive-patterns.list's literal pattern contract.
+_normalize_pattern_line() {
+  local pat="$1"
+  pat=$(printf '%s' "$pat" | tr -d '\r')
+  pat=$(printf '%s' "$pat" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+  case "$pat" in '#'*) return 1 ;; esac
+  [ -n "$pat" ] || return 1
+  pat="${pat#\*\*/}"
+  [ -n "$pat" ] || return 1
+  printf '%s' "$pat"
+}
+
+_is_dir_match_opted_in() {
+  local pat="$1" sidecar line normalized
+  [ "${DIR_MATCH_LIST_DISABLED:-0}" = "0" ] || return 1
+  sidecar="${_LIB_DIR:-}/sensitive-patterns-dir-match.list"
+  [ -r "$sidecar" ] || return 1
+  while IFS= read -r line; do
+    normalized=$(_normalize_pattern_line "$line" 2>/dev/null || true)
+    [ -n "$normalized" ] || continue
+    [ "$normalized" = "$pat" ] && return 0
+  done < "$sidecar"
+  return 1
+}
+
+build_find_term() {
+  local pat="$1"
+  local dir_match="${2:-0}"
+  local inner
+  case "$pat" in
+    '*'*'*')
+      inner="${pat#\*}"
+      inner="${inner%\*}"
+      printf '%s' "-iname $(printf '%q' "$pat") -o -ipath $(printf '%q' "*/*${inner}*")"
+      ;;
+    *)
+      if [ "$dir_match" = "1" ]; then
+        printf '%s' "-iname $(printf '%q' "$pat") -o -ipath $(printf '%q' "*/$pat*/*")"
+      else
+        printf '%s' "-iname $(printf '%q' "$pat")"
+      fi
+      ;;
+  esac
+}
+
 build_find_expr() {
   local list_file="$1"
-  local pat expr=""
-  local inner iname_term ipath_term
+  local pat expr="" term dm normalized
   while IFS= read -r pat; do
-    [ -z "$pat" ] && continue
-    case "$pat" in '#'*) continue ;; esac
-    pat="${pat#\*\*/}"
-    case "$pat" in
-      '*'*'*')
-        # Bilateral wildcard pattern (starts AND ends with literal *).
-        # Emit FLAT OR-chain: -iname for basename match + -ipath for
-        # dir-name match. NO nested ( ) because capture_sensitive_hashes
-        # wraps the whole expression in `eval "find ... \( $find_expr \) ..."`
-        # and bare inner ( ) would be parsed as subshell tokens.
-        inner="${pat#\*}"
-        inner="${inner%\*}"
-        iname_term="-iname $(printf '%q' "$pat")"
-        ipath_term="-ipath $(printf '%q' "*/*${inner}*")"
-        if [ -z "$expr" ]; then
-          expr="$iname_term -o $ipath_term"
-        else
-          expr="$expr -o $iname_term -o $ipath_term"
-        fi
-        ;;
-      *)
-        # Non-bilateral pattern (prefix/suffix glob or literal filename).
-        # Emits -iname only — filename intent, not directory-name intent.
-        if [ -z "$expr" ]; then
-          expr="-iname $(printf '%q' "$pat")"
-        else
-          expr="$expr -o -iname $(printf '%q' "$pat")"
-        fi
-        ;;
-    esac
+    normalized=$(_normalize_pattern_line "$pat" 2>/dev/null || true)
+    [ -n "$normalized" ] || continue
+    pat="$normalized"
+    if _is_dir_match_opted_in "$pat"; then dm=1; else dm=0; fi
+    term=$(build_find_term "$pat" "$dm")
+    if [ -z "$expr" ]; then expr="$term"; else expr="$expr -o $term"; fi
   done < "$list_file"
   printf '%s' "$expr"
 }
 
-# ---------- capture_sensitive_hashes (v1.7.1) ----------
+_hash_path_with_symlink_handling() {
+  local path="$1"
+  local hex_path
+  hex_path=$(printf '%s' "$path" | _hex_encode)
+
+  if [ -L "$path" ]; then
+    local raw_link readlink_rc link_hex resolved size
+    # impl-r3 P3 closure (CR): wrap the readlink in a guarded `if ... ; then`
+    # branch. The previous form `raw_link=$(readlink ... 2>/dev/null); readlink_rc=$?`
+    # treats the assignment as a simple command under `set -Eeuo pipefail`, so a
+    # readlink failure (symlink deleted/replaced mid-call) would abort the bridge
+    # BEFORE reaching the rc capture — silently bypassing arm-1c sentinel emission.
+    if raw_link=$(readlink "$path" 2>/dev/null); then
+      readlink_rc=0
+    else
+      readlink_rc=$?
+    fi
+    if [ "$readlink_rc" -ne 0 ]; then
+      printf '%s\tsymlink-readlink-failed\n' "$hex_path"
+      return 0
+    fi
+    link_hex=$(printf '%s' "$raw_link" | _hex_encode)
+
+    if resolved=$(_resolve_symlink "$path") \
+       && [ -f "$resolved" ] \
+       && _inside_project_root "$resolved" \
+       && size=$(_stat_size "$resolved" 2>/dev/null) \
+       && [ -n "$size" ] \
+       && [ "$size" -ge 0 ] \
+       && [ "$size" -le "$RUNTIME_STATE_SYMLINK_TARGET_MAX_BYTES" ]; then
+      local target_sha
+      target_sha=$(_sha256 < "$resolved" 2>/dev/null || echo unavailable)
+      printf '%s\tsymlink:%s:%s\n' "$hex_path" "$target_sha" "$link_hex"
+    else
+      printf '%s\tsymlink-unbounded:%s\n' "$hex_path" "$link_hex"
+    fi
+  elif [ -f "$path" ]; then
+    local h
+    h=$(_sha256 < "$path" 2>/dev/null || echo unavailable)
+    printf '%s\t%s\n' "$hex_path" "$h"
+  elif [ -e "$path" ]; then
+    printf '%s\tother-non-regular\n' "$hex_path"
+  fi
+  return 0
+}
+
+# ---------- capture_sensitive_hashes (v1.8.0) ----------
 # Walks the project tree for files matching lib/sensitive-patterns.list, emits
-# "hex_path\tsha256" lines, sorted. Pipeline wrapped in `if ! ... then` to
-# shield from `set -Eeuo pipefail`'s errexit; with `pipefail` set, any stage
-# failure makes the pipeline non-zero and the if-body cleans up + returns 1.
-# Caller degrades hybrid → full-walk on failure.
+# sorted "hex_path\tfingerprint" lines. Pipeline wrapped in `if ! ... then`
+# to shield from `set -Eeuo pipefail`'s errexit; with `pipefail` set, any
+# stage failure makes the pipeline non-zero and the if-body cleans up + returns
+# 1. Caller degrades hybrid → full-walk on failure.
 capture_sensitive_hashes() {
   local out_file="$1" tmp_file find_expr orig_pwd
   orig_pwd=$(pwd)
@@ -246,8 +369,10 @@ capture_sensitive_hashes() {
   # shell because removing the outer subshell (for PIPESTATUS) also removed
   # the auto-restoration. Save+restore cwd explicitly here.
   cd "$project_root" || { rm -f "$tmp_file"; return 1; }
+  # If agy mutates the pattern libs during its spawn window, pre/post may use
+  # different match sets; the lib mutation itself remains visible as drift.
   # shellcheck disable=SC2086   # intentional word-split of $find_expr
-  if ! eval "find . -type f \\( $find_expr \\) \
+  if ! eval "find . \\( -type f -o -type l \\) \\( $find_expr \\) \
     -not -path './.git/*' -not -path './node_modules/*' -not -path './.venv/*' \
     -not -path './dist/*' -not -path './build/*' -not -path './target/*' \
     -not -path './.next/*' -not -path './.svelte-kit/*' -not -path './coverage/*' \
@@ -255,54 +380,26 @@ capture_sensitive_hashes() {
     -not -path './vendor/*' -not -path './.terraform/*' \
     -not -path './__pycache__/*' -not -path './.pytest_cache/*' \
     -print0 2>/dev/null" \
-    | while IFS= read -r -d '' f; do
-        h=$(_sha256 < "$f" 2>/dev/null || echo "unavailable")
-        f_hex=$(printf '%s' "$f" | od -An -tx1 | tr -d ' \n')
-        printf '%s\t%s\n' "$f_hex" "$h"
+    | while IFS= read -r -d '' path; do
+        _hash_path_with_symlink_handling "$path"
       done \
-    | sort > "$tmp_file"
+    | LC_ALL=C sort > "$tmp_file"
   then
     rm -f "$tmp_file"
     cd "$orig_pwd"
     return 1
   fi
 
-  # v1.7.2: append plugin self-state hashes to tmp_file.
-  # Not covered by sensitive-pattern -iname (generic config-like names)
-  # and not visible to git-status (gitignored). Hardcoded snapshot catches
-  # mutations to bridge config + mutation-lock state file.
-  #
-  # Four-arm dispatch by file kind. [ -L ] is checked FIRST (before [ -f ])
-  # because `[ -f ]` follows symlinks — if agy replaces config.yaml with a
-  # symlink to /etc/passwd (or a 10GB file), [ -f ] would return true on
-  # the TARGET, and `_sha256 < $rt` would read that target. Treating any
-  # symlink as "non-regular" prevents this footgun unconditionally
-  # (config.yaml and .pending-mutation.json are not expected to be
-  # symlinks in normal use).
-  #
-  #   1. [ -L $rt ]   → symlink (dangling OR pointing anywhere) → sentinel
-  #   2. elif [ -f $rt ] → regular non-symlink file → hash content
-  #   3. elif [ -e $rt ] → exists but neither symlink nor regular file
-  #       (FIFO/socket/block/char dev/dir) → sentinel
-  #   4. else         → truly absent → continue (no line emitted)
-  local rt rt_hex rt_hash
+  # Append plugin self-state hashes to tmp_file. These names are generic, are
+  # usually gitignored, and are not covered by sensitive-pattern -iname.
+  local rt
   for rt in ".deep-review/config.yaml" ".deep-review/.pending-mutation.json"; do
-    rt_hex=$(printf '%s' "$rt" | od -An -tx1 | tr -d ' \n')
-    if [ -L "$rt" ]; then
-      rt_hash="non-regular"
-    elif [ -f "$rt" ]; then
-      rt_hash=$(_sha256 < "$rt" 2>/dev/null || echo "unavailable")
-    elif [ -e "$rt" ]; then
-      rt_hash="non-regular"
-    else
-      continue
-    fi
-    printf '%s\t%s\n' "$rt_hex" "$rt_hash" >> "$tmp_file"
+    _hash_path_with_symlink_handling "$rt" >> "$tmp_file"
   done
 
   # Re-sort in place after the append (tmp_file was sorted by the prior
   # pipeline; appended lines could be unsorted).
-  sort -o "$tmp_file" "$tmp_file" || {
+  LC_ALL=C sort -o "$tmp_file" "$tmp_file" || {
     rm -f "$tmp_file"
     cd "$orig_pwd"
     return 1
@@ -319,26 +416,39 @@ capture_sensitive_hashes() {
 # without this. COARSE (races, large trees) but detects most accidental writes.
 # Standard exclusion list — common build/cache/vendor dirs.
 _walk_hash() {
-  cd "$project_root" && find . -type f \
-    -not -path './.git/*' \
-    -not -path './node_modules/*' \
-    -not -path './.venv/*' \
-    -not -path './__pycache__/*' \
-    -not -path './.pytest_cache/*' \
-    -not -path './dist/*' \
-    -not -path './build/*' \
-    -not -path './target/*' \
-    -not -path './.next/*' \
-    -not -path './.svelte-kit/*' \
-    -not -path './coverage/*' \
-    -not -path './out/*' \
-    -not -path './.gradle/*' \
-    -not -path './.cargo/*' \
-    -not -path './vendor/*' \
-    -not -path './.terraform/*' \
-    -print0 2>/dev/null | sort -z | xargs -0 -n 100 sh -c 'for f in "$@"; do cat "$f" 2>/dev/null; done' _ \
-    | _sha256 2>/dev/null || echo "unavailable"
+  (
+    cd "$project_root" || exit 1
+    {
+      while IFS= read -r -d '' path; do
+        _hash_path_with_symlink_handling "$path"
+      done < <(find . \( -type f -o -type l \) \
+        -not -path './.git/*' \
+        -not -path './node_modules/*' \
+        -not -path './.venv/*' \
+        -not -path './__pycache__/*' \
+        -not -path './.pytest_cache/*' \
+        -not -path './dist/*' \
+        -not -path './build/*' \
+        -not -path './target/*' \
+        -not -path './.next/*' \
+        -not -path './.svelte-kit/*' \
+        -not -path './coverage/*' \
+        -not -path './out/*' \
+        -not -path './.gradle/*' \
+        -not -path './.cargo/*' \
+        -not -path './vendor/*' \
+        -not -path './.terraform/*' \
+        -print0 2>/dev/null)
+    } | LC_ALL=C sort | _sha256
+  ) || echo "unavailable"
 }
+# impl-r1 W1 closure: pipe sorted per-path listing through _sha256 to restore the
+# v1.7.2 caller contract (single 64-char digest stored in $pre_walk_hash / $post_walk_hash;
+# comparison via != stays O(64) instead of O(file_count × line_size)). Mutation
+# detection is functionally equivalent: any per-file content drift or symlink
+# linkhex change still alters the sorted listing → digest changes → !=. T-M8 /
+# T-M7b / T-M25b all keep passing (the digest input now includes linkhex changes
+# that the old `cat | _sha256` form missed — strictly stronger drift detection).
 
 # ---------- hybrid mode (v1.7.1): split pre/post with degrade ----------
 _HYBRID_PRE_STATUS=""

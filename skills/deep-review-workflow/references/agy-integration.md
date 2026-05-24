@@ -86,8 +86,8 @@ agy 는 **mutation 과 직교** — `--add-dir` filesystem walk 으로 gitignore
 
 | Mode | Mechanism | Coverage | Cost (large repo) | When to use |
 |---|---|---|---|---|
-| **hybrid** *(default)* | `git status -z` + per-dirty-file SHA-256 + sensitive-pattern walk via `lib/sensitive-patterns.list` | Tracked files, gitignored sensitive paths (.env, credentials, keys — basename **and** directory-name matching since v1.7.2 for bilateral-wildcard patterns), already-dirty rewrites, plugin self-state (`.deep-review/config.yaml`, `.deep-review/.pending-mutation.json`) since v1.7.2 | ~0.4 s (100k files) | Most users |
-| **full-walk** | SHA-256 of every non-excluded file (v1.7.0 behavior) | Everything except the standard exclusion list (`./.git/`, `./node_modules/`, `./dist/`, etc.) | ~60 s (100k files) | Strict-coverage users needing detection of user-defined gitignored paths outside the standard exclusion list |
+| **hybrid** *(default)* | `git status -z` + per-dirty-file SHA-256 + sensitive-pattern walk via `lib/sensitive-patterns.list` + sidecar directory-match opt-ins | Tracked files, gitignored sensitive paths (.env, credentials, keys — basename matching, bilateral directory-name matching, and sidecar-enabled non-bilateral directory-name matching), already-dirty rewrites, plugin self-state (`.deep-review/config.yaml`, `.deep-review/.pending-mutation.json`) including bounded in-repo symlink targets | ~0.4 s (100k files) | Most users |
+| **full-walk** | Sorted per-path fingerprints for every non-excluded file or symlink | Everything except the standard exclusion list (`./.git/`, `./node_modules/`, `./dist/`, etc.); symlink link-target swaps are detected via link target hex | ~60 s (100k files) | Strict-coverage users needing detection of user-defined gitignored paths outside the standard exclusion list |
 | **git-status** | `git status -z` + per-dirty-file SHA-256 only (no sensitive scan) | Tracked files + already-dirty rewrites; **misses** gitignored sensitive paths | ~0.1 s | Tests, debugging |
 | **off** | (no snapshot) | None | 0 | **DANGEROUS** — only when agy is known not to mutate the worktree |
 
@@ -95,15 +95,31 @@ agy 는 **mutation 과 직교** — `--add-dir` filesystem walk 으로 gitignore
 
 **Degrade paths** (all append a one-line warning to `${output_file}.stderr-tail`):
 - `lib/sensitive-patterns.list` missing → degrade **hybrid only** → full-walk (git-status mode does not read the list)
+- `lib/sensitive-patterns-dir-match.list` missing → preserve basename-only behavior for non-bilateral patterns
+- UTF-8 BOM in `sensitive-patterns.list` → degrade **hybrid only** → full-walk; UTF-8 BOM in the sidecar → disable sidecar opt-ins with a warning
 - `_sha256` backend absent → mode override to `off` + conservative `mutation_warning`
 - `git status -z` failure → degrade hybrid/git-status → full-walk
 - snapshot capture failure (pre or post) → conservative `mutation_warning` (post) or fresh full-walk (pre)
 
 **C4 closed (v1.7.1)**: hybrid mode now appends per-file SHA-256 to each dirty/untracked `git status` line. An already-dirty tracked file rewritten by agy during the spawn window (` M foo` → ` M foo` with different content) is detected via content hash divergence.
 
-**C5 trade-off (v1.7.1)**: hybrid mode misses agy writes to **user-defined gitignored paths outside the bridge's standard exclusion list**. Paths inside the standard list (`./dist/`, `./build/`, `./node_modules/`, etc.) are missed by **both** modes (never walked in v1.7.0 either). Set `agy_fingerprint_mode: full-walk` for user-defined gitignored paths outside the standard list.
+**C5 trade-off (v1.7.1)**: hybrid mode misses agy writes to **user-defined gitignored paths outside the bridge's standard exclusion list** unless those paths match the sensitive-pattern scan. Paths inside the standard list (`./dist/`, `./build/`, `./node_modules/`, etc.) are missed by **both** modes. Set `agy_fingerprint_mode: full-walk` for user-defined gitignored paths outside the standard list.
 
-**Known limitation (v1.7.2 partial)**: hybrid's sensitive scan applies `-ipath` directory-name matching to bilateral-wildcard patterns (`*secret*`, `*password*`, `*token*` and their `**/*` variants). Non-bilateral patterns (`credentials*`, `bearer_*`, `api-key*.json`, etc.) remain basename-only, so gitignored sensitive files whose token appears only in a directory name *and* the matching pattern is non-bilateral (e.g., `./credentials-store/value.txt` against `credentials*`) are still not detected. Set `agy_fingerprint_mode: full-walk` for complete coverage. Tracked as v1.7.3+ follow-up; see CHANGELOG.
+### Sidecar-driven directory matching (v1.8.0)
+
+`hooks/scripts/lib/sensitive-patterns.list` remains the literal shared pattern list read by both the bridge and `mutation-protocol.sh`. The bridge additionally reads `hooks/scripts/lib/sensitive-patterns-dir-match.list` for non-bilateral patterns that should match directory names. The shipped sidecar enables `credentials*` and `bearer_*`.
+
+Matching is exact after stripping a leading `**/` from both lists. Blank lines and `#`-prefixed comments are ignored. Sidecar entries cause the bridge to emit both `-iname <pattern>` and `-ipath '*/<pattern>*/*'`; patterns not listed remain basename-only unless they are already bilateral `*X*` patterns. Sidecar comparison is exact-string, while the generated `find -iname` / `-ipath` predicates are case-insensitive.
+
+### Symlink target snapshot (v1.8.0 — arms 1a/1b/1c)
+
+The bridge now fingerprints files and symlinks through one shared helper. Runtime-state paths and sensitive-scan paths use the same sentinel forms:
+
+- `symlink:<sha256-or-unavailable>:<linkhex>` for symlinks resolving to a regular target inside the project root at or below 16 KB.
+- `symlink-unbounded:<linkhex>` for broken links, directory targets, external targets, non-regular targets, or targets larger than 16 KB.
+- `symlink-readlink-failed` when `[ -L ]` is true but `readlink` fails.
+
+The link target hex is the one-step `readlink` output, so target swaps with identical content are still detected. External target content changes are intentionally not detected; only the link target string is tracked to avoid environment-drift false positives.
 
 **Repo precondition**: hybrid's "sibling reviewer writes to `.deep-review/reports/` produce no warning" property assumes the target repo has `.deep-review/` in its `.gitignore` (the standard /deep-review usage convention). Without that, sibling-reviewer writes will appear as untracked in `git status` and hybrid will correctly flag them.
 

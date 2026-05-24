@@ -1,0 +1,15 @@
+# Patterns from sensitive-patterns.list that should also match by DIRECTORY NAME
+# (in addition to basename). One pattern per line. Lines starting with '#' and blank lines
+# are ignored. Compared after stripping leading '**/' (mirroring the bash-consumer convention
+# in sensitive-patterns.list).
+#
+# This file is ASCII; do not save with a UTF-8 BOM.
+# Patterns with '#' inside the pattern body are treated literally by consumers; do not use
+# inline comments on pattern lines.
+#
+# Effect: when the bridge builds the find expression for these patterns, it emits both
+# -iname AND -ipath '*/<pattern>*/*' arms. Patterns NOT listed here keep basename-only
+# behavior unless they are bilateral '*X*' patterns, which continue to emit both arms.
+
+credentials*
+bearer_*
