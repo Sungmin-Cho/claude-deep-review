@@ -616,6 +616,13 @@ Codex 리뷰 대상은 change_state에 따라 결정:
 
 4. **agy reviewer** (Bash tool, run_in_background: true)
 
+  > **Read-only 강제 (v1.8.1)**: agy CLI 는 read-only 모드가 없다 (`-p` 가 권한 플래그
+  > 유무와 무관하게 Edit/Write 를 자동 승인 — 실측 확인). `run-agy-reviewer.sh` 가
+  > `{prompt_file}` 본문 앞에 read-only preamble 을 **무조건 prepend** 하므로, orchestrator 는
+  > Opus / Codex 와 동일한 일반 reviewer prompt 만 `{prompt_file}` 에 쓰면 된다 — read-only
+  > 지시를 직접 넣을 필요 없다. 이렇게 해야 agy 가 합성(Stage 4) 전에 코드를 수정하지 않는다.
+  > 자세한 rationale 은 `skills/deep-review-workflow/references/agy-integration.md` 참조.
+
   > **LLM substitution note**: `{placeholder}` values (e.g. `{agy_cli_path}`, `{prompt_file}`,
   > `{output_file}`) are substituted with **literal strings** by the orchestrator (LLM) before
   > invoking the Bash tool. They are NOT shell variables — the spawned subshell has no memory of

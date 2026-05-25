@@ -568,6 +568,39 @@ case "$mode" in
   off)        : ;;
 esac
 
+# ---------- read-only enforcement preamble (v1.8.1) ----------
+# agy CLI has NO read-only mode. Empirical probing shows `agy -p` auto-approves
+# Edit/Write tool calls even with NO permission flag at all — neither removing
+# --dangerously-skip-permissions nor adding --sandbox prevents file writes
+# (--sandbox only restricts terminal/shell, not the filesystem-write tools).
+# So the ONLY reliable PRE-spawn guard against agy mutating the workspace before
+# synthesis is a prompt-level directive. We prepend it here at the single bridge
+# choke point, regardless of what reviewer prompt the orchestrator wrote into
+# prompt_file. The post-spawn worktree fingerprint (hybrid/full-walk/git-status)
+# remains the defense-in-depth BACKSTOP: if agy ignores this preamble and writes
+# anyway, the mutation is detected → AGY_STATUS=mutated → excluded from N-way
+# synthesis. ASCII-only so it survives LANG=C / non-UTF-8 locales.
+AGY_READONLY_PREAMBLE='============================================================
+READ-ONLY REVIEW MODE - ABSOLUTE, NON-NEGOTIABLE CONSTRAINT
+============================================================
+You are a code reviewer running in STRICT READ-ONLY mode. You MUST NOT modify
+the workspace in ANY way. You are FORBIDDEN from:
+  - creating, editing, overwriting, deleting, moving, or renaming any file
+  - running shell commands that mutate state (git add/commit/checkout/reset,
+    rm, mv, cp into the tree, sed -i, output redirection into files, package
+    installs, formatters, codemods, etc.)
+  - staging, committing, or otherwise altering git state
+Your ONLY task is to ANALYZE and REPORT. Emit your findings as TEXT only.
+When you find a problem, DESCRIBE the fix in prose - do NOT apply it. Any file
+modification is a critical protocol violation that invalidates your entire
+review. Fixes are applied by a SEPARATE step AFTER all reviewers are
+synthesized - never during your run.
+============================================================
+The review request follows below.
+============================================================
+
+'
+
 # ---------- invocation ----------
 stderr_log=$(mktemp "${TMPDIR:-/tmp}/agy-stderr.XXXXXX")
 
@@ -575,17 +608,22 @@ stderr_log=$(mktemp "${TMPDIR:-/tmp}/agy-stderr.XXXXXX")
 # before `rc=$?` could capture the exit code. Use `|| rc=$?` to ensure rc is captured.
 # W3: Guard against ARG_MAX overflow and process listing exposure.
 # `agy -p "$(cat ...)"` expands the prompt into argv — visible in `ps` and limited by ARG_MAX
-# (~2MB on Linux, ~256KB on macOS). Truncate at 200KB with a warning.
+# (~2MB on Linux, ~256KB on macOS). Truncate the BODY at 198KB (not 200KB) so the
+# read-only preamble (< 2KB ASCII) fits inside the combined argv cap.
 # TODO: if agy supports stdin prompt (e.g. `agy -p -` or `--prompt-file`), switch to that.
+AGY_BODY_LIMIT=198000
 prompt_size=$(wc -c < "$prompt_file")
 truncated=0
-if [ "$prompt_size" -gt 200000 ]; then
-  echo "⚠️ Prompt size ${prompt_size} bytes exceeds 200KB argv safety limit. Truncating to 200KB." >&2
-  prompt_content=$(head -c 200000 "$prompt_file")
+if [ "$prompt_size" -gt "$AGY_BODY_LIMIT" ]; then
+  echo "⚠️ Prompt size ${prompt_size} bytes exceeds ${AGY_BODY_LIMIT}B body limit (200KB argv cap minus read-only preamble headroom). Truncating." >&2
+  prompt_body=$(head -c "$AGY_BODY_LIMIT" "$prompt_file")
   truncated=1
 else
-  prompt_content=$(cat "$prompt_file")
+  prompt_body=$(cat "$prompt_file")
 fi
+# Prepend the read-only directive so it is the FIRST thing agy reads — single
+# point of enforcement, independent of the orchestrator-supplied prompt body.
+prompt_content="${AGY_READONLY_PREAMBLE}${prompt_body}"
 rc=0
 _timeout "$timeout" "$resolved_binary" -p "$prompt_content" \
     --print-timeout "${timeout}s" \
