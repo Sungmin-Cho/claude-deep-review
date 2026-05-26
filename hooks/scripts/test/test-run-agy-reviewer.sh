@@ -68,6 +68,24 @@ assert_arg "--print-timeout"
 assert_arg "--add-dir"
 assert_arg "--dangerously-skip-permissions"
 
+echo "Test 1b (read-only preamble prepended to agy prompt — v1.8.1)"
+# agy CLI has NO read-only mode: `-p` auto-approves Edit/Write even without
+# --dangerously-skip-permissions (verified empirically). The only reliable
+# pre-spawn guard is a prompt-level directive prepended by the bridge.
+# mock agy logs each argv element (one per line) to ARGS_LOG; a multi-line
+# prompt_content lands as a single argv element split across lines, so grep
+# matches the preamble's signature lines.
+run_a success || true
+if grep -q "READ-ONLY REVIEW MODE" "$ARGS_LOG" && grep -q "MUST NOT modify" "$ARGS_LOG"; then
+  echo "  ✓ read-only preamble present in agy prompt"
+else
+  echo "FAIL: read-only preamble NOT prepended to agy prompt" >&2
+  exit 1
+fi
+# The original prompt body must still be present (not replaced by the preamble).
+grep -q "test prompt" "$ARGS_LOG" || { echo "FAIL: original prompt body lost" >&2; exit 1; }
+echo "  ✓ original prompt body preserved"
+
 echo "Test 2 (Mechanism A — empty stdout → failed)"
 run_a empty || true
 assert_status failed

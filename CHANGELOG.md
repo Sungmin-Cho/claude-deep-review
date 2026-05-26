@@ -2,6 +2,22 @@
 
 **English** | [한국어](./CHANGELOG.ko.md)
 
+## [1.8.1] — 2026-05-25 (agy read-only enforcement)
+
+### Fixed
+
+- **agy mutated the workspace before synthesis** — the agy reviewer ran with `--dangerously-skip-permissions` and received a standard review-persona prompt that contained no read-only directive, so it could (and did) apply fixes via Edit/Write *during Stage 3 review*, before the Stage 4 synthesis where fixes are meant to be applied. The other three reviewers cannot do this: the Opus `code-reviewer` agent is restricted to `tools: [Read, Glob, Grep, Bash]`, and Codex review/adversarial are read-only diff passes. Only agy ran as a general-purpose agent with write access. Empirical probing confirmed agy CLI has **no read-only mode**: `agy -p` auto-approves Edit/Write even with no permission flag at all, and `--sandbox` restricts only the terminal/shell, not filesystem writes. `run-agy-reviewer.sh` now prepends a strict **read-only preamble** to the prompt body at a single bridge choke point — independent of the orchestrator-supplied prompt — forbidding file creation/edit/delete/move, git mutation, and state-changing shell commands, and instructing agy to describe fixes in prose only. This is the primary *pre-spawn* prevention; the existing pre/post worktree fingerprint stays as the defense-in-depth backstop (any mutation → `AGY_STATUS=mutated` → excluded from N-way synthesis).
+
+### Changed
+
+- **agy prompt body size limit** lowered from 200 KB to 198 KB (`AGY_BODY_LIMIT`) to reserve argv headroom for the read-only preamble (< 2 KB ASCII), keeping the combined `agy -p` argument under the ARG_MAX safety cap.
+
+### Notes
+
+- This is a **patch** release: it hardens an existing reviewer against an unintended side effect without changing the public interface or the mutation-detection scope.
+- The preamble is ASCII-only so it survives `LANG=C` / non-UTF-8 locales. Because preamble compliance is LLM-probabilistic, the post-spawn fingerprint backstop is deliberately retained as the second line of defense.
+- Coverage: `test-run-agy-reviewer.sh` Test 1b asserts the preamble is prepended and the original prompt body is preserved; the full 36-case bridge matrix continues to pass (no regression).
+
 ## [1.8.0] — 2026-05-22 (symlink and directory-name coverage)
 
 ### Added
