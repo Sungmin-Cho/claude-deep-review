@@ -1,102 +1,93 @@
 **English** | [한국어](./README.ko.md)
 
-# Deep Review Plugin
+# deep-review
+
+![version](https://img.shields.io/github/package-json/v/Sungmin-Cho/claude-deep-review?label=version)
+![license](https://img.shields.io/github/license/Sungmin-Cho/claude-deep-review)
+[![part of deep-suite](https://img.shields.io/badge/part%20of-deep--suite-5b8def)](https://github.com/Sungmin-Cho/claude-deep-suite)
 
 An independent Evaluator plugin for AI coding agents — cross-model code review with Codex integration and Sprint Contract support.
 
-## Codex Compatibility
+AI coding agents have a structural blind spot: they review their own work. The agent that wrote the code also judges it, so self-approval bias is built in. deep-review spawns a **separate Opus subagent** that sees only the diff — not the reasoning, intentions, or assumptions behind the code — for a structurally independent evaluation. When [Codex](https://github.com/openai/codex) (and optionally the `agy` CLI) is installed, the review escalates to parallel cross-model verification and synthesizes findings by confidence level.
 
-This release includes native Codex plugin metadata in `.codex-plugin/plugin.json` and a Codex project guide in `AGENTS.md`. The Claude Code manifest remains in `.claude-plugin/plugin.json`, and the unchanged `claude-deep-suite` marketplace namespace lets existing installs keep their plugin keys while Codex reads the suite's `.agents/plugins/marketplace.json`.
+## Role in deep-suite
 
-> **v1.4.0** — `.deep-review/recurring-findings.json` is now emitted as an M3 cross-plugin envelope (cf. [`claude-deep-suite/docs/envelope-migration.md`](https://github.com/Sungmin-Cho/claude-deep-suite/blob/main/docs/envelope-migration.md)). Stage 3 receipt loader is envelope-aware and chains the consumed deep-work session-receipt's `run_id` into `recurring-findings.envelope.parent_run_id` (handoff §3.3). The 6-month migration window allows pre-envelope consumers to fall through to legacy emit; the canonical Phase 2 adoption ledger lives in `claude-deep-suite/docs/envelope-migration.md` §6.1. See [CHANGELOG](./CHANGELOG.md) for the full migration note.
+deep-review is the **independent evaluator** of the [claude-deep-suite](https://github.com/Sungmin-Cho/claude-deep-suite), implementing the Generator–Evaluator separation from the [Harness Engineering](https://martinfowler.com/articles/harness-engineering.html) framework:
 
-## The Problem
+- **Inferential sensor** — an independent Opus subagent review with zero Generator context, the primary quality gate for semantic issues computational sensors cannot catch.
+- **Cross-model verification** — Opus + Codex review + Codex adversarial (+ agy), exceeding the framework's "LLM-as-judge" concept.
+- **Fitness-aware review** — consumes `fitness.json` rules and the `health_report` from [deep-work](https://github.com/Sungmin-Cho/claude-deep-work) for architecture-intent-aware evaluation.
+- **Sprint Contract verification** — structured success-criteria checking.
 
-AI coding agents have a fundamental blind spot: they review their own work.
+## Install
 
-- The agent that wrote the code also judges it — self-approval bias is structural
-- Opus writes 500 lines and then "reviews" them in the same context window
-- Critical bugs, architectural drift, and entropy accumulate undetected
-- Without separation between Generator and Evaluator, "review" is just narration
+Via the `claude-deep-suite` marketplace:
 
-Generator-Evaluator separation is not optional. It's the only way to get an honest second opinion.
+```bash
+# Claude Code
+/plugin install deep-review@claude-deep-suite
 
-## The Solution
+# Codex
+codex plugin install deep-review
+```
 
-Deep Review spawns a **separate Opus subagent** with no knowledge of the original session context. It sees only the diff — not the reasoning, intentions, or assumptions behind the code. This is a structurally independent evaluation.
+No additional configuration is required. On first run, `.deep-review/` is created with a default `config.yaml`. Run `/deep-review init` to generate a project-specific `rules.yaml`.
 
-When [Codex](https://github.com/openai/codex) is installed, the review escalates to **3-way parallel verification**: Claude Opus + codex:review + codex:adversarial-review. Findings are synthesized by confidence level.
-
-### Role in Harness Engineering
-
-deep-review is the **independent evaluator** in the [Deep Suite](https://github.com/Sungmin-Cho/claude-deep-suite) ecosystem, implementing the Generator-Evaluator separation from the [Harness Engineering](https://martinfowler.com/articles/harness-engineering.html) framework.
-
-In the 2×2 matrix:
-
-- **Inferential Sensor**: Independent Opus subagent review with zero Generator context — the primary quality gate for semantic issues that computational sensors cannot catch
-- **3-Way Cross-Model Verification**: Opus + Codex standard + Codex adversarial — exceeds the framework's "LLM-as-judge" concept
-- **Fitness-Aware Review**: Consumes `fitness.json` rules and `health_report` from [deep-work](https://github.com/Sungmin-Cho/claude-deep-work) for architecture-intent-aware evaluation
-- **Sprint Contract Verification**: Structured success criteria checking
-
-## Key Commands
+## Commands
 
 | Command | Description |
-|---------|-------------|
-| `/deep-review` | Review current changes with an independent Opus subagent |
-| `/deep-review --contract` | Sprint Contract-based structural verification |
+|---|---|
+| `/deep-review` | Review current changes with an independent Opus subagent (cross-model when Codex/agy are present) |
+| `/deep-review --contract [SLICE-NNN]` | Sprint Contract-based structural verification |
 | `/deep-review --entropy` | Entropy scan (duplicates, pattern drift, naming mismatches) |
-| `/deep-review --respond` | Respond to review findings with evidence-based protocol |
+| `/deep-review --respond [REPORT_PATH]` | Respond to review findings with the evidence-based protocol |
 | `/deep-review --respond --source=pr` | Respond to GitHub PR review comments |
-| `/deep-review-loop` | Auto-iterate review ↔ respond in one session until natural convergence. v1.5.0+ slash command; v1.6.0+ user-invocable **skill** (`Skill({ skill: "deep-review:deep-review-loop" })` also works — used by Codex CLI / SDK consumers) |
+| `/deep-review-loop [--max=N]` | Auto-iterate review ↔ respond until convergence (also a `user-invocable` skill — `Skill({ skill: "deep-review:deep-review-loop" })` for Codex CLI / SDK consumers) |
 | `/deep-review init` | Initialize per-project review rules interactively |
 
-## Review Pipeline
+## Review pipeline
 
-Deep Review runs a 4-stage pipeline on every invocation, with an optional Stage 5 for responding to findings:
+deep-review runs a 4-stage pipeline on every invocation, with an optional Stage 5 for responding to findings:
 
 ```
 Stage 1: Collect      — Detect environment, gather diff
 Stage 2: Contract     — Load Sprint Contract if present
-Stage 3: Deep Review  — Spawn Opus subagent in background (+ Codex if available)
+Stage 3: Deep Review  — Spawn Opus subagent in background (+ Codex / agy if available)
 Stage 4: Verdict      — Synthesize findings, emit APPROVE / CONCERN / REQUEST_CHANGES
 Stage 5: Respond      — Evidence-based response to findings (via --respond)
 ```
 
 ### Stage 1: Collect
 
-Environment detection script determines the git state and collects the appropriate diff:
+Environment detection determines the git state and collects the matching diff:
 
-- `non-git` — ask user which files to review
-- `initial` (zero commits) — review all files against empty tree
+- `non-git` — ask the user which files to review
+- `initial` (zero commits) — review all files against the empty tree
 - `clean` — `git diff {review_base}..HEAD`
 - `staged` — `git diff --cached`
 - `unstaged` — `git diff`
 - `mixed` — `git diff HEAD`
-- `untracked-only` — `git ls-files --others --exclude-standard`
+- `untracked-only` — read untracked files directly
 
-Excluded from diff: binaries, `vendor/`, `node_modules/`, `*.min.js`, `*.generated.*`, `*.lock`
+Excluded from the diff: binaries, `vendor/`, `node_modules/`, `*.min.js`, `*.generated.*`, `*.lock`.
 
-### Stage 2: Contract Check
+### Stage 2: Contract check
 
-`--contract` flag behavior:
-- `--contract SLICE-NNN`: Load only `.deep-review/contracts/SLICE-NNN.yaml` (must be `status: active`)
-- `--contract`: Load all `status: active` contracts in `.deep-review/contracts/`
-- No flag: If active contracts exist in `.deep-review/contracts/`, they are loaded automatically
-- `status: archived` contracts are excluded from auto-loading; if explicitly specified, a warning is shown
-- YAML parse errors: skip the contract and emit a warning
+- `--contract SLICE-NNN` — load only `.deep-review/contracts/SLICE-NNN.yaml` (must be `status: active`)
+- `--contract` — load all `status: active` contracts
+- No flag — active contracts in `.deep-review/contracts/` load automatically; archived contracts are excluded
+- Malformed YAML — the contract is skipped with a warning
 
 Each criterion is verified against the actual code changes.
 
 ### Stage 3: Deep Review
 
-An independent `code-reviewer` agent is spawned via the Agent tool with `model: opus` and `run_in_background: true`. In Codex/non-Claude runtimes, where Claude Code's Agent tool is unavailable, Deep Review uses `hooks/scripts/run-claude-reviewer.sh` to invoke the same reviewer through `claude -p --plugin-dir ... --agent code-reviewer`. Before spawning, the user is notified which reviewers will run (Opus-only or 3-way). It receives only the diff, rules, and contract — never the originating session context.
-
-The agent evaluates 5 criteria:
+An independent `code-reviewer` agent is spawned with `model: opus` and `run_in_background: true`. In Codex / non-Claude runtimes the same reviewer is invoked through `claude -p --agent code-reviewer`. Before spawning, you are told which reviewers will run (Opus-only or cross-model). The agent receives only the diff, rules, and contract — never the originating session context — and evaluates 5 criteria:
 
 | # | Criterion | Checks |
-|---|-----------|--------|
+|---|---|---|
 | 1 | Correctness | Logic bugs, edge cases, error handling |
-| 2 | Architecture fit | rules.yaml violations, layer boundaries, dependency direction |
+| 2 | Architecture fit | `rules.yaml` violations, layer boundaries, dependency direction |
 | 3 | Entropy | Duplicate code, pattern drift, ad-hoc helpers |
 | 4 | Test coverage | Coverage relative to changes, missing scenarios |
 | 5 | Readability | Will the next agent understand this on first read? |
@@ -104,78 +95,23 @@ The agent evaluates 5 criteria:
 ### Stage 4: Verdict
 
 | Finding | Verdict |
-|---------|---------|
+|---|---|
 | Any 🔴 Critical | `REQUEST_CHANGES` |
 | 🟡 Warnings, all reviewers agree | `REQUEST_CHANGES` |
 | 🟡 Warnings, split opinion | `CONCERN` |
 | All pass | `APPROVE` |
 
-Report is saved to `.deep-review/reports/{YYYY-MM-DD}-{HHmmss}-review.md` (timestamp prevents same-day overwrite).
+The report is saved to `.deep-review/reports/{YYYY-MM-DD}-{HHmmss}-review.md`.
 
-### Codex Auto-Exposure Protocol (v1.3.2)
+### Codex auto-exposure protocol
 
-In Case 3 (git repo + Codex plugin installed), `/deep-review` automatically detects gitignored files the user has been editing in the current Claude Code session — typically specs, research notes, or planning docs — and offers to temporarily expose them to Codex for cross-model review.
+In a git repo with the Codex plugin installed, `/deep-review` detects gitignored files you have been editing this session — typically specs, research notes, or planning docs — and offers to temporarily expose them to Codex for cross-model review. It presents the exact `git` commands in a single prompt, acquires an atomic `mkdir` lock, runs the review against `--scope working-tree`, then restores state (preserving anything you staged for real during the review). Sessions that crash mid-mutation are auto-recovered on the next invocation. Sensitive patterns (`.env*`, credentials, SSH keys, GCP service accounts, `.pgpass`, `.netrc`, `wrangler.toml`, JWT, and more) are scanned case-insensitively; an all-sensitive set is auto-skipped without prompting.
 
-**Flow:**
-1. Stage 2.1 reflects on the current session's Edit/Write tool calls and cross-references with `git check-ignore`.
-2. Detected files are presented in a single AskUserQuestion prompt with the exact git commands that will run.
-3. On user approval, `perform_mutation` acquires an atomic `mkdir` lock, validates preconditions, records state in `.deep-review/.pending-mutation.json`, and runs `git add -f -N`.
-4. The 3-way review runs with `--scope working-tree`.
-5. On completion, `restore_mutation` filters out any files the user staged for real during review (preserving their work) and removes only the protocol's own intent-to-add entries, then releases the lock.
-6. Sessions that crash mid-mutation are auto-recovered by the next `/deep-review` invocation.
+## Cross-model verification
 
-Sensitive patterns (`.env*`, credentials, SSH keys, GCP service accounts, `.pgpass`, `.netrc`, `wrangler.toml`, JWT, and more) are scanned case-insensitively. An all-sensitive set is auto-skipped without prompting.
-
-Implementation lives in `hooks/scripts/mutation-protocol.sh`. See `skills/deep-review-workflow/references/codex-integration.md` for preflight and auth-failure handling.
-
-## Receiving Review (Stage 5)
-
-When Stage 4 returns `REQUEST_CHANGES`, Deep Review offers three options:
-
-1. **Evidence-based response** (`/deep-review --respond`) — recommended
-2. **Delegate to codex:rescue** — when Codex is installed
-3. **Handle manually**
-
-### 6-Phase Response Protocol
-
-The `--respond` flag activates a structured response workflow:
-
-| Phase | Action | Output |
-|-------|--------|--------|
-| READ | Read all feedback items without reacting | Item list with severity and source |
-| UNDERSTAND | Restate each requirement technically | Restated requirements (no gratitude expressions) |
-| VERIFY | Cross-check against codebase | Evidence object (files, grep, tests, blame) |
-| EVALUATE | Judge by source trust level | Accept/reject/defer decision per item |
-| RESPOND | Accept with fix or reject with evidence | Code changes or documented rejection |
-| IMPLEMENT | Apply fixes by severity priority | Tested changes, committed by severity group |
-
-### Source Trust Matrix
-
-| Source | Default Trust | Verification Level |
-|--------|--------------|-------------------|
-| Human (user) | High | Implement after understanding, ask only if scope is unclear |
-| deep-review Opus | Medium | Codebase cross-verification required |
-| Codex review | Medium | Codebase cross-verification required |
-| Codex adversarial | Low | Thorough code-evidence verification required |
-| PR comment (external) | Low | 5-point external reviewer checklist applied |
-
-### PR Comment Response (`--source=pr`)
-
-`/deep-review --respond --source=pr` collects GitHub PR comments via `gh api` and applies the same 6-phase protocol. Inline comments receive threaded replies; general comments receive issue-level replies.
-
-### Response Report
-
-Each response session produces a structured report at `.deep-review/responses/{YYYY-MM-DD}-{HHmmss}-response.md` documenting every accept/reject/defer decision with evidence.
-
-## Cross-Model Verification
-
-When Codex is installed and git commits are available, review runs in 3-way parallel:
+When Codex is installed and git commits are available, review runs in parallel and synthesizes by confidence level:
 
 ```
-                    ┌─────────────────────────┐
-                    │     Deep Review Start    │
-                    └────────────┬────────────┘
-                                 │
               ┌──────────────────┼──────────────────┐
               ▼                  ▼                  ▼
      Claude Opus           codex:review      codex:adversarial
@@ -195,166 +131,72 @@ When Codex is installed and git commits are available, review runs in 3-way para
                     └────────────────────────┘
 ```
 
-If Codex is not installed, Deep Review notifies once (stored in `config.yaml`) and proceeds with Claude Opus solo. If Codex is installed but fails (auth error, timeout), it falls back to Claude Opus solo and marks Codex as "not performed."
+The `agy` (Google Antigravity) CLI joins as a 4th, cross-vendor-family reviewer when detected. If Codex is not installed, deep-review notifies once and proceeds with Opus solo. If a reviewer fails (auth error, timeout), it falls back gracefully and marks that reviewer as "not performed."
 
-## Environment Adaptation
+For `staged`, `unstaged`, and `mixed` states, deep-review offers to create a WIP commit so cross-model verification can run against a real commit base. The prompt previews the file list, warns about sensitive patterns, and never uses `git add -A`; undo with `git reset --soft HEAD~1`. Shallow clones are detected with a `git fetch --unshallow` recommendation.
 
-Deep Review works in any environment. Review strategy adjusts automatically:
+## Receiving review (Stage 5)
 
-| State | Condition | Review strategy |
-|-------|-----------|-----------------|
-| `non-git` | No git repo | Ask user for file list → full content review |
-| `initial` | Git repo, 0 commits | All files against empty tree |
-| `clean` | No pending changes | `git diff {base}..HEAD` |
-| `staged` | Staged changes only | `git diff --cached` |
-| `unstaged` | Unstaged changes only | `git diff` |
-| `mixed` | Both staged + unstaged | `git diff HEAD` |
-| `untracked-only` | New files, not staged | Read untracked files directly |
+When Stage 4 returns `REQUEST_CHANGES`, deep-review offers an evidence-based response (`/deep-review --respond`), delegation to `codex:rescue` (when Codex is installed), or manual handling. The `--respond` flag activates a 6-phase protocol:
 
-For `staged`, `unstaged`, and `mixed` states, Deep Review offers to create a WIP commit so Codex cross-verification can run against a real commit base. The WIP prompt previews the file list, warns about sensitive patterns (`.env*`, credentials, keys), and never uses `git add -A`. After the review you can undo the WIP commit with `git reset --soft HEAD~1` (working tree preserved).
+| Phase | Action |
+|---|---|
+| READ | Read all feedback items without reacting |
+| UNDERSTAND | Restate each requirement technically |
+| VERIFY | Cross-check against the codebase (files, grep, tests, blame) |
+| EVALUATE | Judge by source trust level — accept / reject / defer |
+| RESPOND | Accept with a fix or reject with evidence |
+| IMPLEMENT | Apply fixes by severity priority, committed per severity group |
 
-Shallow clones (`git clone --depth`) are detected; a `git fetch --unshallow` recommendation is shown and HEAD~1 is used as fallback base.
+Each source has a default trust level that sets the verification bar:
+
+| Source | Default trust |
+|---|---|
+| Human (user) | High |
+| deep-review Opus | Medium |
+| Codex review | Medium |
+| Codex adversarial | Low |
+| PR comment (external) | Low |
+
+`/deep-review --respond --source=pr` collects GitHub PR comments via `gh api` and applies the same protocol — inline comments get threaded replies, general comments get issue-level replies. Each session produces a report at `.deep-review/responses/{YYYY-MM-DD}-{HHmmss}-response.md` documenting every decision with evidence.
 
 ## Sprint Contract
 
-A Sprint Contract defines the success criteria for a feature slice. Deep Review verifies each criterion against the actual code — not the intent.
-
-Contracts live in `.deep-review/contracts/SLICE-NNN.yaml`:
+A Sprint Contract defines the success criteria for a feature slice; deep-review verifies each criterion against the actual code, not the intent. Contracts live in `.deep-review/contracts/SLICE-NNN.yaml`:
 
 ```yaml
 slice: SLICE-001
 title: "JWT Authentication"
-source_plan: "plan.md#slice-001"
-created_at: "2026-04-08T10:00:00Z"
 status: active
 criteria:
   - id: C1
     description: "Token expiry is validated on every protected route"
     verification: auto       # auto | manual | mixed
-    prerequisites: []
     status: null             # filled by Evaluator: PASS | FAIL | PARTIAL | SKIP
     evidence: null           # filled by Evaluator
-  - id: C2
-    description: "Refresh flow tested under concurrent requests"
-    verification: manual     # cannot be verified from code alone
-    status: null
-    evidence: null
 ```
 
-`verification: auto` — Evaluator reads the code and determines pass/fail.
-`verification: manual` — Skipped automatically, flagged as "requires manual confirmation."
-`verification: mixed` — Auto-verifiable parts are checked; the rest are skipped.
-
-Run `/deep-review --contract SLICE-NNN` to verify a specific slice, or `/deep-review --contract` to verify all active contracts. If active contracts exist in `.deep-review/contracts/`, they are automatically loaded without the flag. Archived contracts are excluded from auto-loading.
+- `verification: auto` — the Evaluator reads the code and determines pass/fail.
+- `verification: manual` — skipped automatically, flagged as "requires manual confirmation."
+- `verification: mixed` — auto-verifiable parts are checked; the rest are skipped.
 
 ## Configuration
 
-### `.deep-review/rules.yaml` (Inferential)
+deep-review reads several files under `.deep-review/`:
 
-Project-specific review rules, generated interactively by `/deep-review init`. These are **inferential** rules — the LLM reads and applies them during review:
+- **`rules.yaml`** (inferential) — project-specific review rules generated by `/deep-review init`; the LLM reads and applies them. Without it, generic best-practice criteria are used.
+- **`fitness.json`** (computational) — architecture fitness rules created and verified by the deep-work Health Engine; when present, they are injected into the reviewer prompt for architecture-intent-aware review.
+- **`config.yaml`** — runtime state (review model, Codex/agy notification flags, fingerprint mode), auto-created on first run and updated one field at a time so manual edits survive.
+- **`recurring-findings.json`** — after each review, recurring patterns are classified into a 7-category taxonomy (`error-handling`, `naming-convention`, `type-safety`, `test-coverage`, `security`, `performance`, `architecture`) and emitted as an M3 cross-plugin envelope, consumed by deep-evolve to steer experiment direction.
 
-```yaml
-architecture:
-  layers: [api, service, repository]
-  direction: top-down
-  cross_cutting: [logger, config]
+**Team sharing**: `rules.yaml`, `contracts/`, and `journeys/` encode project knowledge and should be committed; `config.yaml`, `reports/`, `responses/`, `entropy-log.jsonl`, and `recurring-findings.json` are per-machine runtime state. `/deep-review init` configures your `.gitignore` to enforce this split.
 
-style:
-  max_file_lines: 300
-  naming: camelCase
-  logging: structured
+## Links
 
-entropy:
-  prefer_shared_utils: true
-  max_similar_blocks: 3
-  validate_at_boundaries: true
-```
-
-If `rules.yaml` does not exist, Deep Review uses generic best-practice criteria.
-
-### `.deep-review/fitness.json` (Computational)
-
-Architecture fitness rules that are **computationally verified** by the deep-work Health Engine. When present, Deep Review injects these rules into the review agent's prompt for architecture-intent-aware review.
-
-```json
-{
-  "version": 1,
-  "rules": [
-    { "id": "no-circular-deps", "type": "dependency", "check": "circular", "severity": "required" },
-    { "id": "max-file-lines", "type": "file-metric", "check": "line-count", "max": 500, "severity": "advisory" }
-  ]
-}
-```
-
-- **Created by**: deep-work Phase 1 Research (auto-generated with user approval)
-- **Verified by**: deep-work Health Engine (code, not LLM)
-- **Consumed by**: Deep Review Stage 3 (architecture intent context for LLM review)
-- Rule types: `dependency`, `file-metric`, `forbidden-pattern`, `structure`
-- If not present, review proceeds normally with `rules.yaml` only
-
-### Receipt Health Report Integration
-
-When deep-work's session receipt contains a `health_report` field, Deep Review uses it as additional context:
-
-- **Discovery**: Searches `.deep-work/sessions/` for the most recent receipt
-- **Staleness check**: Compares `health_report.scan_commit` against current `git rev-parse HEAD`
-- **If fresh**: Drift issues and fitness violations are added to the review context
-- **If stale or missing**: Skipped silently (not an error)
-
-### `.deep-review/config.yaml`
-
-Runtime state, auto-created on first run:
-
-```yaml
-review_model: opus       # opus | sonnet
-codex_notified: false    # whether the Codex install hint has been shown
-last_review: null        # timestamp of last review (ISO8601)
-app_qa:                  # reserved for future App QA mode
-  last_command: null
-  last_url: null
-```
-
-**Sharing policy (team usage)**:
-
-- **Per-machine (do not commit)**: `config.yaml`, `reports/`, `responses/`, `entropy-log.jsonl`, `recurring-findings.json` — these represent session output or local runtime state and vary by machine.
-- **Shared via git (tracked)**: `rules.yaml`, `contracts/`, `journeys/` — these encode project knowledge that should be synchronized across the team.
-- `/deep-review init` updates your `.gitignore` to enforce this split automatically.
-
-Updates to `config.yaml` are performed via the `Edit` tool on a single line at a time. This preserves any fields a user has modified manually (e.g., `review_model: sonnet`) and keeps unknown/reserved fields intact.
-
-### Entropy Scan (`--entropy`)
-
-Running `/deep-review --entropy` triggers a full-project entropy scan:
-
-- Duplicate code blocks across files
-- New helper functions that duplicate existing utilities
-- Naming convention mismatches
-- Results appended to `.deep-review/entropy-log.jsonl`
-
-### Recurring Findings Export (v1.2)
-
-After each review, automatically extracts recurring patterns and records them in `recurring-findings.json`.
-
-**Taxonomy (7 categories):**
-`error-handling`, `naming-convention`, `type-safety`, `test-coverage`, `security`, `performance`, `architecture`
-
-**Behavior:**
-- Runs when 2+ reports exist in `.deep-review/reports/`
-- Classifies Critical/Warning items into taxonomy categories via LLM semantic classification
-- Marks patterns as "recurring" when the same category appears 3+ times
-- When severity is mixed within a category, adopts the highest severity
-
-**Output:** `.deep-review/recurring-findings.json`
-- Consumed by deep-evolve to steer experiment direction (prepare.py scenarios + program.md + strategy.yaml weights)
-
-## Installation
-
-```bash
-claude plugin add deep-review
-```
-
-No additional configuration required. On first run, `.deep-review/` is created automatically with default `config.yaml`. Run `/deep-review init` to generate project-specific `rules.yaml`.
+- [Changelog](./CHANGELOG.md)
+- [claude-deep-suite](https://github.com/Sungmin-Cho/claude-deep-suite) — the marketplace and sibling plugins
+- [Contributing](./CONTRIBUTING.md) · [Security policy](./SECURITY.md)
 
 ## License
 
-MIT
+[MIT](./LICENSE)
