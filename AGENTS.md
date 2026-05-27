@@ -3,7 +3,9 @@
 Independent Evaluator for AI coding agents. This repo keeps the Claude Code
 plugin surface and exposes Codex-native plugin metadata and skill entrypoints.
 
-Current version: 1.6.1.
+To check the current version: `jq -r .version .codex-plugin/plugin.json`
+
+> 📄 Documentation in this repo follows `docs/DOCS_RULE.md` (local maintainer guide — single-source-of-truth rules for README / CHANGELOG / this file).
 
 ## Runtime Surfaces
 
