@@ -687,9 +687,7 @@ prompt_content="${AGY_READONLY_PREAMBLE}${prompt_body}"
 # argv (no shell injection at the bridge), but we keep a cheap charset allowlist as
 # defense-in-depth so a malformed/hostile value never reaches agy. We deliberately
 # do NOT pre-call `agy models` here — that hits the backend (~3 s per run, measured),
-# which would re-add latency to the default path. A clean-but-unknown tier is passed
-# through; if agy rejects it the reviewer is classified failed and excluded from
-# synthesis (consistent with the other reviewers). set -u-safe empty-array form.
+# which would re-add latency to the default path. set -u-safe empty-array form.
 agy_model_args=()
 if [ -n "$model" ]; then
   case "$model" in
@@ -708,6 +706,29 @@ _timeout "$timeout" "$resolved_binary" -p "$prompt_content" \
     ${agy_model_args[@]+"${agy_model_args[@]}"} \
     --dangerously-skip-permissions \
     > "$output_file" 2> "$stderr_log" || rc=$?
+
+# v1.9.0 fail-open on model rejection / agy version skew (Codex round-5 high):
+# the default pins --model "Gemini 3.5 Flash (High)", but an OLDER agy without the
+# --model flag, or a FUTURE agy that renamed the tier, would otherwise fail → agy
+# dropped from synthesis by default (a regression vs v1.8.1, where agy always ran
+# with no --model). If agy was given --model and failed for a NON-timeout, NON-auth
+# reason (the signature of an unsupported flag/tier), retry ONCE without --model so
+# the 4th reviewer still participates with agy's own default tier. Timeout (124) and
+# auth failures are NOT retried (re-running cannot help and would waste a window).
+# The retry runs before the post-spawn fingerprint, so any mutation by either attempt
+# is still captured by the pre/post comparison.
+if [ "$rc" -ne 0 ] && [ "${#agy_model_args[@]}" -gt 0 ] && [ "$rc" -ne 124 ] \
+   && ! grep -qE "$AGY_AUTH_REGEX" "$stderr_log"; then
+  retry_warn="agy bridge: agy failed with --model '$model' (rc=$rc) — retrying once without --model (default tier; likely agy version/tier skew)"
+  echo "$retry_warn" >&2
+  echo "$retry_warn" >> "${output_file}.stderr-tail"
+  rc=0
+  _timeout "$timeout" "$resolved_binary" -p "$prompt_content" \
+      --print-timeout "${timeout}s" \
+      --add-dir "$project_root" \
+      --dangerously-skip-permissions \
+      > "$output_file" 2> "$stderr_log" || rc=$?
+fi
 
 # ---------- mode-driven post-spawn dispatcher (v1.7.1) ----------
 case "$mode" in

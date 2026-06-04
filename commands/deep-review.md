@@ -703,7 +703,7 @@ Codex 리뷰 대상은 change_state에 따라 결정:
 
   Orchestrator passes `--mode {agy_fingerprint_mode}` (resolved chain above). The env-var slot (`AGY_FINGERPRINT_MODE`) lets CI pin a mode without per-developer config edits even though `.deep-review/config.yaml` is `.gitignore`d.
 
-  `agy_model` resolution: `AGY_MODEL` env > `.deep-review/config.yaml` `agy_model` (double-quoted OR unquoted scalar — a single-quoted value is not parsed and falls back to the default with a warning) > built-in default `Gemini 3.5 Flash (High)`. Empty (`agy_model: ""`) → `--model` omitted → agy uses its own default tier. The bridge does NOT pre-call `agy models` (that backend call costs ~3 s per run); a clean-but-unknown tier is passed through and, if agy rejects it, the agy reviewer is marked failed and excluded from synthesis — consistent with the other reviewers.
+  `agy_model` resolution: `AGY_MODEL` env > `.deep-review/config.yaml` `agy_model` (double-quoted OR unquoted scalar — a single-quoted value is not parsed and falls back to the default with a warning) > built-in default `Gemini 3.5 Flash (High)`. Empty (`agy_model: ""`) → `--model` omitted → agy uses its own default tier. The bridge does NOT pre-call `agy models` (that backend call costs ~3 s per run); a clean-but-unknown tier is passed through and, if agy rejects `--model` (older agy / renamed tier), the bridge **retries once without `--model`** so agy still participates with its own default tier — it is not silently dropped (fail-open; timeout/auth failures are not retried).
 
 여기서 `{codex_target_flag}`는:
 - clean 또는 WIP 커밋 후: `--base {review_base}`

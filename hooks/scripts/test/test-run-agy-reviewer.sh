@@ -18,6 +18,11 @@ case "${MOCK_BEHAVIOR:-success}" in
   timeout)      sleep 9999 ;;
   auth-fail)    echo "Reauthentication required" >&2; exit 1 ;;
   generic-fail) echo "internal error" >&2; exit 17 ;;
+  # v1.9.0: simulate an older agy / renamed tier — fail when --model is present,
+  # succeed (default tier) when it is absent, so the bridge's fail-open retry path is exercised.
+  reject-model)
+    for a in "$@"; do [ "$a" = "--model" ] && { echo "error: unknown flag --model" >&2; exit 3; }; done
+    printf 'ok review output (default tier)\n'; exit 0 ;;
 esac
 EOF
 chmod +x "$WORK/mock-bin/agy"
@@ -198,8 +203,8 @@ grep -q "unsupported characters" "$OUT.stderr-tail" \
 echo "  ✓ M-C: shell-metacharacter model rejected + warning + no injection"
 
 # Test M-D: a clean-but-unknown tier passes the charset guard and is forwarded as-is
-# (the bridge does NOT pre-call `agy models`; agy itself would reject it → reviewer
-# excluded — consistent with other reviewers).
+# (the bridge does NOT pre-call `agy models`; if agy rejects it, the fail-open retry
+# in M-F re-runs without --model so agy still participates).
 _mt_reset
 MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
   "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
@@ -226,6 +231,36 @@ if grep -q "unsupported characters" "$OUT.stderr-tail" 2>/dev/null; then
   echo "FAIL: M-E — empty model wrongly tripped the charset guard" >&2; exit 1
 fi
 echo "  ✓ M-E: empty --model \"\" opt-out → flag omitted, no warning"
+
+# Test M-F (fail-open retry — Codex round-5 high): when agy rejects --model (older
+# agy without the flag, or a renamed tier), the bridge retries ONCE without --model
+# so the 4th reviewer still participates with agy's default tier instead of being
+# dropped. Final argv must NOT contain --model, status=success, retry warning present.
+_mt_reset
+MOCK_BEHAVIOR=reject-model MOCK_ARGS_LOG="$ARGS_LOG" \
+  "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
+    --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 5 \
+    --model "Gemini 3.5 Flash (High)" >/dev/null 2>&1 || true
+assert_status success
+if grep -q '^--model$' "$ARGS_LOG"; then
+  echo "FAIL: M-F — retry still passed --model (should drop it on the retry)" >&2; exit 1
+fi
+grep -q "retrying once without --model" "$OUT.stderr-tail" \
+  || { echo "FAIL: M-F — missing fail-open retry warning in stderr-tail" >&2; exit 1; }
+echo "  ✓ M-F: --model rejection → retry without --model → agy participates (success)"
+
+# Test M-G: an AUTH failure with --model is NOT retried (re-running cannot fix auth);
+# status stays not_authenticated and no fail-open retry warning is emitted.
+_mt_reset
+MOCK_BEHAVIOR=auth-fail MOCK_ARGS_LOG="$ARGS_LOG" \
+  "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
+    --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 5 \
+    --model "Gemini 3.5 Flash (High)" >/dev/null 2>&1 || true
+assert_status not_authenticated
+if grep -q "retrying once without --model" "$OUT.stderr-tail" 2>/dev/null; then
+  echo "FAIL: M-G — auth failure must NOT trigger the model retry" >&2; exit 1
+fi
+echo "  ✓ M-G: auth failure with --model is not retried (stays not_authenticated)"
 
 # Test M-O1/M-O2 (orchestrator invocation form regression — Codex round-2/3): the
 # command contract in commands/deep-review.md builds an `agy_model_args` array and
