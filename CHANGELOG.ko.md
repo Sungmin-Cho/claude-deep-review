@@ -4,6 +4,20 @@
 
 deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)와 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
+## [1.9.0] — 2026-06-04 (agy 모델 티어 + hybrid fingerprint 성능)
+
+### 추가
+
+- `agy_model` config 필드 (및 `AGY_MODEL` env 오버라이드) 로 agy 리뷰 티어를 선택, 새 `--model` 플래그로 agy CLI 에 전달. 기본값 `Gemini 3.5 Flash (High)` — 리뷰는 bounded read 작업이므로 Flash 티어가 Pro 기본값 대비 agy 의 지배적 비용(Gemini 추론 왕복)을 줄인다. bridge 가 값을 `agy models` 로 재검증하여 인식 불가 문자열이면 agy 기본 티어로 fallback (agy 버전 rename 안전성); `agy_model: ""` 이면 agy 자체 기본값 사용.
+
+### 성능
+
+- hybrid fingerprint fork-storm 수정. `build_find_expr` 가 `find` OR-체인을 패턴마다 서브셸/fork 폭풍으로 재구성했다 — `tr`/`sed` 정규화 + 52개 패턴 각각에 대해 dir-match 사이드카를 재읽기·재정규화 — 빌드당 ~4.5초, pre/post 2회 실행. bash 파라미터 확장으로 de-fork, 사이드카는 빌드당 1회만 로드(`_load_dir_match_set`), 표현식을 pre/post 스냅샷 간 memoize: 빌드당 ~4.5초 → ~0.08초 (~56×), 출력은 바이트 동일(골든 대비 sha256 검증). 따라서 hybrid 가 기본값으로 유지된다 — 이제 빠르면서도 gitignored 민감 경로 커버리지를 보존 — `git-status` 로 다운그레이드하지 않는다.
+
+### 참고
+
+- agy 의 wall-clock 비용은 bridge 가 아니라 agy CLI 자체의 Gemini 추론(사소한 프롬프트도 ~94% 네트워크 대기)이 지배한다. bridge 를 "Codex 통합처럼" 재설계해도 해결되지 않는다: Codex 가 빠른 것은 리뷰 모델 응답이 빠르기 때문이며, 그 경량성은 agy 에 대응물이 없는 `sandbox: read-only` 파라미터에 의존한다(따라서 agy 는 여전히 read-only 프리앰블 + 워크트리 fingerprint 가 필요). 모델 티어 레버와 fork-storm 수정이 실제 비용을 겨냥한다.
+
 ## [1.8.1] — 2026-05-25 (agy read-only 강제)
 
 ### 수정

@@ -634,6 +634,7 @@ Codex 리뷰 대상은 change_state에 따라 결정:
   - `{project_root}` → `/home/user/myrepo` (from `git rev-parse --show-toplevel`)
   - `{prompt_file}` → `/tmp/deep-review-agy-prompt.xXxXxX` (from mktemp in earlier Bash call)
   - `{output_file}` → `/tmp/deep-review-agy-output.xXxXxX` (from mktemp in earlier Bash call)
+  - `{agy_model}` → `Gemini 3.5 Flash (High)` (from the v1.9.0 model resolution chain below; may be empty to use agy's default)
 
   **v1.7.1 mode resolution** (orchestrator owns the chain, then passes resolved value as `--mode`):
 
@@ -653,6 +654,31 @@ Codex 리뷰 대상은 change_state에 따라 결정:
   esac
   ```
 
+  **v1.9.0 model tier resolution** (orchestrator owns the chain, then passes the resolved value as `--model`):
+
+  ```bash
+  # Order: AGY_MODEL env var > .deep-review/config.yaml `agy_model` field > built-in
+  # default 'Gemini 3.5 Flash (High)'. Review is a bounded read task, so a Flash tier
+  # meaningfully cuts agy's Gemini inference round-trip — the DOMINANT agy cost — vs
+  # the Pro default while keeping review quality. `agy models` lists valid tiers.
+  # The value contains spaces/parens, so QUOTE it in config:
+  #     agy_model: "Gemini 3.5 Flash (High)"
+  # Set `agy_model: ""` to opt out of the default and use agy's own default tier.
+  agy_model="${AGY_MODEL:-}"
+  if [ -z "${AGY_MODEL:-}" ]; then
+    if [ -f .deep-review/config.yaml ] && grep -qE '^agy_model:' .deep-review/config.yaml; then
+      # Explicitly configured — honor it even when empty ("" → bridge omits --model).
+      agy_model=$(sed -nE 's/^agy_model:[[:space:]]*"([^"]*)".*$/\1/p; s/^agy_model:[[:space:]]*'\''([^'\'']*)'\''.*$/\1/p' .deep-review/config.yaml | head -1)
+    else
+      agy_model="Gemini 3.5 Flash (High)"   # built-in default
+    fi
+  fi
+  # No orchestrator-side allowlist check: the bridge re-validates agy_model against
+  # `agy models` and silently falls back to agy's default tier if the string is
+  # unrecognized (agy-version rename safety), so a single reviewer never hard-fails
+  # the run over a renamed tier.
+  ```
+
   ```
   Bash({ command: '
   "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-agy-reviewer.sh" \
@@ -661,6 +687,7 @@ Codex 리뷰 대상은 change_state에 따라 결정:
     --prompt-file "{prompt_file}" \
     --output "{output_file}" \
     --mode "{agy_fingerprint_mode}" \
+    --model "{agy_model}" \
     --timeout-seconds 900
   ', run_in_background: true })
   ```
@@ -668,6 +695,8 @@ Codex 리뷰 대상은 change_state에 따라 결정:
   Orchestrator passes `--binary {agy_cli_path}` (Stage 1 detection result) for deterministic binding independent of subsequent `$PATH` mutations. Bridge's internal resolution (`--binary` → `$AGY_BINARY` → `command -v agy`) only activates if `--binary` was not passed (e.g., direct CLI tests).
 
   Orchestrator passes `--mode {agy_fingerprint_mode}` (resolved chain above). The env-var slot (`AGY_FINGERPRINT_MODE`) lets CI pin a mode without per-developer config edits even though `.deep-review/config.yaml` is `.gitignore`d.
+
+  Orchestrator passes `--model {agy_model}` (resolved chain above). An empty value means "use agy's own default tier" (bridge omits the flag). The `AGY_MODEL` env-var slot lets CI pin a tier without per-developer config edits. The bridge re-validates the value against `agy models` and falls back to agy's default if the tier string is unrecognized, so a renamed tier degrades gracefully instead of failing the agy reviewer.
 
 여기서 `{codex_target_flag}`는:
 - clean 또는 WIP 커밋 후: `--base {review_base}`

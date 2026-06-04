@@ -11,6 +11,12 @@ trap "rm -rf $WORK" EXIT
 mkdir -p "$WORK/mock-bin"
 cat > "$WORK/mock-bin/agy" <<'EOF'
 #!/usr/bin/env bash
+# v1.9.0: `agy models` listing, used by the bridge to validate --model. It must
+# NOT overwrite the args log — the subsequent review call records the real argv.
+if [ "${1:-}" = "models" ]; then
+  printf 'Gemini 3.5 Flash (High)\nGemini 3.1 Pro (Low)\n'
+  exit 0
+fi
 printf '%s\n' "$@" > "$MOCK_ARGS_LOG"
 case "${MOCK_BEHAVIOR:-success}" in
   success)      printf 'ok review output\n'; exit 0 ;;
@@ -142,6 +148,48 @@ else
     echo "  ✓ Perl fallback: status=$got_status (acceptable — agy mock may have exited before alarm)"
   fi
 fi
+
+# ============================================================
+# v1.9.0 — model tier (--model pass-through + `agy models` validation)
+# ============================================================
+echo ""
+echo "=== v1.9.0 model tier ==="
+
+# Test M-A: a model listed by `agy models` is passed through verbatim.
+> "$ARGS_LOG"
+MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
+  "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
+    --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 5 \
+    --model "Gemini 3.5 Flash (High)" >/dev/null 2>&1 || true
+assert_status success
+assert_arg "--model"
+assert_arg "Gemini 3.5 Flash (High)"
+echo "  ✓ M-A: valid model passed through verbatim"
+
+# Test M-B: no --model → bridge omits the flag (agy uses its own default tier).
+> "$ARGS_LOG"
+MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
+  "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
+    --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 5 >/dev/null 2>&1 || true
+if grep -q '^--model$' "$ARGS_LOG"; then
+  echo "FAIL: M-B — --model unexpectedly passed when no model requested" >&2; exit 1
+fi
+echo "  ✓ M-B: --model omitted when not requested"
+
+# Test M-C: a model NOT listed by `agy models` is dropped (graceful fallback);
+#           the review still proceeds and a warning lands in stderr-tail.
+> "$ARGS_LOG"
+MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
+  "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
+    --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 5 \
+    --model "Bogus Model 9000" >/dev/null 2>&1 || true
+assert_status success
+if grep -q '^--model$' "$ARGS_LOG"; then
+  echo "FAIL: M-C — unrecognized --model was NOT dropped" >&2; exit 1
+fi
+grep -q "not listed by 'agy models'" "$OUT.stderr-tail" \
+  || { echo "FAIL: M-C — missing fallback warning in stderr-tail" >&2; exit 1; }
+echo "  ✓ M-C: unrecognized model dropped + warning + review proceeds"
 
 # ============================================================
 # §7 matrix (v1.7.1) — hybrid / full-walk / git-status / off coverage

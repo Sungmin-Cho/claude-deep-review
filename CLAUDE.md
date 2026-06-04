@@ -214,6 +214,7 @@ The subagent only does **execution mechanics** (Edit, test, commit). If the `imp
 - `agy_enabled: true` — permanent opt-out (set false to skip agy regardless of detection)
 - `agy_sensitive_acked_fingerprint: ""` — SHA-256 of last-acked sensitive-file scan (§4.5.1)
 - `agy_fingerprint_mode: hybrid` — fingerprint mode (`hybrid` | `full-walk` | `git-status` | `off`). v1.7.1+. Default `hybrid`. Override via `AGY_FINGERPRINT_MODE` env var (e.g., CI pinning). See [`agy-integration.md`](skills/deep-review-workflow/references/agy-integration.md) "Fingerprint modes" for cost/coverage table.
+- `agy_model: "Gemini 3.5 Flash (High)"` — agy model tier (v1.9.0). Resolution: `AGY_MODEL` env > config > default `Gemini 3.5 Flash (High)`. Review is a bounded read task, so a Flash tier cuts agy's dominant cost (Gemini inference round-trip) vs the Pro default. Must match an `agy models` line (quote it — value has spaces/parens); the bridge re-validates against `agy models` and falls back to agy's default tier if unrecognized. Set `agy_model: ""` to use agy's own default. Passed to the bridge via `--model`.
 
 ---
 
@@ -283,7 +284,7 @@ CI matrix: `ubuntu-latest` + `macos-latest`. Triggers on main push + PRs touchin
 | Cross-plugin chain broken? | `recurring-findings.envelope.parent_run_id` must mirror the consumed session-receipt's `run_id` from Stage 3 |
 | Partial-hunk staging lost during recovery? | Step 7 emits a warning — re-run `git add -p` manually; full hunk restore is deferred |
 | agy emitted `${output_file}.mutation-warning`? | Bridge detected worktree SHA-256 drift between pre/post spawn — agy result is excluded from N-way synthesis. Investigate with `git status`; coarse fingerprint may miss renames/races. See `agy-integration.md` Status Matrix. |
-| agy reviewer noticeably slower than Opus / Codex? | Pre-v1.7.1: bridge walked the entire worktree pre/post for SHA-256 fingerprint. Since v1.7.1, hybrid mode (default) uses `git status -z` + per-dirty-file SHA-256 + sensitive-pattern scan via `lib/sensitive-patterns.list` — ~100× faster on large repos. Set `agy_fingerprint_mode: full-walk` to restore v1.7.0 behavior. |
+| agy reviewer noticeably slower than Opus / Codex? | The dominant cost is agy's **Gemini inference round-trip** (the CLI itself, ~94% network wait), NOT the bridge — so v1.9.0 added `agy_model` (default `Gemini 3.5 Flash (High)`) to pin a faster tier; set a Flash tier (or `AGY_MODEL` env) to cut it, or `agy_enabled: false` to drop agy from the default fan-out. SECONDARY (now fixed): the hybrid fingerprint's `build_find_expr` fork storm cost ~4.5 s/build ×2 — v1.9.0 de-fork + memoization cut it to ~0.08 s (~56×), so hybrid stays the default with full coverage. `agy_fingerprint_mode: full-walk` restores v1.7.0 whole-tree hashing. |
 
 ---
 

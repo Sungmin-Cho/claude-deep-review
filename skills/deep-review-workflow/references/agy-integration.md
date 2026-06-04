@@ -37,14 +37,40 @@ if [ -z "$mode" ] && [ -f .deep-review/config.yaml ]; then
 fi
 mode="${mode:-hybrid}"
 
+# v1.9.0: model tier resolution (AGY_MODEL env > config agy_model > default)
+agy_model="${AGY_MODEL:-}"
+if [ -z "${AGY_MODEL:-}" ]; then
+  if [ -f .deep-review/config.yaml ] && grep -qE '^agy_model:' .deep-review/config.yaml; then
+    agy_model=$(sed -nE 's/^agy_model:[[:space:]]*"([^"]*)".*$/\1/p; s/^agy_model:[[:space:]]*'\''([^'\'']*)'\''.*$/\1/p' .deep-review/config.yaml | head -1)
+  else
+    agy_model="Gemini 3.5 Flash (High)"
+  fi
+fi
+
 "$CLAUDE_PLUGIN_ROOT/hooks/scripts/run-agy-reviewer.sh" \
   --binary "$agy_cli_path" \
   --project-root "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" \
   --prompt-file "$prompt_file" \
   --output "$output_file" \
   --mode "$mode" \
+  --model "$agy_model" \
   --timeout-seconds 900
 ```
+
+## Model tier (v1.9.0)
+
+agy 의 wall-clock 비용 대부분은 **Gemini 추론 네트워크 왕복**이다 (브릿지가 아님 — 사소한 1단어 프롬프트도 ~10s, ~94%가 네트워크 대기; Go 바이너리 콜드 스타트는 ~0.05s). 리뷰는 bounded read 작업이므로 최상위 추론 티어가 필요 없다. 그래서 v1.9.0 은 `--model` 패스스루를 도입해 **빠른 Flash 티어를 기본**으로 핀한다.
+
+- **Resolution**: `AGY_MODEL` env var > `.deep-review/config.yaml` 의 `agy_model` 필드 > 빌트인 기본값 `Gemini 3.5 Flash (High)`.
+- **Config (값에 공백/괄호가 있으므로 반드시 인용)**:
+  ```yaml
+  agy_model: "Gemini 3.5 Flash (High)"   # 기본값
+  # agy_model: "Gemini 3.1 Pro (Low)"    # 품질 우선
+  # agy_model: ""                         # agy 자체 기본 티어 사용 (브릿지가 --model 생략)
+  ```
+- **유효 티어**: `agy models` 가 출력하는 라인과 정확히 일치해야 한다 (예: `Gemini 3.5 Flash (Low/Medium/High)`, `Gemini 3.1 Pro (Low/High)`).
+- **Graceful fallback (티어 rename 안전성)**: 티어 문자열은 agy 버전에 결합되어 있다. 브릿지는 spawn 직전 `agy models` 로 값을 재검증하여, 목록에 없으면 `--model` 을 **드롭하고 agy 기본 티어로 진행**한다 (`${output_file}.stderr-tail` 에 1줄 경고). 이렇게 해서 티어명이 바뀌어도 agy 리뷰어 하나가 전체 실행을 실패시키지 않는다.
+- **빈 값(`""`)**: 브릿지의 `[ -n "$model" ]` 가 false → `--model` 생략 → agy 자체 기본 티어 사용.
 
 Bridge 가 자체 `_timeout` / `_sha256` shim 보유 + `set -Eeuo pipefail` 안전한 `|| rc=$?` 캡처 (R7 fixes).
 
@@ -92,6 +118,8 @@ agy 는 **mutation 과 직교** — `--add-dir` filesystem walk 으로 gitignore
 | **full-walk** | Sorted per-path fingerprints for every non-excluded file or symlink | Everything except the standard exclusion list (`./.git/`, `./node_modules/`, `./dist/`, etc.); symlink link-target swaps are detected via link target hex | ~60 s (100k files) | Strict-coverage users needing detection of user-defined gitignored paths outside the standard exclusion list |
 | **git-status** | `git status -z` + per-dirty-file SHA-256 only (no sensitive scan) | Tracked files + already-dirty rewrites; **misses** gitignored sensitive paths | ~0.1 s | Tests, debugging |
 | **off** | (no snapshot) | None | 0 | **DANGEROUS** — only when agy is known not to mutate the worktree |
+
+**Performance (v1.9.0 — hybrid fork-storm fix)**: prior to v1.9.0, `build_find_expr` rebuilt the `find` OR-chain with a per-pattern subshell/fork storm — `_normalize_pattern_line` forked `tr`+`sed`, and `_is_dir_match_opted_in` re-opened AND re-normalized the entire dir-match sidecar **for every one of the 52 patterns** — costing ~4.5 s per build and running **twice** (pre + post spawn), so hybrid never met the ~0.4 s figure in the table above (it was effectively ~9 s of pure local CPU regardless of repo size). v1.9.0 de-forks normalization to bash parameter expansion, loads the sidecar **once** per build (`_load_dir_match_set`), and **memoizes** the expression across the pre/post snapshots — measured ~4.5 s → ~0.08 s per build (~56×). Output is byte-identical (verified by sha256 against a captured golden), so coverage is unchanged; the table costs now reflect reality. This is why hybrid remains the default (fast **and** retaining gitignored-sensitive-path coverage) rather than downgrading the default to `git-status`.
 
 **Resolution chain**: `AGY_FINGERPRINT_MODE` env var > config field > built-in default `hybrid`. The orchestrator (`commands/deep-review.md`) resolves before invoking the bridge; the bridge receives the resolved value via `--mode`.
 

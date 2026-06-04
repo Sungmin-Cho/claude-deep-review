@@ -1,6 +1,6 @@
 {
   "name": "deep-review",
-  "version": "1.8.1",
+  "version": "1.9.0",
   "description": "Independent Evaluator for AI coding agents — cross-model code review with Codex integration",
   "author": {
     "name": "Sungmin-Cho"
