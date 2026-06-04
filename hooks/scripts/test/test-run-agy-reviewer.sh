@@ -11,12 +11,6 @@ trap "rm -rf $WORK" EXIT
 mkdir -p "$WORK/mock-bin"
 cat > "$WORK/mock-bin/agy" <<'EOF'
 #!/usr/bin/env bash
-# v1.9.0: `agy models` listing, used by the bridge to validate --model. It must
-# NOT overwrite the args log — the subsequent review call records the real argv.
-if [ "${1:-}" = "models" ]; then
-  printf 'Gemini 3.5 Flash (High)\nGemini 3.1 Pro (Low)\n'
-  exit 0
-fi
 printf '%s\n' "$@" > "$MOCK_ARGS_LOG"
 case "${MOCK_BEHAVIOR:-success}" in
   success)      printf 'ok review output\n'; exit 0 ;;
@@ -150,12 +144,12 @@ else
 fi
 
 # ============================================================
-# v1.9.0 — model tier (--model pass-through + `agy models` validation)
+# v1.9.0 — model tier (--model charset guard + pass-through)
 # ============================================================
 echo ""
 echo "=== v1.9.0 model tier ==="
 
-# Test M-A: a model listed by `agy models` is passed through verbatim.
+# Test M-A: a charset-clean model is passed through to agy verbatim.
 > "$ARGS_LOG"
 MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
   "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
@@ -164,7 +158,7 @@ MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
 assert_status success
 assert_arg "--model"
 assert_arg "Gemini 3.5 Flash (High)"
-echo "  ✓ M-A: valid model passed through verbatim"
+echo "  ✓ M-A: clean model passed through verbatim"
 
 # Test M-B: no --model → bridge omits the flag (agy uses its own default tier).
 > "$ARGS_LOG"
@@ -176,20 +170,38 @@ if grep -q '^--model$' "$ARGS_LOG"; then
 fi
 echo "  ✓ M-B: --model omitted when not requested"
 
-# Test M-C: a model NOT listed by `agy models` is dropped (graceful fallback);
-#           the review still proceeds and a warning lands in stderr-tail.
+# Test M-C (security regression — Codex P1): a --model containing shell
+# metacharacters is rejected by the charset guard → flag dropped + warning, the
+# review still proceeds, and NO injection side-effect (the bridge passes argv,
+# never builds a shell string from the value).
+> "$ARGS_LOG"
+CANARY="${WORK}/dr-agy-inject-canary"
+rm -f "$CANARY" 2>/dev/null
+MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
+  "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
+    --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 5 \
+    --model "\"; touch ${CANARY}; #" >/dev/null 2>&1 || true
+assert_status success
+if grep -q '^--model$' "$ARGS_LOG"; then
+  echo "FAIL: M-C — shell-metacharacter --model was NOT rejected" >&2; exit 1
+fi
+[ ! -e "$CANARY" ] || { echo "FAIL: M-C — injection canary fired (shell injection!)" >&2; rm -f "$CANARY"; exit 1; }
+grep -q "unsupported characters" "$OUT.stderr-tail" \
+  || { echo "FAIL: M-C — missing charset-guard warning in stderr-tail" >&2; exit 1; }
+echo "  ✓ M-C: shell-metacharacter model rejected + warning + no injection"
+
+# Test M-D: a clean-but-unknown tier passes the charset guard and is forwarded as-is
+# (the bridge does NOT pre-call `agy models`; agy itself would reject it → reviewer
+# excluded — consistent with other reviewers).
 > "$ARGS_LOG"
 MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
   "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
     --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 5 \
     --model "Bogus Model 9000" >/dev/null 2>&1 || true
 assert_status success
-if grep -q '^--model$' "$ARGS_LOG"; then
-  echo "FAIL: M-C — unrecognized --model was NOT dropped" >&2; exit 1
-fi
-grep -q "not listed by 'agy models'" "$OUT.stderr-tail" \
-  || { echo "FAIL: M-C — missing fallback warning in stderr-tail" >&2; exit 1; }
-echo "  ✓ M-C: unrecognized model dropped + warning + review proceeds"
+assert_arg "--model"
+assert_arg "Bogus Model 9000"
+echo "  ✓ M-D: clean-but-unknown tier forwarded (no agy models pre-call)"
 
 # ============================================================
 # §7 matrix (v1.7.1) — hybrid / full-walk / git-status / off coverage

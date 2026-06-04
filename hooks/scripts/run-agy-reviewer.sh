@@ -679,19 +679,23 @@ fi
 prompt_content="${AGY_READONLY_PREAMBLE}${prompt_body}"
 # v1.9.0 model tier (attacks the dominant cost — agy's Gemini inference round-trip).
 # The orchestrator resolves AGY_MODEL env > config agy_model > default and passes
-# --model; empty → omit → agy uses its built-in default. The tier string is
-# agy-version-coupled, so validate it against `agy models` (best-effort, ~0.05 s):
-# an unrecognized tier (e.g. after an agy rename) drops --model and falls back to
-# agy's default rather than failing the whole review. set -u-safe empty-array form.
+# --model; empty → omit → agy uses its built-in default. --model reaches agy via
+# argv (no shell injection at the bridge), but we keep a cheap charset allowlist as
+# defense-in-depth so a malformed/hostile value never reaches agy. We deliberately
+# do NOT pre-call `agy models` here — that hits the backend (~3 s per run, measured),
+# which would re-add latency to the default path. A clean-but-unknown tier is passed
+# through; if agy rejects it the reviewer is classified failed and excluded from
+# synthesis (consistent with the other reviewers). set -u-safe empty-array form.
 agy_model_args=()
 if [ -n "$model" ]; then
-  if _timeout 10 "$resolved_binary" models 2>/dev/null | grep -Fxq "$model"; then
-    agy_model_args=(--model "$model")
-  else
-    m="agy bridge: model '$model' not listed by 'agy models' — using agy default tier"
-    echo "$m" >&2
-    echo "$m" >> "${output_file}.stderr-tail"
-  fi
+  case "$model" in
+    *[!A-Za-z0-9\ ._/\(\)-]*)
+      model_warn="agy bridge: --model '$model' has unsupported characters — ignoring, using agy default tier"
+      echo "$model_warn" >&2
+      echo "$model_warn" >> "${output_file}.stderr-tail" ;;
+    *)
+      agy_model_args=(--model "$model") ;;
+  esac
 fi
 rc=0
 _timeout "$timeout" "$resolved_binary" -p "$prompt_content" \

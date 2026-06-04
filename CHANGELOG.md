@@ -4,19 +4,15 @@
 
 All notable changes to deep-review are documented here. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.9.0] — 2026-06-04 (agy model tier + hybrid fingerprint perf)
+## [1.9.0] — 2026-06-04 (agy model tier + faster hybrid fingerprint)
 
 ### Added
 
-- `agy_model` config field (and `AGY_MODEL` env override) selects the agy review tier, passed to the agy CLI via a new `--model` flag. Default `Gemini 3.5 Flash (High)` — review is a bounded read task, so a Flash tier cuts agy's dominant cost (the Gemini inference round-trip) versus the Pro default. The bridge re-validates the value against `agy models` and falls back to agy's default tier if the string is unrecognized (graceful handling of agy version renames); `agy_model: ""` opts out and uses agy's own default.
+- agy reviewer model tier is now configurable via `agy_model` in `.deep-review/config.yaml` (or the `AGY_MODEL` env var), defaulting to `Gemini 3.5 Flash (High)` — a faster tier for the bounded read task of review. An unsupported value falls back to agy's default tier.
 
-### Performance
+### Fixed
 
-- Hybrid fingerprint fork-storm fixed. `build_find_expr` rebuilt the `find` OR-chain with a per-pattern subshell/fork storm — `tr`/`sed` normalization plus re-reading and re-normalizing the dir-match sidecar for each of the 52 patterns — costing ~4.5 s per build and running twice (pre + post spawn). De-forked to bash parameter expansion, the sidecar is loaded once per build (`_load_dir_match_set`), and the expression is memoized across the pre/post snapshots: ~4.5 s → ~0.08 s per build (~56×), with byte-identical output (verified by sha256 against a captured golden). Hybrid therefore stays the default — now fast **and** retaining gitignored-sensitive-path coverage — instead of being downgraded to `git-status`.
-
-### Notes
-
-- agy's wall-clock cost is dominated by the agy CLI's own Gemini inference (~94 % network wait even on a trivial prompt), not the bridge. Re-architecting the bridge "like the Codex integration" would not help: Codex is fast because its reviewer model responds faster, and its leanness relies on a `sandbox: read-only` parameter that agy has no equivalent for (so agy still needs the read-only preamble + worktree fingerprint). The model-tier lever and the fork-storm fix target the actual costs instead.
+- agy's `hybrid` fingerprint mode is now sub-second (previously it added several seconds of redundant local work to every review), so it stays the default without slowing the pipeline.
 
 ## [1.8.1] — 2026-05-25 (agy read-only enforcement)
 

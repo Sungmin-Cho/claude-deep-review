@@ -37,15 +37,29 @@ if [ -z "$mode" ] && [ -f .deep-review/config.yaml ]; then
 fi
 mode="${mode:-hybrid}"
 
-# v1.9.0: model tier resolution (AGY_MODEL env > config agy_model > default)
+# v1.9.0: model tier — resolved IN-SHELL, passed as a shell variable (never
+# literal-substituted). agy_model is free-form text from (possibly untrusted)
+# config, so unlike the enum-validated $mode it must be expanded as "$agy_model"
+# with a charset allowlist guard — splicing it into a command string would be a
+# shell-injection vector.
 agy_model="${AGY_MODEL:-}"
 if [ -z "${AGY_MODEL:-}" ]; then
   if [ -f .deep-review/config.yaml ] && grep -qE '^agy_model:' .deep-review/config.yaml; then
-    agy_model=$(sed -nE 's/^agy_model:[[:space:]]*"([^"]*)".*$/\1/p; s/^agy_model:[[:space:]]*'\''([^'\'']*)'\''.*$/\1/p' .deep-review/config.yaml | head -1)
+    raw=$(grep -E '^agy_model:' .deep-review/config.yaml | head -1 | sed -E 's/^agy_model:[[:space:]]*//')
+    case "$raw" in
+      '"'*) agy_model=${raw#\"}; agy_model=${agy_model%%\"*} ;;            # double-quoted
+      "'"*) agy_model=${raw#\'}; agy_model=${agy_model%%\'*} ;;            # single-quoted
+      *)    agy_model=${raw%%#*}; agy_model="${agy_model%"${agy_model##*[![:space:]]}"}" ;;  # unquoted scalar
+    esac
   else
     agy_model="Gemini 3.5 Flash (High)"
   fi
 fi
+case "$agy_model" in
+  "") : ;;                                                # opt-out → omit --model
+  *[!A-Za-z0-9\ ._/\(\)-]*) agy_model="Gemini 3.5 Flash (High)" ;;   # charset guard → default
+esac
+agy_model_args=(); [ -n "$agy_model" ] && agy_model_args=(--model "$agy_model")
 
 "$CLAUDE_PLUGIN_ROOT/hooks/scripts/run-agy-reviewer.sh" \
   --binary "$agy_cli_path" \
@@ -53,7 +67,7 @@ fi
   --prompt-file "$prompt_file" \
   --output "$output_file" \
   --mode "$mode" \
-  --model "$agy_model" \
+  "${agy_model_args[@]+${agy_model_args[@]}}" \
   --timeout-seconds 900
 ```
 
@@ -62,15 +76,15 @@ fi
 agy 의 wall-clock 비용 대부분은 **Gemini 추론 네트워크 왕복**이다 (브릿지가 아님 — 사소한 1단어 프롬프트도 ~10s, ~94%가 네트워크 대기; Go 바이너리 콜드 스타트는 ~0.05s). 리뷰는 bounded read 작업이므로 최상위 추론 티어가 필요 없다. 그래서 v1.9.0 은 `--model` 패스스루를 도입해 **빠른 Flash 티어를 기본**으로 핀한다.
 
 - **Resolution**: `AGY_MODEL` env var > `.deep-review/config.yaml` 의 `agy_model` 필드 > 빌트인 기본값 `Gemini 3.5 Flash (High)`.
-- **Config (값에 공백/괄호가 있으므로 반드시 인용)**:
+- **Config (인용/비인용 모두 허용)**:
   ```yaml
-  agy_model: "Gemini 3.5 Flash (High)"   # 기본값
-  # agy_model: "Gemini 3.1 Pro (Low)"    # 품질 우선
-  # agy_model: ""                         # agy 자체 기본 티어 사용 (브릿지가 --model 생략)
+  agy_model: "Gemini 3.5 Flash (High)"   # 기본값 (인용 권장)
+  # agy_model: Gemini 3.1 Pro (Low)      # 비인용 스칼라도 허용 (trailing comment 제거)
+  # agy_model: ""                         # opt-out → agy 자체 기본 티어 (--model 생략)
   ```
-- **유효 티어**: `agy models` 가 출력하는 라인과 정확히 일치해야 한다 (예: `Gemini 3.5 Flash (Low/Medium/High)`, `Gemini 3.1 Pro (Low/High)`).
-- **Graceful fallback (티어 rename 안전성)**: 티어 문자열은 agy 버전에 결합되어 있다. 브릿지는 spawn 직전 `agy models` 로 값을 재검증하여, 목록에 없으면 `--model` 을 **드롭하고 agy 기본 티어로 진행**한다 (`${output_file}.stderr-tail` 에 1줄 경고). 이렇게 해서 티어명이 바뀌어도 agy 리뷰어 하나가 전체 실행을 실패시키지 않는다.
-- **빈 값(`""`)**: 브릿지의 `[ -n "$model" ]` 가 false → `--model` 생략 → agy 자체 기본 티어 사용.
+- **🔒 Injection-safety (v1.9.0 Codex P1 fix)**: `agy_model` 은 free-form 값이고 신뢰할 수 없는 repo 가 config 를 ship 할 수 있으므로, orchestrator 는 enum 인 `--mode` 와 달리 model 을 **`{placeholder}` 리터럴로 치환하지 않는다**. bridge 호출과 같은 Bash 세션에서 shell 변수로 해석해 `--model "$agy_model"` 로 전개하고, charset allowlist (`[A-Za-z0-9 ._/()-]`) 를 벗어나는 값은 기본 티어로 폴백한다. bridge 도 같은 charset 가드를 defense-in-depth 로 갖는다 (`--model` 은 argv 로 전달 — bridge 자체엔 injection 없음).
+- **No `agy models` pre-call (v1.9.0 perf)**: `agy models` 는 백엔드를 쳐서 ~3s/run 이 든다. bridge 는 이를 호출하지 않는다. charset 만 통과하면 그대로 전달하고, agy 가 알 수 없는 티어를 거부하면 그 리뷰어는 `failed` 로 분류되어 합성에서 제외된다 (다른 리뷰어와 동일). 따라서 티어 typo/rename 은 "agy 제외"로 가시화된다 — 잘못된 값으로 조용히 진행하지 않는다.
+- **빈 값(`""`)**: charset 케이스의 `""` 분기 + bridge 의 `[ -n "$model" ]` → `--model` 생략 → agy 자체 기본 티어 사용.
 
 Bridge 가 자체 `_timeout` / `_sha256` shim 보유 + `set -Eeuo pipefail` 안전한 `|| rc=$?` 캡처 (R7 fixes).
 
