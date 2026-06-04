@@ -203,6 +203,23 @@ assert_arg "--model"
 assert_arg "Bogus Model 9000"
 echo "  ✓ M-D: clean-but-unknown tier forwarded (no agy models pre-call)"
 
+# Test M-E: explicit empty --model "" (the documented opt-out form) → flag omitted,
+# no warning, review proceeds. Locks in the opt-out invocation form directly (M-B
+# covers the equivalent flag-absent branch, but not the literal `--model ""` form).
+> "$ARGS_LOG"
+MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
+  "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
+    --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 5 \
+    --model "" >/dev/null 2>&1 || true
+assert_status success
+if grep -q '^--model$' "$ARGS_LOG"; then
+  echo "FAIL: M-E — --model passed despite empty opt-out value" >&2; exit 1
+fi
+if grep -q "unsupported characters" "$OUT.stderr-tail" 2>/dev/null; then
+  echo "FAIL: M-E — empty model wrongly tripped the charset guard" >&2; exit 1
+fi
+echo "  ✓ M-E: empty --model \"\" opt-out → flag omitted, no warning"
+
 # ============================================================
 # §7 matrix (v1.7.1) — hybrid / full-walk / git-status / off coverage
 # ============================================================

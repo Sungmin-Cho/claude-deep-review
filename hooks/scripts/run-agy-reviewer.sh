@@ -253,7 +253,11 @@ _normalize_pattern_line() {
   # v1.9.0 de-fork: pure bash parameter expansion replaces the `tr -d '\r'` +
   # `sed` trim, which forked 3 external processes per call. With 52 patterns plus
   # per-pattern sidecar normalization this was the dominant cost of the hybrid
-  # sensitive scan (~4.5 s per build, run twice). Output is byte-identical.
+  # sensitive scan (~4.5 s per build, run twice). Output is byte-identical for all
+  # ASCII / valid-UTF-8 pattern lines (covers the shipped list + sidecar; sha-verified).
+  # It diverges only for a non-comment line carrying an invalid standalone high byte
+  # (e.g. lone 0xA0) under a UTF-8 locale: BSD `tr` (macOS) aborted and dropped such a
+  # line, whereas this keeps it — strictly more conservative for a security scanner.
   pat="${pat//$'\r'/}"                    # strip CR (was: tr -d '\r')
   pat="${pat#"${pat%%[![:space:]]*}"}"    # ltrim leading whitespace (was: sed)
   pat="${pat%"${pat##*[![:space:]]}"}"    # rtrim trailing whitespace (was: sed)
