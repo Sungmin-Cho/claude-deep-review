@@ -906,6 +906,37 @@ else
   matrix_fail "T-M27: bad outcome (status=$AGY_STATUS_T_M27, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no))"
 fi
 
+# T-M28 (v1.9.0 fail-open retry × mutation detection): a fake agy that MUTATES a
+# tracked file then rejects --model (exit 3), and would succeed cleanly on the
+# no-model retry. The fail-open retry must NOT bypass mutation detection — the
+# pre/post fingerprint brackets BOTH attempts, so the mutation on the --model run
+# is still caught (status=mutated, agy excluded) rather than masked by the retry's
+# clean success. Guards the safety-critical retry × fingerprint interaction.
+fresh_out; make_fixture "$FIXT"
+cat > "$FAKE_AGY" <<EOF
+#!/bin/sh
+for a in "\$@"; do
+  if [ "\$a" = "--model" ]; then
+    echo "mutated-on-model-run" > "${FIXT}/README.md"
+    echo "unknown flag --model" >&2
+    exit 3
+  fi
+done
+echo "review ok (default tier)"
+exit 0
+EOF
+chmod +x "$FAKE_AGY"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid \
+  --model "Gemini 3.5 Flash (High)" --timeout-seconds 30 >/dev/null 2>&1 || true
+AGY_STATUS_T_M28=$(cat "$OUT.status" 2>/dev/null || echo "missing")
+if [ "$AGY_STATUS_T_M28" = "mutated" ] && [ -f "$OUT.mutation-warning" ] \
+   && grep -q "retrying once without --model" "$OUT.stderr-tail" 2>/dev/null; then
+  matrix_pass "T-M28: fail-open retry does NOT bypass mutation detection (mutation on --model run caught)"
+else
+  matrix_fail "T-M28: bad outcome (status=$AGY_STATUS_T_M28, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no), retry=$(grep -q 'retrying once' "$OUT.stderr-tail" 2>/dev/null && echo yes || echo no))"
+fi
+
 echo "=========================="
 echo "MATRIX PASS: $MATRIX_PASS"
 echo "MATRIX FAIL: $MATRIX_FAIL"
