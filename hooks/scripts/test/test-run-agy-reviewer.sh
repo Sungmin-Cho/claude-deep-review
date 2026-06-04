@@ -220,6 +220,36 @@ if grep -q "unsupported characters" "$OUT.stderr-tail" 2>/dev/null; then
 fi
 echo "  ✓ M-E: empty --model \"\" opt-out → flag omitted, no warning"
 
+# Test M-O1/M-O2 (orchestrator invocation form regression — Codex round-2/3): the
+# command contract in commands/deep-review.md builds an `agy_model_args` array and
+# expands it as `${agy_model_args[@]+"${agy_model_args[@]}"}` (quotes INSIDE). The
+# wrong form `"${agy_model_args[@]+${agy_model_args[@]}}"` (quotes outside) passes a
+# stray empty argv element on the opt-out path → the bridge aborts with "Unknown arg:"
+# (exit 2) and silently drops the 4th reviewer. Replicate the documented expansion
+# against the REAL bridge to lock in the safe form.
+echo "--- orchestrator invocation form (array expansion) ---"
+agy_model_args=()
+> "$ARGS_LOG"
+MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
+  "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
+    --prompt-file "$PROMPT" --output "$OUT" --mode off \
+    ${agy_model_args[@]+"${agy_model_args[@]}"} \
+    --timeout-seconds 5 >/dev/null 2>&1 || true
+assert_status success   # empty array → ZERO extra args → bridge runs (not "Unknown arg:")
+echo "  ✓ M-O1: empty agy_model_args expansion passes no stray argv (bridge not aborted)"
+agy_model_args=(--model "Gemini 3.5 Flash (High)")
+> "$ARGS_LOG"
+MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
+  "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
+    --prompt-file "$PROMPT" --output "$OUT" --mode off \
+    ${agy_model_args[@]+"${agy_model_args[@]}"} \
+    --timeout-seconds 5 >/dev/null 2>&1 || true
+assert_status success
+assert_arg "--model"
+assert_arg "Gemini 3.5 Flash (High)"
+echo "  ✓ M-O2: populated agy_model_args expansion forwards --model"
+unset agy_model_args
+
 # ============================================================
 # §7 matrix (v1.7.1) — hybrid / full-walk / git-status / off coverage
 # ============================================================

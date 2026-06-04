@@ -68,7 +68,7 @@ agy_model_args=(); [ -n "$agy_model" ] && agy_model_args=(--model "$agy_model")
   --prompt-file "$prompt_file" \
   --output "$output_file" \
   --mode "$mode" \
-  "${agy_model_args[@]+${agy_model_args[@]}}" \
+  ${agy_model_args[@]+"${agy_model_args[@]}"} \
   --timeout-seconds 900
 ```
 
