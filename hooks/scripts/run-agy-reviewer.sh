@@ -106,6 +106,7 @@ prompt_file=""
 output_file=""
 timeout="900"
 mode=""   # v1.7.1: hybrid | full-walk | git-status | off (default: hybrid)
+model=""  # v1.9.0: optional agy --model tier (orchestrator-resolved). Empty → agy default.
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -115,6 +116,7 @@ while [ $# -gt 0 ]; do
     --output)            output_file="$2"; shift 2 ;;
     --timeout-seconds)   timeout="$2"; shift 2 ;;
     --mode)              mode="$2"; shift 2 ;;
+    --model)             model="$2"; shift 2 ;;
     *) echo "Unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -248,8 +250,17 @@ capture_status_with_hashes() {
 # patterns without changing sensitive-patterns.list's literal pattern contract.
 _normalize_pattern_line() {
   local pat="$1"
-  pat=$(printf '%s' "$pat" | tr -d '\r')
-  pat=$(printf '%s' "$pat" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+  # v1.9.0 de-fork: pure bash parameter expansion replaces the `tr -d '\r'` +
+  # `sed` trim, which forked 3 external processes per call. With 52 patterns plus
+  # per-pattern sidecar normalization this was the dominant cost of the hybrid
+  # sensitive scan (~4.5 s per build, run twice). Output is byte-identical for all
+  # ASCII / valid-UTF-8 pattern lines (covers the shipped list + sidecar; sha-verified).
+  # It diverges only for a non-comment line carrying an invalid standalone high byte
+  # (e.g. lone 0xA0) under a UTF-8 locale: BSD `tr` (macOS) aborted and dropped such a
+  # line, whereas this keeps it — strictly more conservative for a security scanner.
+  pat="${pat//$'\r'/}"                    # strip CR (was: tr -d '\r')
+  pat="${pat#"${pat%%[![:space:]]*}"}"    # ltrim leading whitespace (was: sed)
+  pat="${pat%"${pat##*[![:space:]]}"}"    # rtrim trailing whitespace (was: sed)
   case "$pat" in '#'*) return 1 ;; esac
   [ -n "$pat" ] || return 1
   pat="${pat#\*\*/}"
@@ -257,34 +268,61 @@ _normalize_pattern_line() {
   printf '%s' "$pat"
 }
 
-_is_dir_match_opted_in() {
-  local pat="$1" sidecar line normalized
-  [ "${DIR_MATCH_LIST_DISABLED:-0}" = "0" ] || return 1
+# v1.9.0: load+normalize the directory-match opt-in sidecar ONCE per
+# build_find_expr call into _DIR_MATCH_ENTRIES. Previously _is_dir_match_opted_in
+# re-opened AND re-normalized the entire sidecar for EVERY pattern — an
+# O(patterns × sidecar_lines) subshell/fork storm that dominated the hybrid scan.
+# Now membership (below) is a fork-free string compare against this precomputed set.
+_DIR_MATCH_ENTRIES=()
+_load_dir_match_set() {
+  _DIR_MATCH_ENTRIES=()
+  [ "${DIR_MATCH_LIST_DISABLED:-0}" = "0" ] || return 0
+  local sidecar line normalized
   sidecar="${_LIB_DIR:-}/sensitive-patterns-dir-match.list"
-  [ -r "$sidecar" ] || return 1
+  [ -r "$sidecar" ] || return 0
   while IFS= read -r line; do
     normalized=$(_normalize_pattern_line "$line" 2>/dev/null || true)
     [ -n "$normalized" ] || continue
-    [ "$normalized" = "$pat" ] && return 0
+    _DIR_MATCH_ENTRIES+=("$normalized")
   done < "$sidecar"
+  return 0
+}
+
+_is_dir_match_opted_in() {
+  local pat="$1" e
+  [ "${DIR_MATCH_LIST_DISABLED:-0}" = "0" ] || return 1
+  # Empty-array guard: under `set -u` on bash 3.2, "${arr[@]}" on an empty array
+  # raises "unbound variable". Short-circuit when nothing is opted in.
+  [ "${#_DIR_MATCH_ENTRIES[@]}" -gt 0 ] || return 1
+  for e in "${_DIR_MATCH_ENTRIES[@]}"; do
+    [ "$e" = "$pat" ] && return 0
+  done
   return 1
 }
 
 build_find_term() {
   local pat="$1"
   local dir_match="${2:-0}"
-  local inner
+  local inner q_name q_path
+  # v1.9.0 de-fork: `printf -v` writes the %q-escaped form into a variable with NO
+  # command-substitution subshell. Output is byte-identical to the prior
+  # `$(printf '%q' …)` form (same %q escaping, same spacing).
   case "$pat" in
     '*'*'*')
       inner="${pat#\*}"
       inner="${inner%\*}"
-      printf '%s' "-iname $(printf '%q' "$pat") -o -ipath $(printf '%q' "*/*${inner}*")"
+      printf -v q_name '%q' "$pat"
+      printf -v q_path '%q' "*/*${inner}*"
+      printf '%s' "-iname $q_name -o -ipath $q_path"
       ;;
     *)
       if [ "$dir_match" = "1" ]; then
-        printf '%s' "-iname $(printf '%q' "$pat") -o -ipath $(printf '%q' "*/$pat*/*")"
+        printf -v q_name '%q' "$pat"
+        printf -v q_path '%q' "*/$pat*/*"
+        printf '%s' "-iname $q_name -o -ipath $q_path"
       else
-        printf '%s' "-iname $(printf '%q' "$pat")"
+        printf -v q_name '%q' "$pat"
+        printf '%s' "-iname $q_name"
       fi
       ;;
   esac
@@ -293,6 +331,10 @@ build_find_term() {
 build_find_expr() {
   local list_file="$1"
   local pat expr="" term dm normalized
+  # v1.9.0: read+normalize the dir-match sidecar ONCE for this call (was re-read
+  # per pattern inside _is_dir_match_opted_in). Membership checks below are now
+  # fork-free string compares against _DIR_MATCH_ENTRIES.
+  _load_dir_match_set
   while IFS= read -r pat; do
     normalized=$(_normalize_pattern_line "$pat" 2>/dev/null || true)
     [ -n "$normalized" ] || continue
@@ -356,15 +398,30 @@ _hash_path_with_symlink_handling() {
 # to shield from `set -Eeuo pipefail`'s errexit; with `pipefail` set, any
 # stage failure makes the pipeline non-zero and the if-body cleans up + returns
 # 1. Caller degrades hybrid → full-walk on failure.
+#
+# v1.9.0 memoization: build_find_expr produces an identical, repo-state-independent
+# expression every call, yet hybrid invokes capture_sensitive_hashes TWICE (pre-
+# and post-spawn). Compute the expression once and reuse it for the post snapshot.
+# Safe because sensitive-patterns.list lives in the plugin install dir (outside
+# agy's --add-dir project_root in normal use); in the self-review meta case it is
+# git-tracked, so any mutation to it is independently caught by the git-status arm.
+_SENS_FIND_EXPR_CACHE=""
+_SENS_FIND_EXPR_CACHED=0
 capture_sensitive_hashes() {
   local out_file="$1" tmp_file find_expr orig_pwd
   orig_pwd=$(pwd)
   tmp_file=$(mktemp "${TMPDIR:-/tmp}/agy-sens-tmp.XXXXXX") || return 1
-  find_expr=$(build_find_expr "$_LIB_DIR/sensitive-patterns.list")
+  if [ "$_SENS_FIND_EXPR_CACHED" = "1" ]; then
+    find_expr="$_SENS_FIND_EXPR_CACHE"
+  else
+    find_expr=$(build_find_expr "$_LIB_DIR/sensitive-patterns.list")
+  fi
   if [ -z "$find_expr" ]; then
     rm -f "$tmp_file"
     return 1
   fi
+  _SENS_FIND_EXPR_CACHE="$find_expr"
+  _SENS_FIND_EXPR_CACHED=1
   # Round-impl-1 C1 (Opus + Codex review P2): cd was leaking into the caller's
   # shell because removing the outer subshell (for PIPESTATUS) also removed
   # the auto-restoration. Save+restore cwd explicitly here.
@@ -624,12 +681,54 @@ fi
 # Prepend the read-only directive so it is the FIRST thing agy reads — single
 # point of enforcement, independent of the orchestrator-supplied prompt body.
 prompt_content="${AGY_READONLY_PREAMBLE}${prompt_body}"
+# v1.9.0 model tier (attacks the dominant cost — agy's Gemini inference round-trip).
+# The orchestrator resolves AGY_MODEL env > config agy_model > default and passes
+# --model; empty → omit → agy uses its built-in default. --model reaches agy via
+# argv (no shell injection at the bridge), but we keep a cheap charset allowlist as
+# defense-in-depth so a malformed/hostile value never reaches agy. We deliberately
+# do NOT pre-call `agy models` here — that hits the backend (~3 s per run, measured),
+# which would re-add latency to the default path. set -u-safe empty-array form.
+agy_model_args=()
+if [ -n "$model" ]; then
+  case "$model" in
+    *[!A-Za-z0-9\ ._/\(\)-]*)
+      model_warn="agy bridge: --model '$model' has unsupported characters — ignoring, using agy default tier"
+      echo "$model_warn" >&2
+      echo "$model_warn" >> "${output_file}.stderr-tail" ;;
+    *)
+      agy_model_args=(--model "$model") ;;
+  esac
+fi
 rc=0
 _timeout "$timeout" "$resolved_binary" -p "$prompt_content" \
     --print-timeout "${timeout}s" \
     --add-dir "$project_root" \
+    ${agy_model_args[@]+"${agy_model_args[@]}"} \
     --dangerously-skip-permissions \
     > "$output_file" 2> "$stderr_log" || rc=$?
+
+# v1.9.0 fail-open on model rejection / agy version skew (Codex round-5 high):
+# the default pins --model "Gemini 3.5 Flash (High)", but an OLDER agy without the
+# --model flag, or a FUTURE agy that renamed the tier, would otherwise fail → agy
+# dropped from synthesis by default (a regression vs v1.8.1, where agy always ran
+# with no --model). If agy was given --model and failed for a NON-timeout, NON-auth
+# reason (the signature of an unsupported flag/tier), retry ONCE without --model so
+# the 4th reviewer still participates with agy's own default tier. Timeout (124) and
+# auth failures are NOT retried (re-running cannot help and would waste a window).
+# The retry runs before the post-spawn fingerprint, so any mutation by either attempt
+# is still captured by the pre/post comparison.
+if [ "$rc" -ne 0 ] && [ "${#agy_model_args[@]}" -gt 0 ] && [ "$rc" -ne 124 ] \
+   && ! grep -qE "$AGY_AUTH_REGEX" "$stderr_log"; then
+  retry_warn="agy bridge: agy failed with --model '$model' (rc=$rc) — retrying once without --model (default tier; likely agy version/tier skew)"
+  echo "$retry_warn" >&2
+  echo "$retry_warn" >> "${output_file}.stderr-tail"
+  rc=0
+  _timeout "$timeout" "$resolved_binary" -p "$prompt_content" \
+      --print-timeout "${timeout}s" \
+      --add-dir "$project_root" \
+      --dangerously-skip-permissions \
+      > "$output_file" 2> "$stderr_log" || rc=$?
+fi
 
 # ---------- mode-driven post-spawn dispatcher (v1.7.1) ----------
 case "$mode" in

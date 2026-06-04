@@ -37,14 +37,56 @@ if [ -z "$mode" ] && [ -f .deep-review/config.yaml ]; then
 fi
 mode="${mode:-hybrid}"
 
+# v1.9.0: model tier — resolved IN-SHELL, passed as a shell variable (never
+# literal-substituted). agy_model is free-form text from (possibly untrusted)
+# config, so unlike the enum-validated $mode it must be expanded as "$agy_model"
+# with a charset allowlist guard — splicing it into a command string would be a
+# shell-injection vector.
+agy_model="${AGY_MODEL:-}"
+if [ -z "${AGY_MODEL:-}" ]; then
+  if [ -f .deep-review/config.yaml ] && grep -qE '^agy_model:' .deep-review/config.yaml; then
+    raw=$(grep -E '^agy_model:' .deep-review/config.yaml | head -1 | sed -E 's/^agy_model:[[:space:]]*//')
+    case "$raw" in
+      \"*) agy_model=${raw#\"}; agy_model=${agy_model%%\"*} ;;             # double-quoted
+      *)   agy_model=${raw%%#*}; agy_model="${agy_model%"${agy_model##*[![:space:]]}"}" ;;  # unquoted scalar
+    esac
+    # (single-quoted YAML values are not parsed; they trip the charset guard below
+    #  and fall back to the default — quote with " or leave unquoted.)
+  else
+    agy_model="Gemini 3.5 Flash (High)"
+  fi
+fi
+case "$agy_model" in
+  "") : ;;                                                # opt-out → omit --model
+  *[!A-Za-z0-9\ ._/\(\)-]*) agy_model="Gemini 3.5 Flash (High)" ;;   # charset guard → default
+esac
+agy_model_args=(); [ -n "$agy_model" ] && agy_model_args=(--model "$agy_model")
+
 "$CLAUDE_PLUGIN_ROOT/hooks/scripts/run-agy-reviewer.sh" \
   --binary "$agy_cli_path" \
   --project-root "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" \
   --prompt-file "$prompt_file" \
   --output "$output_file" \
   --mode "$mode" \
+  ${agy_model_args[@]+"${agy_model_args[@]}"} \
   --timeout-seconds 900
 ```
+
+## Model tier (v1.9.0)
+
+agy 의 wall-clock 비용 대부분은 **Gemini 추론 네트워크 왕복**이다 (브릿지가 아님 — 사소한 1단어 프롬프트도 ~10s, ~94%가 네트워크 대기; Go 바이너리 콜드 스타트는 ~0.05s). 리뷰는 bounded read 작업이므로 최상위 추론 티어가 필요 없다. 그래서 v1.9.0 은 `--model` 패스스루를 도입해 **빠른 Flash 티어를 기본**으로 핀한다.
+
+- **Resolution**: `AGY_MODEL` env var > `.deep-review/config.yaml` 의 `agy_model` 필드 > 빌트인 기본값 `Gemini 3.5 Flash (High)`.
+- **Config (인용/비인용 모두 허용)**:
+  ```yaml
+  agy_model: "Gemini 3.5 Flash (High)"   # 기본값 (인용 권장)
+  # agy_model: Gemini 3.1 Pro (Low)      # 비인용 스칼라도 허용 (trailing comment 제거)
+  # agy_model: ""                         # opt-out → agy 자체 기본 티어 (--model 생략)
+  ```
+- **🔒 Injection-safety (v1.9.0 Codex P1 fix)**: `agy_model` 은 free-form 값이고 신뢰할 수 없는 repo 가 config 를 ship 할 수 있으므로, orchestrator 는 enum 인 `--mode` 와 달리 model 을 **`{placeholder}` 리터럴로 치환하지 않는다**. bridge 호출과 같은 Bash 세션에서 shell 변수로 해석해 `--model "$agy_model"` 로 전개하고, charset allowlist (`[A-Za-z0-9 ._/()-]`) 를 벗어나는 값은 기본 티어로 폴백한다. bridge 도 같은 charset 가드를 defense-in-depth 로 갖는다 (`--model` 은 argv 로 전달 — bridge 자체엔 injection 없음).
+- **No `agy models` pre-call (v1.9.0 perf)**: `agy models` 는 백엔드를 쳐서 ~3s/run 이 든다. bridge 는 이를 호출하지 않는다. charset 만 통과하면 그대로 전달한다.
+- **Fail-open retry (v1.9.0, Codex round-5 high)**: 기본 핀이 항상 `--model` 을 전달하므로, **구버전 agy(`--model` 미지원)나 rename 된 티어**면 agy 가 실패해 4번째 리뷰어가 기본적으로 빠질 수 있다 (v1.8.1 회귀). 이를 막기 위해 bridge 는 `--model` 동반 실패가 **timeout(124)·auth 가 아닌** 경우 **`--model` 없이 1회 재시도**한다 → agy 가 자체 기본 티어로 참여 (`${output_file}.stderr-tail` 에 경고). timeout/auth 는 재시도해도 무의미하므로 제외. 즉 모델 핀은 속도를 얻되 버전 skew 에서도 agy 를 잃지 않는다.
+- **빈 값(`""`)**: charset 케이스의 `""` 분기 + bridge 의 `[ -n "$model" ]` → `--model` 생략 → agy 자체 기본 티어 사용.
 
 Bridge 가 자체 `_timeout` / `_sha256` shim 보유 + `set -Eeuo pipefail` 안전한 `|| rc=$?` 캡처 (R7 fixes).
 
@@ -92,6 +134,8 @@ agy 는 **mutation 과 직교** — `--add-dir` filesystem walk 으로 gitignore
 | **full-walk** | Sorted per-path fingerprints for every non-excluded file or symlink | Everything except the standard exclusion list (`./.git/`, `./node_modules/`, `./dist/`, etc.); symlink link-target swaps are detected via link target hex | ~60 s (100k files) | Strict-coverage users needing detection of user-defined gitignored paths outside the standard exclusion list |
 | **git-status** | `git status -z` + per-dirty-file SHA-256 only (no sensitive scan) | Tracked files + already-dirty rewrites; **misses** gitignored sensitive paths | ~0.1 s | Tests, debugging |
 | **off** | (no snapshot) | None | 0 | **DANGEROUS** — only when agy is known not to mutate the worktree |
+
+**Performance (v1.9.0 — hybrid fork-storm fix)**: prior to v1.9.0, `build_find_expr` rebuilt the `find` OR-chain with a per-pattern subshell/fork storm — `_normalize_pattern_line` forked `tr`+`sed`, and `_is_dir_match_opted_in` re-opened AND re-normalized the entire dir-match sidecar **for every one of the 52 patterns** — costing ~4.5 s per build and running **twice** (pre + post spawn), so hybrid never met the ~0.4 s figure in the table above (it was effectively ~9 s of pure local CPU regardless of repo size). v1.9.0 de-forks normalization to bash parameter expansion, loads the sidecar **once** per build (`_load_dir_match_set`), and **memoizes** the expression across the pre/post snapshots — measured ~4.5 s → ~0.08 s per build (~56×). Output is byte-identical (verified by sha256 against a captured golden), so coverage is unchanged; the table costs now reflect reality. This is why hybrid remains the default (fast **and** retaining gitignored-sensitive-path coverage) rather than downgrading the default to `git-status`.
 
 **Resolution chain**: `AGY_FINGERPRINT_MODE` env var > config field > built-in default `hybrid`. The orchestrator (`commands/deep-review.md`) resolves before invoking the bridge; the bridge receives the resolved value via `--mode`.
 

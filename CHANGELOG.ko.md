@@ -4,6 +4,16 @@
 
 deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)와 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
+## [1.9.0] — 2026-06-04 (agy 모델 티어 + 더 빠른 hybrid fingerprint)
+
+### 추가
+
+- agy 리뷰어 모델 티어를 `.deep-review/config.yaml` 의 `agy_model` (또는 `AGY_MODEL` env) 로 설정 가능. 기본값 `Gemini 3.5 Flash (High)` — 리뷰는 bounded read 작업이므로 더 빠른 티어. 지원하지 않는 값은 agy 기본 티어로 폴백.
+
+### 수정
+
+- agy 의 `hybrid` fingerprint 모드가 sub-second 로 빨라짐 (이전엔 리뷰마다 수 초의 불필요한 로컬 작업이 추가됐다). 기본값으로 유지하면서도 파이프라인을 느리게 하지 않는다.
+
 ## [1.8.1] — 2026-05-25 (agy read-only 강제)
 
 ### 수정

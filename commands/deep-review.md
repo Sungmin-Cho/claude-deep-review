@@ -635,6 +635,8 @@ Codex 리뷰 대상은 change_state에 따라 결정:
   - `{prompt_file}` → `/tmp/deep-review-agy-prompt.xXxXxX` (from mktemp in earlier Bash call)
   - `{output_file}` → `/tmp/deep-review-agy-output.xXxXxX` (from mktemp in earlier Bash call)
 
+  > Note: `agy_model` is NOT a `{placeholder}` — it is free-form text from (possibly untrusted) config and is resolved as a shell variable inside the bridge-invocation Bash call (see "model tier" below), so it can never be literal-substituted into the command string.
+
   **v1.7.1 mode resolution** (orchestrator owns the chain, then passes resolved value as `--mode`):
 
   ```bash
@@ -653,14 +655,46 @@ Codex 리뷰 대상은 change_state에 따라 결정:
   esac
   ```
 
+  **v1.9.0 model tier — resolve IN-SHELL inside the bridge invocation (injection-safe).**
+
+  > ⚠️ **보안 (shell injection 방지)**: `agy_model` 은 `.deep-review/config.yaml` / `AGY_MODEL` 에서 오는 **free-form 문자열**이고, 신뢰할 수 없는 repo 가 `.deep-review/config.yaml` 을 commit 해 ship 할 수 있다. enum 으로 검증되는 `--mode` 와 달리 model 은 자유 문자열이므로, **LLM 이 이 값을 `{placeholder}` 리터럴로 Bash 명령 문자열에 치환하면 shell injection** 이 된다 (예: `agy_model: '"; rm -rf ~ ; #'`). 따라서 model 은 **반드시 bridge 호출과 같은 Bash 세션 안에서 shell 변수로 해석**하고 `--model "$agy_model"` 로 **변수 전개**한다 — 절대 `{agy_model}` 리터럴로 치환하지 않는다. 1차 방어로 charset allowlist 가드를 둔다. (이는 codex focus_text 를 stdin 으로만 넘기는 §위 패턴과 동일한 원칙이다.)
+
+  agy 4번째 reviewer 는 **이 전체 블록을 하나의 `Bash({ command: '...', run_in_background: true })` 호출**로 실행한다 — 다른 reviewer(Opus/Codex)와 동일한 background 실행 계약이며, 한 Bash 호출 = 한 shell 이므로 `agy_model` / `agy_model_args` 의 변수 scope 가 bridge invocation 과 일치한다. `{agy_cli_path}` / `{project_root}` / `{prompt_file}` / `{output_file}` / `{agy_fingerprint_mode}` 만 리터럴 치환 (신뢰된 detection/mktemp/enum 값); `agy_model` 은 **절대 리터럴 치환하지 않고** shell 변수로만 전개한다.
+
   ```
   Bash({ command: '
+  # --- agy model tier: env > config > default, resolved IN-SHELL (never literal-substituted) ---
+  # Default "Gemini 3.5 Flash (High)": review is a bounded read task, so a Flash tier
+  # cuts the dominant agy cost (Gemini inference round-trip) vs the Pro default.
+  # Config value may be double-quoted OR an unquoted scalar. (A single-quoted YAML
+  # value is intentionally NOT parsed here — it trips the charset guard below and
+  # falls back to the default with a warning; quote with " or leave unquoted.)
+  agy_model="${AGY_MODEL:-}"
+  if [ -z "${AGY_MODEL:-}" ]; then
+    if [ -f .deep-review/config.yaml ] && grep -qE "^agy_model:" .deep-review/config.yaml; then
+      raw=$(grep -E "^agy_model:" .deep-review/config.yaml | head -1 | sed -E "s/^agy_model:[[:space:]]*//")
+      case "$raw" in
+        \"*) agy_model=${raw#\"}; agy_model=${agy_model%%\"*} ;;                            # double-quoted
+        *)   agy_model=${raw%%#*}; agy_model="${agy_model%"${agy_model##*[![:space:]]}"}" ;;  # unquoted scalar (Opus #2)
+      esac
+    else
+      agy_model="Gemini 3.5 Flash (High)"
+    fi
+  fi
+  # charset allowlist (injection defense + garbage guard): letters digits space . _ - ( ) /
+  case "$agy_model" in
+    "") : ;;
+    *[!A-Za-z0-9\ ._/\(\)-]*) echo "WARN agy_model has unsupported characters - using built-in default" >&2; agy_model="Gemini 3.5 Flash (High)" ;;
+  esac
+  # Build argv so an empty model omits --model entirely (set -u-safe empty-array form).
+  agy_model_args=(); [ -n "$agy_model" ] && agy_model_args=(--model "$agy_model")
   "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-agy-reviewer.sh" \
     --binary "{agy_cli_path}" \
     --project-root "{project_root}" \
     --prompt-file "{prompt_file}" \
     --output "{output_file}" \
     --mode "{agy_fingerprint_mode}" \
+    ${agy_model_args[@]+"${agy_model_args[@]}"} \
     --timeout-seconds 900
   ', run_in_background: true })
   ```
@@ -668,6 +702,8 @@ Codex 리뷰 대상은 change_state에 따라 결정:
   Orchestrator passes `--binary {agy_cli_path}` (Stage 1 detection result) for deterministic binding independent of subsequent `$PATH` mutations. Bridge's internal resolution (`--binary` → `$AGY_BINARY` → `command -v agy`) only activates if `--binary` was not passed (e.g., direct CLI tests).
 
   Orchestrator passes `--mode {agy_fingerprint_mode}` (resolved chain above). The env-var slot (`AGY_FINGERPRINT_MODE`) lets CI pin a mode without per-developer config edits even though `.deep-review/config.yaml` is `.gitignore`d.
+
+  `agy_model` resolution: `AGY_MODEL` env > `.deep-review/config.yaml` `agy_model` (double-quoted OR unquoted scalar — a single-quoted value is not parsed and falls back to the default with a warning) > built-in default `Gemini 3.5 Flash (High)`. Empty (`agy_model: ""`) → `--model` omitted → agy uses its own default tier. The bridge does NOT pre-call `agy models` (that backend call costs ~3 s per run); a clean-but-unknown tier is passed through and, if agy rejects `--model` (older agy / renamed tier), the bridge **retries once without `--model`** so agy still participates with its own default tier — it is not silently dropped (fail-open; timeout/auth failures are not retried).
 
 여기서 `{codex_target_flag}`는:
 - clean 또는 WIP 커밋 후: `--base {review_base}`

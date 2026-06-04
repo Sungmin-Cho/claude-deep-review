@@ -4,6 +4,16 @@
 
 All notable changes to deep-review are documented here. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] — 2026-06-04 (agy model tier + faster hybrid fingerprint)
+
+### Added
+
+- agy reviewer model tier is now configurable via `agy_model` in `.deep-review/config.yaml` (or the `AGY_MODEL` env var), defaulting to `Gemini 3.5 Flash (High)` — a faster tier for the bounded read task of review. An unsupported value falls back to agy's default tier.
+
+### Fixed
+
+- agy's `hybrid` fingerprint mode is now sub-second (previously it added several seconds of redundant local work to every review), so it stays the default without slowing the pipeline.
+
 ## [1.8.1] — 2026-05-25 (agy read-only enforcement)
 
 ### Fixed

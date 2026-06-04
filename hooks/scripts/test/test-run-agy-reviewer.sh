@@ -18,6 +18,11 @@ case "${MOCK_BEHAVIOR:-success}" in
   timeout)      sleep 9999 ;;
   auth-fail)    echo "Reauthentication required" >&2; exit 1 ;;
   generic-fail) echo "internal error" >&2; exit 17 ;;
+  # v1.9.0: simulate an older agy / renamed tier — fail when --model is present,
+  # succeed (default tier) when it is absent, so the bridge's fail-open retry path is exercised.
+  reject-model)
+    for a in "$@"; do [ "$a" = "--model" ] && { echo "error: unknown flag --model" >&2; exit 3; }; done
+    printf 'ok review output (default tier)\n'; exit 0 ;;
 esac
 EOF
 chmod +x "$WORK/mock-bin/agy"
@@ -142,6 +147,154 @@ else
     echo "  ✓ Perl fallback: status=$got_status (acceptable — agy mock may have exited before alarm)"
   fi
 fi
+
+# ============================================================
+# v1.9.0 — model tier (--model charset guard + pass-through)
+# ============================================================
+echo ""
+echo "=== v1.9.0 model tier ==="
+
+# Reset args log + bridge output sidecars before EACH model-tier case. A case that
+# ABORTS during arg parsing (e.g. a stray empty argv → "Unknown arg:" exit 2) never
+# rewrites $OUT.status, so without this clear, assert_status could read a stale
+# "success" from the prior case and false-pass (Codex round-4 review P3 + adversarial).
+_mt_reset() { : > "$ARGS_LOG"; rm -f "$OUT.status" "$OUT.stderr-tail" "$OUT.mutation-warning" 2>/dev/null; }
+
+# Test M-A: a charset-clean model is passed through to agy verbatim.
+_mt_reset
+MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
+  "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
+    --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 5 \
+    --model "Gemini 3.5 Flash (High)" >/dev/null 2>&1 || true
+assert_status success
+assert_arg "--model"
+assert_arg "Gemini 3.5 Flash (High)"
+echo "  ✓ M-A: clean model passed through verbatim"
+
+# Test M-B: no --model → bridge omits the flag (agy uses its own default tier).
+_mt_reset
+MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
+  "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
+    --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 5 >/dev/null 2>&1 || true
+assert_status success
+if grep -q '^--model$' "$ARGS_LOG"; then
+  echo "FAIL: M-B — --model unexpectedly passed when no model requested" >&2; exit 1
+fi
+echo "  ✓ M-B: --model omitted when not requested"
+
+# Test M-C (security regression — Codex P1): a --model containing shell
+# metacharacters is rejected by the charset guard → flag dropped + warning, the
+# review still proceeds, and NO injection side-effect (the bridge passes argv,
+# never builds a shell string from the value).
+_mt_reset
+CANARY="${WORK}/dr-agy-inject-canary"
+rm -f "$CANARY" 2>/dev/null
+MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
+  "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
+    --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 5 \
+    --model "\"; touch ${CANARY}; #" >/dev/null 2>&1 || true
+assert_status success
+if grep -q '^--model$' "$ARGS_LOG"; then
+  echo "FAIL: M-C — shell-metacharacter --model was NOT rejected" >&2; exit 1
+fi
+[ ! -e "$CANARY" ] || { echo "FAIL: M-C — injection canary fired (shell injection!)" >&2; rm -f "$CANARY"; exit 1; }
+grep -q "unsupported characters" "$OUT.stderr-tail" \
+  || { echo "FAIL: M-C — missing charset-guard warning in stderr-tail" >&2; exit 1; }
+echo "  ✓ M-C: shell-metacharacter model rejected + warning + no injection"
+
+# Test M-D: a clean-but-unknown tier passes the charset guard and is forwarded as-is
+# (the bridge does NOT pre-call `agy models`; if agy rejects it, the fail-open retry
+# in M-F re-runs without --model so agy still participates).
+_mt_reset
+MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
+  "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
+    --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 5 \
+    --model "Bogus Model 9000" >/dev/null 2>&1 || true
+assert_status success
+assert_arg "--model"
+assert_arg "Bogus Model 9000"
+echo "  ✓ M-D: clean-but-unknown tier forwarded (no agy models pre-call)"
+
+# Test M-E: explicit empty --model "" (the documented opt-out form) → flag omitted,
+# no warning, review proceeds. Locks in the opt-out invocation form directly (M-B
+# covers the equivalent flag-absent branch, but not the literal `--model ""` form).
+_mt_reset
+MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
+  "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
+    --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 5 \
+    --model "" >/dev/null 2>&1 || true
+assert_status success
+if grep -q '^--model$' "$ARGS_LOG"; then
+  echo "FAIL: M-E — --model passed despite empty opt-out value" >&2; exit 1
+fi
+if grep -q "unsupported characters" "$OUT.stderr-tail" 2>/dev/null; then
+  echo "FAIL: M-E — empty model wrongly tripped the charset guard" >&2; exit 1
+fi
+echo "  ✓ M-E: empty --model \"\" opt-out → flag omitted, no warning"
+
+# Test M-F (fail-open retry — Codex round-5 high): when agy rejects --model (older
+# agy without the flag, or a renamed tier), the bridge retries ONCE without --model
+# so the 4th reviewer still participates with agy's default tier instead of being
+# dropped. Final argv must NOT contain --model, status=success, retry warning present.
+_mt_reset
+MOCK_BEHAVIOR=reject-model MOCK_ARGS_LOG="$ARGS_LOG" \
+  "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
+    --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 5 \
+    --model "Gemini 3.5 Flash (High)" >/dev/null 2>&1 || true
+assert_status success
+if grep -q '^--model$' "$ARGS_LOG"; then
+  echo "FAIL: M-F — retry still passed --model (should drop it on the retry)" >&2; exit 1
+fi
+grep -q "retrying once without --model" "$OUT.stderr-tail" \
+  || { echo "FAIL: M-F — missing fail-open retry warning in stderr-tail" >&2; exit 1; }
+echo "  ✓ M-F: --model rejection → retry without --model → agy participates (success)"
+
+# Test M-G: an AUTH failure with --model is NOT retried (re-running cannot fix auth);
+# status stays not_authenticated and no fail-open retry warning is emitted.
+_mt_reset
+MOCK_BEHAVIOR=auth-fail MOCK_ARGS_LOG="$ARGS_LOG" \
+  "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
+    --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 5 \
+    --model "Gemini 3.5 Flash (High)" >/dev/null 2>&1 || true
+assert_status not_authenticated
+if grep -q "retrying once without --model" "$OUT.stderr-tail" 2>/dev/null; then
+  echo "FAIL: M-G — auth failure must NOT trigger the model retry" >&2; exit 1
+fi
+echo "  ✓ M-G: auth failure with --model is not retried (stays not_authenticated)"
+
+# Test M-O1/M-O2 (orchestrator invocation form regression — Codex round-2/3): the
+# command contract in commands/deep-review.md builds an `agy_model_args` array and
+# expands it as `${agy_model_args[@]+"${agy_model_args[@]}"}` (quotes INSIDE). The
+# wrong form `"${agy_model_args[@]+${agy_model_args[@]}}"` (quotes outside) passes a
+# stray empty argv element on the opt-out path → the bridge aborts with "Unknown arg:"
+# (exit 2) and silently drops the 4th reviewer. Replicate the documented expansion
+# against the REAL bridge to lock in the safe form. M-O1 asserts the bridge rc=0 (NOT
+# masked with `|| true`) AND a freshly-cleared status, so the abort is actually caught
+# (Codex round-4 P3) — a stray empty arg would make rc=2 and fail here.
+echo "--- orchestrator invocation form (array expansion) ---"
+_mt_reset
+agy_model_args=()
+mo1_rc=0
+MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
+  "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
+    --prompt-file "$PROMPT" --output "$OUT" --mode off \
+    ${agy_model_args[@]+"${agy_model_args[@]}"} \
+    --timeout-seconds 5 >/dev/null 2>&1 || mo1_rc=$?
+[ "$mo1_rc" -eq 0 ] || { echo "FAIL: M-O1 — bridge exited $mo1_rc (stray empty argv from wrong array expansion?)" >&2; exit 1; }
+assert_status success   # empty array → ZERO extra args → bridge runs (not "Unknown arg:")
+echo "  ✓ M-O1: empty agy_model_args expansion → bridge rc=0, no stray argv"
+_mt_reset
+agy_model_args=(--model "Gemini 3.5 Flash (High)")
+MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
+  "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
+    --prompt-file "$PROMPT" --output "$OUT" --mode off \
+    ${agy_model_args[@]+"${agy_model_args[@]}"} \
+    --timeout-seconds 5 >/dev/null 2>&1 || true
+assert_status success
+assert_arg "--model"
+assert_arg "Gemini 3.5 Flash (High)"
+echo "  ✓ M-O2: populated agy_model_args expansion forwards --model"
+unset agy_model_args
 
 # ============================================================
 # §7 matrix (v1.7.1) — hybrid / full-walk / git-status / off coverage
@@ -751,6 +904,37 @@ if [ "$AGY_STATUS_T_M27" = "success" ] && [ ! -f "$OUT.mutation-warning" ]; then
   matrix_pass "T-M27: >16KB runtime-state symlink target content drift is intentionally ignored"
 else
   matrix_fail "T-M27: bad outcome (status=$AGY_STATUS_T_M27, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no))"
+fi
+
+# T-M28 (v1.9.0 fail-open retry × mutation detection): a fake agy that MUTATES a
+# tracked file then rejects --model (exit 3), and would succeed cleanly on the
+# no-model retry. The fail-open retry must NOT bypass mutation detection — the
+# pre/post fingerprint brackets BOTH attempts, so the mutation on the --model run
+# is still caught (status=mutated, agy excluded) rather than masked by the retry's
+# clean success. Guards the safety-critical retry × fingerprint interaction.
+fresh_out; make_fixture "$FIXT"
+cat > "$FAKE_AGY" <<EOF
+#!/bin/sh
+for a in "\$@"; do
+  if [ "\$a" = "--model" ]; then
+    echo "mutated-on-model-run" > "${FIXT}/README.md"
+    echo "unknown flag --model" >&2
+    exit 3
+  fi
+done
+echo "review ok (default tier)"
+exit 0
+EOF
+chmod +x "$FAKE_AGY"
+"$BRIDGE" --binary "$FAKE_AGY" --project-root "$FIXT" \
+  --prompt-file "$PROMPT" --output "$OUT" --mode hybrid \
+  --model "Gemini 3.5 Flash (High)" --timeout-seconds 30 >/dev/null 2>&1 || true
+AGY_STATUS_T_M28=$(cat "$OUT.status" 2>/dev/null || echo "missing")
+if [ "$AGY_STATUS_T_M28" = "mutated" ] && [ -f "$OUT.mutation-warning" ] \
+   && grep -q "retrying once without --model" "$OUT.stderr-tail" 2>/dev/null; then
+  matrix_pass "T-M28: fail-open retry does NOT bypass mutation detection (mutation on --model run caught)"
+else
+  matrix_fail "T-M28: bad outcome (status=$AGY_STATUS_T_M28, warning=$([ -f "$OUT.mutation-warning" ] && echo yes || echo no), retry=$(grep -q 'retrying once' "$OUT.stderr-tail" 2>/dev/null && echo yes || echo no))"
 fi
 
 echo "=========================="
