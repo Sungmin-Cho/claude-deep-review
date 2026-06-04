@@ -149,8 +149,14 @@ fi
 echo ""
 echo "=== v1.9.0 model tier ==="
 
+# Reset args log + bridge output sidecars before EACH model-tier case. A case that
+# ABORTS during arg parsing (e.g. a stray empty argv → "Unknown arg:" exit 2) never
+# rewrites $OUT.status, so without this clear, assert_status could read a stale
+# "success" from the prior case and false-pass (Codex round-4 review P3 + adversarial).
+_mt_reset() { : > "$ARGS_LOG"; rm -f "$OUT.status" "$OUT.stderr-tail" "$OUT.mutation-warning" 2>/dev/null; }
+
 # Test M-A: a charset-clean model is passed through to agy verbatim.
-> "$ARGS_LOG"
+_mt_reset
 MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
   "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
     --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 5 \
@@ -161,10 +167,11 @@ assert_arg "Gemini 3.5 Flash (High)"
 echo "  ✓ M-A: clean model passed through verbatim"
 
 # Test M-B: no --model → bridge omits the flag (agy uses its own default tier).
-> "$ARGS_LOG"
+_mt_reset
 MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
   "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
     --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 5 >/dev/null 2>&1 || true
+assert_status success
 if grep -q '^--model$' "$ARGS_LOG"; then
   echo "FAIL: M-B — --model unexpectedly passed when no model requested" >&2; exit 1
 fi
@@ -174,7 +181,7 @@ echo "  ✓ M-B: --model omitted when not requested"
 # metacharacters is rejected by the charset guard → flag dropped + warning, the
 # review still proceeds, and NO injection side-effect (the bridge passes argv,
 # never builds a shell string from the value).
-> "$ARGS_LOG"
+_mt_reset
 CANARY="${WORK}/dr-agy-inject-canary"
 rm -f "$CANARY" 2>/dev/null
 MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
@@ -193,7 +200,7 @@ echo "  ✓ M-C: shell-metacharacter model rejected + warning + no injection"
 # Test M-D: a clean-but-unknown tier passes the charset guard and is forwarded as-is
 # (the bridge does NOT pre-call `agy models`; agy itself would reject it → reviewer
 # excluded — consistent with other reviewers).
-> "$ARGS_LOG"
+_mt_reset
 MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
   "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
     --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 5 \
@@ -206,7 +213,7 @@ echo "  ✓ M-D: clean-but-unknown tier forwarded (no agy models pre-call)"
 # Test M-E: explicit empty --model "" (the documented opt-out form) → flag omitted,
 # no warning, review proceeds. Locks in the opt-out invocation form directly (M-B
 # covers the equivalent flag-absent branch, but not the literal `--model ""` form).
-> "$ARGS_LOG"
+_mt_reset
 MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
   "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
     --prompt-file "$PROMPT" --output "$OUT" --mode off --timeout-seconds 5 \
@@ -226,19 +233,23 @@ echo "  ✓ M-E: empty --model \"\" opt-out → flag omitted, no warning"
 # wrong form `"${agy_model_args[@]+${agy_model_args[@]}}"` (quotes outside) passes a
 # stray empty argv element on the opt-out path → the bridge aborts with "Unknown arg:"
 # (exit 2) and silently drops the 4th reviewer. Replicate the documented expansion
-# against the REAL bridge to lock in the safe form.
+# against the REAL bridge to lock in the safe form. M-O1 asserts the bridge rc=0 (NOT
+# masked with `|| true`) AND a freshly-cleared status, so the abort is actually caught
+# (Codex round-4 P3) — a stray empty arg would make rc=2 and fail here.
 echo "--- orchestrator invocation form (array expansion) ---"
+_mt_reset
 agy_model_args=()
-> "$ARGS_LOG"
+mo1_rc=0
 MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
   "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
     --prompt-file "$PROMPT" --output "$OUT" --mode off \
     ${agy_model_args[@]+"${agy_model_args[@]}"} \
-    --timeout-seconds 5 >/dev/null 2>&1 || true
+    --timeout-seconds 5 >/dev/null 2>&1 || mo1_rc=$?
+[ "$mo1_rc" -eq 0 ] || { echo "FAIL: M-O1 — bridge exited $mo1_rc (stray empty argv from wrong array expansion?)" >&2; exit 1; }
 assert_status success   # empty array → ZERO extra args → bridge runs (not "Unknown arg:")
-echo "  ✓ M-O1: empty agy_model_args expansion passes no stray argv (bridge not aborted)"
+echo "  ✓ M-O1: empty agy_model_args expansion → bridge rc=0, no stray argv"
+_mt_reset
 agy_model_args=(--model "Gemini 3.5 Flash (High)")
-> "$ARGS_LOG"
 MOCK_BEHAVIOR=success MOCK_ARGS_LOG="$ARGS_LOG" \
   "$BRIDGE" --binary "$WORK/mock-bin/agy" --project-root "$REPO" \
     --prompt-file "$PROMPT" --output "$OUT" --mode off \
