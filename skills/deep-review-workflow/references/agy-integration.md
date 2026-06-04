@@ -47,10 +47,11 @@ if [ -z "${AGY_MODEL:-}" ]; then
   if [ -f .deep-review/config.yaml ] && grep -qE '^agy_model:' .deep-review/config.yaml; then
     raw=$(grep -E '^agy_model:' .deep-review/config.yaml | head -1 | sed -E 's/^agy_model:[[:space:]]*//')
     case "$raw" in
-      '"'*) agy_model=${raw#\"}; agy_model=${agy_model%%\"*} ;;            # double-quoted
-      "'"*) agy_model=${raw#\'}; agy_model=${agy_model%%\'*} ;;            # single-quoted
-      *)    agy_model=${raw%%#*}; agy_model="${agy_model%"${agy_model##*[![:space:]]}"}" ;;  # unquoted scalar
+      \"*) agy_model=${raw#\"}; agy_model=${agy_model%%\"*} ;;             # double-quoted
+      *)   agy_model=${raw%%#*}; agy_model="${agy_model%"${agy_model##*[![:space:]]}"}" ;;  # unquoted scalar
     esac
+    # (single-quoted YAML values are not parsed; they trip the charset guard below
+    #  and fall back to the default — quote with " or leave unquoted.)
   else
     agy_model="Gemini 3.5 Flash (High)"
   fi
