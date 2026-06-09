@@ -4,6 +4,28 @@
 
 deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)와 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
+## [1.10.0] — 2026-06-09
+
+### 추가
+
+- **합성 리뷰어 플래그** — `/deep-review` · `/deep-review-loop` 에 `--ultracode`(멀티에이전트 Claude fan-out, 5차원 샤드 → 단일 "Claude(ultracode)" 보이스), `--codex`(Codex 2-way 강제), `--no-codex` / `--no-opus` / `--no-agy`, 슈가 `--codex-only`(= `--codex --no-opus --no-agy`) 추가. 무플래그 = 기존 동작 100% 유지.
+- **하이브리드 fan-out** — Claude Code + Workflow 도구 가용 시 `--ultracode`가 `Workflow` 도구(차원 fan-out + 적대 verify)를 사용하며, 그 외 런타임은 `run-claude-reviewer.sh` 브리지 병렬 에이전트로 폴백. 신규 `skills/deep-review-workflow/references/ultracode-integration.md` 가 collapse 알고리즘 단일 출처.
+- **deep-review-loop 통합 캐던** — `--ultracode --codex` 루프는 ultracode 1회(라운드 1) + codex 매 라운드. `--codex-only` 는 외부 ultracode + codex 루프 역할분담에 활용. 2단 전달 규약 + `ultracode_consumed` 기반 codex-down 분기.
+
+### 변경
+
+- Phase 6 `source` enum 에 `Opus (ultracode)` / `opus-ultracode` 추가.
+- Review Mode 라벨 확장(ultracode / agy-only / fallback 변형); `opus_status` fan-out collapse 규칙(≥1 샤드 = success, 쿼럼 = 3).
+- findings_signature line 버킷을 고정 버킷 `floor(line/7)` 으로 통일하여 결정적 정체 감지.
+
+### 보안
+
+- `--no-agy` 가 Stage 3.5 민감파일 ack 게이트를 short-circuit — agy 제외 시 민감파일 스캔 프롬프트를 표시하지 않으며 `agy_sensitive_acked_fingerprint` 도 변경하지 않음.
+
+### 보류 / 알려진 한계
+
+- ARCH-6(path-B verify-equivalence 라벨), ARCH-8(비-Claude 직렬 브리지 partial-failure 예산), SEC-3(토큰 비용 가드레일: Y/N 프롬프트 + verify 패널 top-K 상한)은 후속 릴리스에서 처리 예정.
+
 ## [1.9.0] — 2026-06-04 (agy 모델 티어 + 더 빠른 hybrid fingerprint)
 
 ### 추가
