@@ -1,7 +1,7 @@
 ---
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, Skill, AskUserQuestion
-description: 현재 변경사항을 독립 에이전트로 리뷰합니다. init으로 규칙 초기화, --contract로 Sprint Contract 기반 검증, --entropy로 엔트로피 스캔, --respond로 리뷰 피드백 대응.
-argument-hint: "[init] [--contract [SLICE-NNN]] [--entropy] [--respond (REPORT_PATH | --source=pr [--pr=NNN])]"
+description: 현재 변경사항을 독립 에이전트로 리뷰합니다. init으로 규칙 초기화, --contract로 Sprint Contract 기반 검증, --entropy로 엔트로피 스캔, --respond로 리뷰 피드백 대응. --ultracode(멀티에이전트 Claude 리뷰)·--codex(Codex 2-way)·--codex-only(Codex만) 등 합성 플래그로 리뷰어 구성을 조절.
+argument-hint: "[init] [--contract [SLICE-NNN]] [--entropy] [--ultracode] [--codex|--no-codex] [--no-opus] [--no-agy] [--codex-only] [--respond (REPORT_PATH | --source=pr [--pr=NNN])]"
 ---
 
 # /deep-review — Independent Code Review
@@ -17,6 +17,21 @@ argument-hint: "[init] [--contract [SLICE-NNN]] [--entropy] [--respond (REPORT_P
 - `--qa` → 안내 메시지 후 즉시 종료:
   "App QA(`--qa`)는 향후 릴리스에서 지원 예정입니다. 현재 `.deep-review/config.yaml`의 `app_qa.*` 필드는 예약 스키마로만 유지되며 동작하지 않습니다."
 - `--contract` / `--entropy` / 인수 없음 → "리뷰 모드"로 진행
+
+## 0.5 플래그 파싱 & 검증 (reviewer 구성 플래그, 순서 고정)
+
+리뷰 모드에서 reviewer 구성 플래그를 파싱·검증한다. **반드시 다음 순서** (순서가 결과를 바꾼다):
+
+1. **슈가 전개 (먼저)**: `--codex-only` → `--codex --no-opus --no-agy` 로 전개한다. 검증을 raw 토큰에 먼저 하면 `--ultracode --codex-only` 가 모순 검사를 통과해버려 ultracode 가 무음 드롭된다 — 전개를 검증보다 먼저 한다.
+2. **모순 검증 (전개된 집합 기준)**:
+   - `--ultracode` + `--no-opus` → **모순 에러**(즉시 종료): "`--no-opus`는 Claude 리뷰어를 끄고 `--ultracode`는 업그레이드합니다. 하나만 쓰세요." (전개 후 기준이므로 `--ultracode --codex-only` 도 동일 에러)
+   - `--codex` + `--no-codex` → 모순 에러(동일 패턴).
+3. **플래그/위치 인자 분리**: 새 플래그는 모두 `--` 접두. `--contract` 의 선택 인자는 **다음 토큰이 `SLICE-[0-9]+` 패턴일 때만** 소비(아니면 bare `--contract`), `--respond` 의 `REPORT_PATH` 는 **존재하는 파일 경로일 때만** 소비. 따라서 `--contract --codex` / `--respond --codex` 에서 `--codex` 가 SLICE id·REPORT_PATH 로 오소비되지 않는다.
+
+검증 통과 후:
+- **`--respond` + reviewer 플래그 조합**: `--respond` 는 대응 모드라 reviewer 플래그가 무의미 → **하드 에러 아님**, 1줄 안내만: "reviewer 구성 플래그는 리뷰 모드 전용 — `--respond` 에서는 무시됩니다." (기존 `--qa` 안내 패턴과 동일.)
+
+이 절은 runtime 동작의 문서화다 — 실제 실행은 Claude Code 가 본 markdown 의도를 읽어 수행한다.
 
 ## Prerequisites
 
