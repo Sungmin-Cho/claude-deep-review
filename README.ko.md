@@ -38,12 +38,22 @@ codex plugin install deep-review
 | 커맨드 | 설명 |
 |---|---|
 | `/deep-review` | 독립 Opus 서브에이전트로 현재 변경사항 리뷰 (Codex/agy 존재 시 교차 모델) |
+| `/deep-review --ultracode [--codex]` | 멀티에이전트 Claude fan-out (하이브리드: Workflow 도구 가용 시 우선, 그 외 병렬 `code-reviewer` 에이전트) — 단일 "Claude(ultracode)" 보이스로 collapse + 선택적 Codex 2-way |
+| `/deep-review --codex-only` | 내부 Claude 리뷰어를 끄고 Codex 2-way 만 실행 (외부 `--ultracode` 세션과 역할분담) |
 | `/deep-review --contract [SLICE-NNN]` | Sprint Contract 기반 구조적 검증 |
 | `/deep-review --entropy` | 엔트로피 스캔 (중복, 패턴 드리프트, 네이밍 불일치) |
 | `/deep-review --respond [REPORT_PATH]` | 증거 기반 프로토콜로 리뷰 피드백 대응 |
 | `/deep-review --respond --source=pr` | GitHub PR 리뷰 코멘트에 대응 |
 | `/deep-review-loop [--max=N]` | 리뷰 ↔ 대응을 수렴까지 자동 반복 (`user-invocable` 스킬이기도 함 — Codex CLI / SDK 진입용 `Skill({ skill: "deep-review:deep-review-loop" })`) |
+| `/deep-review-loop --ultracode --codex` | ultracode 1회(라운드 1) + codex 매 라운드 통합 루프 |
 | `/deep-review init` | 프로젝트별 리뷰 규칙 대화형 초기화 |
+
+**합성 리뷰어 플래그** (v1.10.0):
+
+- `--ultracode` — Claude 쪽 리뷰를 멀티에이전트 fan-out 으로 수행 (하이브리드: Workflow 도구 가용 시 우선, 그 외 병렬 `code-reviewer` 에이전트), 단일 "Claude(ultracode)" 보이스로 collapse.
+- `--codex` / `--no-codex` / `--no-opus` / `--no-agy`, 슈가 `--codex-only`(= `--codex --no-opus --no-agy`).
+- `/deep-review-loop --ultracode --codex`: ultracode 1회(라운드 1) + codex 매 라운드.
+- 무플래그 시 기존 동작 100% 유지.
 
 ## 리뷰 파이프라인
 

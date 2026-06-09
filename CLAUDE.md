@@ -251,12 +251,15 @@ Per-call value is 900s (set at the top of `mutation-protocol.sh`); per-review lo
 | Entry | Kind | Description |
 |---|---|---|
 | `/deep-review` | command | Review current changes with the Opus subagent (Codex + agy optional, up to 4-way) |
+| `/deep-review --ultracode [--codex]` | command | Multi-agent Claude fan-out (hybrid) + optional Codex 2-way |
+| `/deep-review --codex-only` | command | Disable internal Claude reviewer, run Codex 2-way only (pairs with external ultracode session) |
 | `/deep-review --contract [SLICE-NNN]` | command | Sprint Contract-based verification |
 | `/deep-review --entropy` | command | Entropy scan → `.deep-review/entropy-log.jsonl` |
 | `/deep-review --respond <REPORT_PATH>` | command | 6-phase response protocol on a saved report |
 | `/deep-review --respond --source=pr --pr=<N>` | command | Collect GitHub PR comments via `gh api` and respond |
 | `/deep-review init` | command | Interactive setup of `.deep-review/rules.yaml` + `.gitignore` |
 | `/deep-review-loop [--max=N]` *(v1.6.0+)* | **skill** (`skills/deep-review-loop/`) | Auto-iterate review ↔ respond until convergence. Migrated from a slash command to a `user-invocable: true` skill so Codex CLI and other SDK consumers can invoke it via `Skill({ skill: "deep-review:deep-review-loop" })` — slash entry `/deep-review-loop` keeps working in Claude Code. |
+| `/deep-review-loop --ultracode --codex` | **skill** | ultracode once (round 1) + codex every round integrated loop |
 
 ---
 

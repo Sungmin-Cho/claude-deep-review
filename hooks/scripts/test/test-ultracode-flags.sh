@@ -108,6 +108,12 @@ t_loop(){
   assert_absent L9 "$LOOP" '\-\-contract.*만 전달' "F3: stale forward-only rule removed"
 }
 
+t_docs(){
+  assert_grep D1 "$ROOT/README.md" '\-\-ultracode' "README mentions --ultracode"
+  assert_grep D2 "$ROOT/README.ko.md" '\-\-ultracode' "README.ko mentions --ultracode"
+  assert_grep D3 "$CLAUDEMD" '\-\-ultracode' "CLAUDE.md slash table mentions --ultracode"
+}
+
 t_version(){
   assert_grep V1 "$ROOT/.claude-plugin/plugin.json" '"version": *"1\.10\.0"' "claude plugin 1.10.0"
   assert_grep V2 "$ROOT/.codex-plugin/plugin.json" '"version": *"1\.10\.0"' "codex plugin 1.10.0"
@@ -126,6 +132,7 @@ t_reportfmt
 t_codexref
 t_source_enum
 t_loop
+t_docs
 t_version
 echo "----"
 echo "ultracode-flags: PASS=$PASS FAIL=$FAIL"
