@@ -173,7 +173,9 @@ diff에서 제외: 바이너리, vendor/, node_modules/, *.min.js, *.generated.*
 
 ### 2.1 세션 컨텍스트 기반 대상 확장 (Case 3 전용)
 
-`codex_plugin=true AND is_git=true` 인 경우, 기존 수집으로 산출된 `opus_target_git` 을 아래 절차로 확장 (spec §3.1):
+`codex_plugin=true AND is_git=true AND codex_included`(= `--no-codex` 아님) 인 경우, 기존 수집으로 산출된 `opus_target_git` 을 아래 절차로 확장 (spec §3.1).
+
+> **SEC-CODEX-1**: `--no-codex`(또는 `codex_included=false`) 면 codex 가 실행되지 않으므로 §2.1 세션 추론 + §2.2 갭 감지 + §3.0 mutation/노출 UX 를 **전부 건너뛴다** (mutation lock 미획득·`git add -f -N` 미수행). 이는 SEC-1 의 agy 게이트 short-circuit 과 대칭이다.
 
 1. Claude 가 현재 세션의 tool_use 이력을 반추하여 **Edit / Write tool 의 file_path 인자**를 수집. **Read 와 Bash 는 제외** (엄격 규칙 — Read 는 참조 용도 불확실, Bash 는 heuristic 신뢰 불가).
 2. 각 후보 파일에 대해 `git check-ignore --quiet <file>` 실행.
@@ -244,7 +246,7 @@ PY
 
 ### 3.5 agy sensitive-file acknowledgment (pre-spawn gate, fingerprint-based)
 
-**SEC-1 — `agy_included` 로 게이팅**: §0.5/§2.3 의 `agy_included`(= `agy_cli && agy_enabled && NOT --no-agy && NOT AGY_USER_DECLINED_THIS_RUN`)를 이 게이트 **이전에** 계산하고, `agy_included=false` 면 본 Stage 3.5(find/scan 포함)를 **건너뛴다**. 특히 `--no-agy`(또는 `--codex-only` 전개)면 민감파일 스캔·프롬프트를 수행하지 않으며 `agy_sensitive_acked_fingerprint` 도 **변경하지 않는다**. (기존: raw `agy_cli && agy_enabled` 만 보면 `--no-agy` 로 agy 를 제외해도 민감파일 노출 프롬프트가 떴음.)
+**SEC-1 — `agy_included` 로 게이팅**: §4 리뷰어 열거의 `agy_included`(= `agy_cli && agy_enabled && NOT --no-agy && NOT AGY_USER_DECLINED_THIS_RUN`)를 이 게이트 **이전에** 계산하고, `agy_included=false` 면 본 Stage 3.5(find/scan 포함)를 **건너뛴다**. 특히 `--no-agy`(또는 `--codex-only` 전개)면 민감파일 스캔·프롬프트를 수행하지 않으며 `agy_sensitive_acked_fingerprint` 도 **변경하지 않는다**. (기존: raw `agy_cli && agy_enabled` 만 보면 `--no-agy` 로 agy 를 제외해도 민감파일 노출 프롬프트가 떴음.)
 
 If `agy_included=true`: run this gate before spawning any reviewer. Otherwise: skip.
 
@@ -421,7 +423,7 @@ reviewers_planned =  (claude_reviewer != none ? ["opus"] : [])
 N_planned = len(reviewers_planned)
 ```
 
-**CONS-3 — 단발 N=0 가드**: 단발 `/deep-review --no-opus`(codex·agy 모두 부재)면 `N_planned = 0`. 이 경우 **검증 시점 에러**로 즉시 종료: "`--no-opus`/`--codex-only` 는 codex 또는 agy 가 필요합니다 — 감지된 리뷰어가 없습니다." (루프의 §3.A 운영오류 중단과 대칭. Review Mode 라벨에 N=0 행은 두지 않는다.)
+**CONS-3 — 단발 N=0 가드**: 단발 `/deep-review --no-opus`(codex·agy 모두 부재)면 `N_planned = 0`. 이 경우 **리뷰어 열거 시점(환경 감지 후) 에러**로 즉시 종료: "`--no-opus`/`--codex-only` 는 codex 또는 agy 가 필요합니다 — 감지된 리뷰어가 없습니다." (루프의 §3.A 운영오류 중단과 대칭. Review Mode 라벨에 N=0 행은 두지 않는다.) **주의(SEC-CONS3-1)**: `N_planned` 는 flag/감지 기준이라 `--codex-only` 처럼 codex 가 flag 로 강제됐지만 실제 preflight 에서 실패하면 `N_planned>0` 이라도 실행 리뷰어가 0 이 될 수 있다 — 이 런타임 케이스는 Stage 4.3.1 의 `N_actual` 가드가 잡는다.
 
 **BC-3 — 재작성 보존 의무**: 무플래그 `else` 분기는 기존처럼 `["opus"]` 를 산출하고, agy 절의 `[ -z "${AGY_USER_DECLINED_THIS_RUN:-}" ]` conjunct 는 리터럴로 유지한다(Stage 3.5 per-run decline 회귀 방지).
 
@@ -438,13 +440,15 @@ N_planned = len(reviewers_planned)
 | 2 | "2개 리뷰어(<composition>)를 백그라운드에서 실행합니다. 완료되면 결과를 합성하여 알려드리겠습니다." |
 | 1 | "Opus 리뷰를 백그라운드에서 실행합니다. 완료되면 결과를 알려드리겠습니다." |
 
-**Claude 쪽 리뷰어 — `claude_reviewer` 값에 따라 분기 (§0.5/§2.3):**
+**Claude 쪽 리뷰어 — `claude_reviewer` 값에 따라 분기 (§4 리뷰어 열거):**
 
-- `single-opus` (기본) → 아래 기존 단일 Opus 경로(Agent tool / CLI bridge) 그대로.
-- `ultracode-fanout` (`--ultracode`) → `references/ultracode-integration.md` 의 하이브리드 fan-out 을 수행한다(5 차원 샤드 → 단일 "Claude(ultracode)" 보이스). **순서 계약(ARCH-1)**: 먼저 codex/agy 백그라운드 잡을 spawn 한 뒤 ultracode 를 호출하고, Stage 4 진입 전 ultracode 결과 + 모든 codex/agy 완료를 join 한다. ultracode 보이스는 `reviewers_planned` 의 단일 'opus' entry 를 대체한다.
-- `none` (`--no-opus`/`--codex-only`) → Claude 리뷰어 미spawn. (단발 N=0 은 §0.5 에서 이미 차단.)
+- `single-opus` (기본) → 아래 "Claude Opus reviewer" 단일 Opus 경로(Agent tool / CLI bridge) 그대로.
+- `ultracode-fanout` (`--ultracode`) → `references/ultracode-integration.md` 의 하이브리드 fan-out 을 수행한다(5 차원 샤드 → 단일 "Claude(ultracode)" 보이스). **순서 계약(ARCH-1)**: 먼저 codex/agy 백그라운드 잡을 spawn 한 뒤 ultracode 를 호출하고, Stage 4 진입 전 ultracode 결과 + 모든 codex/agy 완료를 join 한다. ultracode 보이스는 `reviewers_planned` 의 단일 'opus' entry 를 대체한다. **아래 "Claude Opus reviewer" 블록은 수행하지 않는다.**
+- `none` (`--no-opus`/`--codex-only`) → Claude 리뷰어 미spawn. **아래 "Claude Opus reviewer" 블록은 수행하지 않는다.** (단발 N=0 은 §4 CONS-3 가드 + Stage 4.3.1 N_actual 가드에서 차단.)
 
-**Claude Opus reviewer (항상 시도):**
+**Claude Opus reviewer (`claude_reviewer == single-opus` 일 때만):**
+
+> 이 블록은 `claude_reviewer == single-opus` 인 경우에만 적용한다. `ultracode-fanout` 은 위 분기대로 `ultracode-integration.md` 를 따르고, `none` 은 Claude 리뷰어를 건너뛴다.
 
 동일한 reviewer prompt를 런타임별로 다른 실행 경로에 전달한다. prompt에 포함: diff 내용, rules.yaml (있으면), fitness.json (있으면), health_report (있으면), contract (있으면).
 
@@ -867,7 +871,9 @@ AGY_EXCLUDE_FROM_SYNTHESIS=0
 
 이는 deterministic — synthesis 단계에서 AskUserQuestion 없음. (R5 C-R5 / R7 §4.3.1 fix — async run_in_background 패러다임과 충돌 회피.)
 
-**ultracode 단일 보이스 & `opus_status` collapse (CONS-10):** `claude_reviewer = ultracode-fanout` 이면 5 샤드 findings 를 `ultracode-integration.md §4` 규칙으로 1건의 "Claude(ultracode)" 보이스로 collapse 한 뒤 cross-model N-way 매트릭스에 **Anthropic 한 표**로 넣는다(샤드 개별 투표 금지). degraded-mode 마커가 의존하는 `opus_status` 는 샤드 status 를 다음으로 collapse: **`success` iff ≥1 샤드 성공, `partial` iff 1≤성공<쿼럼(=3), `failed` iff 0 성공.** degraded 마커는 `opus_status != success` 일 때 발동(기존 결정성 유지).
+**N_actual == 0 런타임 가드 (SPEC-3 / SEC-CONS3-1):** `claude_reviewer == none`(`--no-opus`/`--codex-only`) 인데 실제로 완료된 외부 reviewer 가 0개(codex/agy 가 전부 미설치·인증실패·timeout·실패)면 — `N_planned` 는 flag/감지 기준이라 통과했더라도 — **빈 리포트로 APPROVE/CONCERN 을 내지 말고** CONS-3 식 운영 에러로 중단한다: "리뷰어가 0개 실행됨 — codex/agy 가 필요하지만 실행에 실패했습니다. 인증/설치를 확인하세요." (parse·열거 시점의 `N_planned` 가드(§4 CONS-3)와 달리, 본 가드는 preflight 이후 **실제 실행 결과**(`N_actual`) 기준이다.)
+
+**ultracode 단일 보이스 & `opus_status` collapse (CONS-10):** `claude_reviewer = ultracode-fanout` 이면 5 샤드 findings 를 `ultracode-integration.md §4` 규칙으로 1건의 "Claude(ultracode)" 보이스로 collapse 한 뒤 cross-model N-way 매트릭스에 **Anthropic 한 표**로 넣는다(샤드 개별 투표 금지). degraded-mode 마커가 의존하는 `opus_status` 는 샤드 성공 수 K 를 **disjoint quorum 밴드**(우선순위 failed→partial→success)로 collapse 한다: **`failed` iff K=0; `partial` iff 1 ≤ K < 쿼럼(=3); `success` iff K ≥ 쿼럼(=3).** 따라서 degraded 마커(`opus_status != success`)는 **K<3 (쿼럼 미달)** 일 때 발동한다(단일 Opus 와 동등 이상 안전성 유지). 정의 단일 출처는 `ultracode-integration.md §2(B)`.
 
 **Review Mode 라벨(v1.10.0):**
 - `--ultracode` + codex: `{N}-way Cross-Model — Claude=ultracode(5-lens, verified) + Codex 2-way`

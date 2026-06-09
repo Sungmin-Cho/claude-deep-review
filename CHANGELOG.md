@@ -15,7 +15,7 @@ All notable changes to deep-review are documented here. Follows [Keep a Changelo
 ### Changed
 
 - Phase 6 `source` enum extended with `Opus (ultracode)` / `opus-ultracode`.
-- Review Mode labels expanded (ultracode / agy-only / fallback variants); `opus_status` fan-out collapse rule (≥1 shard = success, quorum = 3).
+- Review Mode labels expanded (ultracode / agy-only / fallback variants); `opus_status` fan-out collapse rule — disjoint quorum bands (failed=0, partial=1–2, success≥3; degraded marker fires below quorum).
 - findings_signature line bucket unified to fixed bucket `floor(line/7)` for deterministic stagnation detection.
 
 ### Security

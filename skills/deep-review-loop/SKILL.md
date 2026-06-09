@@ -33,7 +33,7 @@ user-invocable: true
    --respond / init / --qa 가 필요하면 /deep-review 를 직접 호출하세요."
 ```
 
-신규 reviewer 구성 플래그(`--ultracode` / `--codex` / `--no-codex` / `--no-opus` / `--no-agy` / `--codex-only`)는 **수용**한다. 단, 매 라운드 `/deep-review` 전달은 "그대로 전달"이 아니라 §2 의 **2단 전달 규약**으로 라운드별 파생한다. `--codex-only` 는 §0.5 규약대로 `--codex --no-opus --no-agy` 로 전개한 뒤 다룬다.
+신규 reviewer 구성 플래그(`--ultracode` / `--codex` / `--no-codex` / `--no-opus` / `--no-agy` / `--codex-only`)는 **수용**한다. 단, 매 라운드 `/deep-review` 전달은 "그대로 전달"이 아니라 **§2.0 의 2단 전달 규약**으로 라운드별 파생한다. `--codex-only` 는 commands/deep-review.md §0.5 규약대로 `--codex --no-opus --no-agy` 로 전개한 뒤 다룬다.
 
 ## 1. 루프 진입 안내
 
@@ -55,17 +55,20 @@ user-invocable: true
 
 ### 2.0 reviewer 플래그 전달 & ultracode 캐던 (v1.10.0)
 
-**ultracode 1회 + codex 매 라운드.** loop 는 매 라운드 `/deep-review` 인자를 **파생**한다("그대로 전달" 아님):
+**ultracode 1회 + codex 매 라운드.** loop 는 매 라운드 `/deep-review` 인자를 **파생**한다("그대로 전달" 아님). 본 §2.0 이 단일 출처(SSOT)다.
 
 - **never-forward 집합**: `{--max, --respond, init, --qa}` — 절대 전달 안 함(loop 전용).
-- **라운드 1**: 사용자 reviewer 플래그(`--ultracode`/`--codex`/`--no-codex`/`--no-opus`/`--no-agy`) + `--contract`/`--entropy` 를 전달. 라운드 1 완료 후 `ultracode_consumed = true` (사용자가 `--ultracode` 를 줬을 때).
-- **라운드 2+**: 전달 집합에서 **`--ultracode` 토큰을 제거**하고 `--no-opus`(+`--codex`)를 주입한다. `--ultracode` 를 제거하지 않으면 `--ultracode`+`--no-opus` 가 §0.5 모순 에러로 루프가 abort 된다(LOOP-3). codex 루프 동기에 맞춰 `--codex` 유지 + **`--no-agy` 도 주입**(agy 는 라운드 1만 — CONS-4). R2+ 에서 `--no-agy` 주입으로 agy 오버헤드 없이 codex 교차검증만 수행한다.
+- **라운드 1**: 사용자 reviewer 플래그(`--ultracode`/`--codex`/`--no-codex`/`--no-opus`/`--no-agy`; `--codex-only` 는 commands/deep-review.md §0.5 에서 `--codex --no-opus --no-agy` 로 전개된 형태) + `--contract`/`--entropy` 를 전달. 라운드 1 완료 후, **사용자가 `--ultracode` 를 줬을 때만** `ultracode_consumed = true`.
+- **라운드 2+ — `ultracode_consumed` 로 분기 (RLC-1/REG-1: 무조건 주입 금지)**:
+  - **`ultracode_consumed == true`** (통합 `--ultracode …` 루프): 전달 집합에서 **`--ultracode` 토큰을 제거**하고 `--no-opus` + `--no-agy` 를 주입(`--codex` 유지). → ultracode 는 라운드 1만, 이후는 codex 전용 재검증("ultracode 1회 + codex 루프"). `--ultracode` 를 제거하지 않으면 `--ultracode`+`--no-opus` 가 commands/deep-review.md §0.5 모순 에러로 루프가 abort 된다(LOOP-3).
+  - **`ultracode_consumed == false`** (plain `/deep-review-loop`, `--codex`, `--codex-only`, `--no-opus` 등 — `--ultracode` 미지정): 사용자 R1 reviewer 플래그를 **그대로 유지**(loop 전용만 제거). **`--no-opus`/`--no-agy` 를 주입하지 않는다.** → plain 루프 = 매 라운드 single-opus + auto codex/agy(v1.10.0 이전과 동일), `--codex` 루프 = 매 라운드 opus+codex, `--codex-only` 루프 = 매 라운드 codex-only. (이전 버전 default-loop 회귀 방지 — RLC-1/REG-1.)
 
-이 2단 전달 규약이 v1.10.0 이전의 단순 argument 전달 규칙을 **대체**한다. 본 §2.0 이 단일 출처(SSOT)이다.
+이 2단 전달 규약이 v1.10.0 이전의 단순 argument 전달 규칙(구 §2.1 step 2)을 **대체**한다.
 
-**codex-unavailable 분기 (LOOP-1)** — 라운드 2+ 에서 codex 불가(미설치/timeout/auth) 시 `ultracode_consumed` 로 판별:
-- `ultracode_consumed == true` (통합 `--ultracode --codex` 루프, loop 가 `--no-opus` 주입) → 그 라운드만 `--no-opus` 빼고 **단일 Opus 폴백**(리뷰어 ≥1 보장). ultracode fan-out 으로는 폴백 안 함(비용).
-- `ultracode_consumed == false` (`--codex-only` — 사용자가 `--no-opus` 직접 지정) → **리뷰어 0 → 루프 중단(§3.A 운영오류)**. 사용자의 "Claude off" 의도 존중.
+**codex-unavailable 분기 (LOOP-1) — 라운드 종료 후 판별**: codex 가용성은 라운드 진행 중(Stage 1 preflight) 에야 알 수 있으므로, 각 라운드 리포트 Summary 의 codex 상태(`not_authenticated`/`timeout`/`failed`)를 읽어 판별한다:
+- `ultracode_consumed == true` 인데 그 라운드 codex 가 불가했다면 → 다음 라운드부터 `--no-opus` 주입을 보류(= 단일 Opus)해 **리뷰어 ≥1 보장**. ultracode fan-out 으로는 폴백 안 함(비용).
+- `ultracode_consumed == false` 의 `--codex-only` 루프에서 codex 불가 → **리뷰어 0 → 루프 중단(§3.A 운영오류)**. 사용자의 "Claude off" 의도 존중.
+- 그 외(`ultracode_consumed == false` 이고 single-opus 가 살아있는 plain/`--codex` 루프)는 codex 불가여도 Claude 리뷰어가 있으므로 정상 진행.
 
 ### 2.1 Review 단계
 

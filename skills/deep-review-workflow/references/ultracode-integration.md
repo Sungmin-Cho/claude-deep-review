@@ -31,7 +31,7 @@
 **(B) Agent fan-out 폴백 (Codex CLI/SDK 또는 Workflow 불가):**
 - Claude Code: 5개 백그라운드 `Agent(code-reviewer, run_in_background:true)`.
 - 비-Claude: `hooks/scripts/run-claude-reviewer.sh` 브리지를 차원별 호출(런타임 허용 범위 내; 직렬화/축소 샤딩 가능).
-- **partial-failure 의미(ARCH-8)**: K/5 샤드 성공(K≥1) → 성공분만 collapse 하고 보이스를 `partial` 로 라벨; 0 성공 → Claude 를 `not_attempted` 로 두고 codex/agy 로 N-way 계속.
+- **partial-failure 의미(ARCH-8) & `opus_status`(CONS-10) — 이 절이 단일 출처(SSOT)**: 성공 샤드 수 K 로 `opus_status` 를 **disjoint quorum 밴드**(우선순위 failed→partial→success)로 정한다: **`failed` iff K=0; `partial` iff 1 ≤ K < 쿼럼(=3); `success` iff K ≥ 쿼럼(=3).** K≥1 이면 성공분만 collapse 해 단일 보이스를 만들고(K<5 면 Review Mode 에 일부 lens 누락 표기), `opus_status != success`(즉 K<3) 면 degraded 마커가 발동한다(단일 Opus 와 동등 이상 안전성). K=0 이면 Claude 를 `not_attempted` 로 두고 codex/agy 로 N-way 계속.
 - adversarial verify 는 (B) 에 미내장 — 생략 시 Review Mode 에 `UNVERIFIED fallback` 명시(경로 A/B 의 drop 정책은 §4 에서 동일하게 강제).
 
 두 경로 모두 **에러로 죽지 않는다.**

@@ -15,7 +15,7 @@ deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Ke
 ### 변경
 
 - Phase 6 `source` enum 에 `Opus (ultracode)` / `opus-ultracode` 추가.
-- Review Mode 라벨 확장(ultracode / agy-only / fallback 변형); `opus_status` fan-out collapse 규칙(≥1 샤드 = success, 쿼럼 = 3).
+- Review Mode 라벨 확장(ultracode / agy-only / fallback 변형); `opus_status` fan-out collapse 규칙 — disjoint quorum 밴드(failed=0, partial=1–2, success≥3; 쿼럼 미달 시 degraded).
 - findings_signature line 버킷을 고정 버킷 `floor(line/7)` 으로 통일하여 결정적 정체 감지.
 
 ### 보안
