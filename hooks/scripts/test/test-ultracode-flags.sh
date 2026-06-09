@@ -79,6 +79,15 @@ t_reportfmt(){
   assert_grep RF3 "$REPORTFMT" 'opus_status.*(≥1 샤드|쿼럼|partial)' "opus_status fan-out collapse documented"
 }
 
+t_source_enum(){
+  # T7 정정: delegation-spec 는 enum 줄이 없으므로(214=예시값) 제외. prompt-contract + response-format + CLAUDE.md 만.
+  assert_grep E1 "$P6_PROMPT" 'Opus \(ultracode\)' "prompt-contract has Opus (ultracode)"
+  assert_grep E3 "$RESP_FMT"  'Opus \(ultracode\)' "response-format has Opus (ultracode)"
+  assert_grep E4 "$CLAUDEMD"  'opus-ultracode' "CLAUDE.md schema has opus-ultracode"
+  # absent-guards (편집 전후 모두 PASS): phase6-implementer 엔 enum 없음, delegation-spec 도 건드리지 않음
+  assert_absent E5 "$ROOT/agents/phase6-implementer.md" 'opus-ultracode|Opus \(ultracode\)' "phase6-implementer untouched (no enum there)"
+}
+
 # === main ===
 t_parse_validation
 t_precedence
@@ -86,6 +95,7 @@ t_sec1
 t_ultra_ref
 t_cmd_ultracode
 t_reportfmt
+t_source_enum
 echo "----"
 echo "ultracode-flags: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

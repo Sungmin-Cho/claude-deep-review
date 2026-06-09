@@ -184,7 +184,7 @@ item_id: <string>
 title: <string>
 severity: critical | warning | info
 confidence: agreed | partial
-source: opus | codex-review | codex-adversarial | agy | Human | PR comment (@author, #id)
+source: opus | opus-ultracode | codex-review | codex-adversarial | agy | Human | PR comment (@author, #id)
 file_refs: [path, ...]
 issue_summary: <string>
 implementation_guide:
@@ -196,7 +196,7 @@ implementation_guide:
   acceptance: <test command>
 ```
 
-Phase 6 `source` enum: `opus | codex-review | codex-adversarial | agy | Human | PR comment (@author, #id)` — `agy` is **appended** to the existing enum, not replacing other values.
+Phase 6 `source` enum: `opus | opus-ultracode | codex-review | codex-adversarial | agy | Human | PR comment (@author, #id)` — `agy` is **appended** to the existing enum, not replacing other values.
 
 The subagent only does **execution mechanics** (Edit, test, commit). If the `implementation_guide` is ambiguous, it sets `status: error` on that item and continues — it never re-evaluates accept/reject decisions.
 
