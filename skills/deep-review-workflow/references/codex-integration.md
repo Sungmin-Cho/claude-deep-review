@@ -237,3 +237,5 @@ Codex 플러그인 미설치 시 (codex_plugin=false):
 | N=1 | 0/1 | 🟢 APPROVE (단, "단일 리뷰어"로 표기) |
 
 리포트의 Summary에 `Review Mode: {N-way, executed=[reviewer list]}`로 실제 구성을 명시.
+
+> **ultracode (v1.10.0)**: `--ultracode` 시 "Claude (Opus)" 한 칸은 5차원 fan-out 의 **단일 "Claude(ultracode)" 보이스**가 채운다(Anthropic 한 표 유지 — 샤드 개별 투표 아님). collapse 키/verify 정책 등 메커니즘은 [`ultracode-integration.md`](./ultracode-integration.md) 가 단일 출처다(여기서 재서술하지 않음).

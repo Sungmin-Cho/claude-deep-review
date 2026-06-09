@@ -38,12 +38,22 @@ No additional configuration is required. On first run, `.deep-review/` is create
 | Command | Description |
 |---|---|
 | `/deep-review` | Review current changes with an independent Opus subagent (cross-model when Codex/agy are present) |
+| `/deep-review --ultracode [--codex]` | Multi-agent Claude fan-out (hybrid: Workflow tool when available, else parallel `code-reviewer` agents), collapsed into one "Claude(ultracode)" voice + optional Codex 2-way |
+| `/deep-review --codex-only` | Disable internal Claude reviewer, run Codex 2-way only (pairs with an external `--ultracode` session for role separation) |
 | `/deep-review --contract [SLICE-NNN]` | Sprint Contract-based structural verification |
 | `/deep-review --entropy` | Entropy scan (duplicates, pattern drift, naming mismatches) |
 | `/deep-review --respond [REPORT_PATH]` | Respond to review findings with the evidence-based protocol |
 | `/deep-review --respond --source=pr` | Respond to GitHub PR review comments |
 | `/deep-review-loop [--max=N]` | Auto-iterate review ↔ respond until convergence (also a `user-invocable` skill — `Skill({ skill: "deep-review:deep-review-loop" })` for Codex CLI / SDK consumers) |
+| `/deep-review-loop --ultracode --codex` | ultracode once (round 1) + codex every round integrated loop |
 | `/deep-review init` | Initialize per-project review rules interactively |
+
+**Composable reviewer flags** (v1.10.0):
+
+- `--ultracode` — Claude-side review as a multi-agent fan-out (hybrid: Workflow tool when available, else parallel `code-reviewer` agents), collapsed into one "Claude(ultracode)" voice.
+- `--codex` / `--no-codex` / `--no-opus` / `--no-agy`, and `--codex-only` (= `--codex --no-opus --no-agy`).
+- `/deep-review-loop --ultracode --codex`: ultracode once (round 1) + codex every round.
+- No-flag behavior is 100% unchanged.
 
 ## Review pipeline
 

@@ -53,3 +53,6 @@ jobs:
 
       - name: run-agy-reviewer bridge test
         run: bash hooks/scripts/test/test-run-agy-reviewer.sh
+
+      - name: ultracode/codex flags structural test
+        run: bash hooks/scripts/test/test-ultracode-flags.sh

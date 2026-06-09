@@ -4,6 +4,28 @@
 
 All notable changes to deep-review are documented here. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] — 2026-06-09
+
+### Added
+
+- **Composable reviewer flags** — `/deep-review` and `/deep-review-loop` now accept `--ultracode` (multi-agent Claude fan-out, 5-dimension shards collapsed into one "Claude(ultracode)" voice), `--codex` (force Codex 2-way), `--no-codex` / `--no-opus` / `--no-agy`, and sugar `--codex-only` (= `--codex --no-opus --no-agy`). No-flag behavior is 100% unchanged.
+- **Hybrid fan-out** — when Claude Code + Workflow tool is available, `--ultracode` uses the `Workflow` tool (dimension fan-out + adversarial verify); other runtimes fall back to parallel `run-claude-reviewer.sh` bridge agents. New `skills/deep-review-workflow/references/ultracode-integration.md` is the single source of truth for the collapse algorithm.
+- **deep-review-loop integrated cadence** — `--ultracode --codex` loop runs ultracode once (round 1) + codex every round. `--codex-only` supports an external-ultracode + codex-loop split role. 2-tier forwarding spec + `ultracode_consumed`-based codex-down branch.
+
+### Changed
+
+- Phase 6 `source` enum extended with `Opus (ultracode)` / `opus-ultracode`.
+- Review Mode labels expanded (ultracode / agy-only / fallback variants); `opus_status` fan-out collapse rule — disjoint quorum bands (failed=0, partial=1–2, success≥3; degraded marker fires below quorum).
+- findings_signature line bucket unified to fixed bucket `floor(line/7)` for deterministic stagnation detection.
+
+### Security
+
+- `--no-agy` now short-circuits Stage 3.5 sensitive-file ack gate — when agy is excluded, no sensitive-file scan prompt is shown and `agy_sensitive_acked_fingerprint` is not modified.
+
+### Deferred / Known limitations
+
+- ARCH-6 (path-B verify-equivalence label), ARCH-8 (non-Claude serial-bridge partial-failure budget), SEC-3 (token-cost guardrail: Y/N prompt + verify panel top-K cap) are tracked for a follow-up release.
+
 ## [1.9.0] — 2026-06-04 (agy model tier + faster hybrid fingerprint)
 
 ### Added

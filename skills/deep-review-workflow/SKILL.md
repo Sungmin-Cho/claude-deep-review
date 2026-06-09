@@ -14,6 +14,7 @@ user-invocable: false
 
 - `references/review-criteria.md` — 5가지 리뷰 관점
 - `references/codex-integration.md` — Codex 교차 검증
+- `references/ultracode-integration.md` — `--ultracode` 하이브리드 fan-out(차원 샤딩, 경로 A/B, join 계약, 단일 보이스 collapse). `--ultracode` 가 지정된 리뷰에서 읽는다.
 - `references/contract-schema.md` — Sprint Contract 스키마
 - `references/report-format.md` — 리포트 형식
 - `../receiving-review/SKILL.md` — 리뷰 피드백 대응 프로토콜 (`/deep-review --respond` 모드, Stage 5+ 참조)

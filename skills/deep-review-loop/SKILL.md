@@ -1,6 +1,6 @@
 ---
 name: deep-review-loop
-description: Use when the user wants /deep-review and /deep-review --respond to alternate automatically until convergence — e.g. after seeing REQUEST_CHANGES and wanting auto-apply + re-review without manually toggling commands. Triggers on phrases like "keep reviewing until clean", "auto-iterate review", "loop until APPROVE", "리뷰↔대응 반복", "수렴까지 자동 반복".
+description: Use when the user wants /deep-review and /deep-review --respond to alternate automatically until convergence — e.g. after seeing REQUEST_CHANGES and wanting auto-apply + re-review without manually toggling commands. Triggers on phrases like "keep reviewing until clean", "auto-iterate review", "loop until APPROVE", "리뷰↔대응 반복", "수렴까지 자동 반복", "ultracode 1회 + codex 루프", "codex-only 루프", "codex 2-way 반복 검증".
 user-invocable: true
 ---
 
@@ -21,7 +21,7 @@ user-invocable: true
 
 ## Inputs (skill args)
 
-- `--contract [SLICE-NNN]` / `--entropy` — 매 라운드 `/deep-review` 호출에 그대로 전달.
+- `--contract [SLICE-NNN]` / `--entropy` — 매 라운드 `/deep-review` 호출에 전달(§2.0 2단 전달 규약에 따라 라운드별 파생).
 - `--max=N` (선택, 기본 5) — **안전장치**. 의도치 않은 무한 루프 방지. **단위 = Review 호출 횟수** (한 라운드 = Review 한 번 + 필요 시 Respond 한 번. Respond 는 카운팅 단위가 아니다). N 양의 정수 (≥1, 비정수/0/음수 입력 시 안내 후 종료). N 도달 시 §4 통합 요약에 `종료 사유: max_reached` 로 기록 후 종료. 일반적인 종료는 §3 의 verdict/잔여 ACCEPT/변화 판단으로 발생.
 - `--respond` / `init` / `--qa` — **거부** (loop 의 의미와 충돌). 입력에 포함되면 즉시 안내 후 종료.
 
@@ -32,6 +32,8 @@ user-invocable: true
   "deep-review-loop 는 리뷰↔대응을 묶어 반복하는 wrapper 입니다.
    --respond / init / --qa 가 필요하면 /deep-review 를 직접 호출하세요."
 ```
+
+신규 reviewer 구성 플래그(`--ultracode` / `--codex` / `--no-codex` / `--no-opus` / `--no-agy` / `--codex-only`)는 **수용**한다. 단, 매 라운드 `/deep-review` 전달은 "그대로 전달"이 아니라 **§2.0 의 2단 전달 규약**으로 라운드별 파생한다. `--codex-only` 는 commands/deep-review.md §0.5 규약대로 `--codex --no-opus --no-agy` 로 전개한 뒤 다룬다.
 
 ## 1. 루프 진입 안내
 
@@ -51,12 +53,29 @@ user-invocable: true
 
 §8 의 예시 표기 "라운드 1=Review, 라운드 2=Respond, 라운드 3=Re-review" 는 **단계 표기** 이지 라운드 카운터가 아니다. `round_number` 는 §2.1 진입 시점에만 증가한다 (`round_number = previous_round_number + 1`).
 
+### 2.0 reviewer 플래그 전달 & ultracode 캐던 (v1.10.0)
+
+**ultracode 1회 + codex 매 라운드.** loop 는 매 라운드 `/deep-review` 인자를 **파생**한다("그대로 전달" 아님). 본 §2.0 이 단일 출처(SSOT)다.
+
+- **never-forward 집합**: `{--max, --respond, init, --qa}` — 절대 전달 안 함(loop 전용).
+- **라운드 1**: 사용자 reviewer 플래그(`--ultracode`/`--codex`/`--no-codex`/`--no-opus`/`--no-agy`; `--codex-only` 는 commands/deep-review.md §0.5 에서 `--codex --no-opus --no-agy` 로 전개된 형태) + `--contract`/`--entropy` 를 전달. 라운드 1 완료 후, **사용자가 `--ultracode` 를 줬을 때만** `ultracode_consumed = true`.
+- **라운드 2+ — `ultracode_consumed` 로 분기 (RLC-1/REG-1: 무조건 주입 금지)**:
+  - **`ultracode_consumed == true`** (통합 `--ultracode …` 루프): 전달 집합에서 **`--ultracode` 토큰을 제거**하고 `--no-opus` + `--no-agy` 를 주입(`--codex` 유지). → ultracode 는 라운드 1만, 이후는 codex 전용 재검증("ultracode 1회 + codex 루프"). `--ultracode` 를 제거하지 않으면 `--ultracode`+`--no-opus` 가 commands/deep-review.md §0.5 모순 에러로 루프가 abort 된다(LOOP-3).
+  - **`ultracode_consumed == false`** (plain `/deep-review-loop`, `--codex`, `--codex-only`, `--no-opus` 등 — `--ultracode` 미지정): 사용자 R1 reviewer 플래그를 **그대로 유지**(loop 전용만 제거). **`--no-opus`/`--no-agy` 를 주입하지 않는다.** → plain 루프 = 매 라운드 single-opus + auto codex/agy(v1.10.0 이전과 동일), `--codex` 루프 = 매 라운드 opus+codex, `--codex-only` 루프 = 매 라운드 codex-only. (이전 버전 default-loop 회귀 방지 — RLC-1/REG-1.)
+
+이 2단 전달 규약이 v1.10.0 이전의 단순 argument 전달 규칙(구 §2.1 step 2)을 **대체**한다.
+
+**codex-unavailable 분기 (LOOP-1) — 라운드 종료 후 판별**: codex 가용성은 라운드 진행 중(Stage 1 preflight) 에야 알 수 있으므로, 각 라운드 리포트 Summary 의 codex 상태(`not_authenticated`/`timeout`/`failed`)를 읽어 판별한다:
+- `ultracode_consumed == true` 인데 그 라운드 codex 가 불가했다면 → 다음 라운드부터 `--no-opus` 주입을 보류(= 단일 Opus)해 **리뷰어 ≥1 보장**. ultracode fan-out 으로는 폴백 안 함(비용).
+- `ultracode_consumed == false` 의 `--codex-only` 루프에서 codex 불가 → **리뷰어 0 → 루프 중단(§3.A 운영오류)**. 사용자의 "Claude off" 의도 존중.
+- 그 외(`ultracode_consumed == false` 이고 single-opus 가 살아있는 plain/`--codex` 루프)는 codex 불가여도 Claude 리뷰어가 있으므로 정상 진행.
+
 ### 2.1 Review 단계
 
 `/deep-review` 본문의 "리뷰 모드" 절차를 인라인으로 수행합니다 (skill 은 다른 슬래시 커맨드를 다시 dispatch 할 수 없으므로 본문을 Read 해서 따라간다):
 
 1. `Read({ file_path: "${CLAUDE_PLUGIN_ROOT}/commands/deep-review.md" })` — 첫 라운드에서만 1회 (이후 라운드는 이미 컨텍스트에 있음).
-2. 그 본문의 **§0 "Auto-create .deep-review/"** + **§0.1 "자동 복원 (stale mutation recovery)"** + **"## Steps (리뷰 모드)"** 섹션 (Stage 1 ~ Stage 5.5 + Stage 6 `--entropy` 있을 때) 절차를 그대로 수행. §0.1 의 `auto_recover` 호출은 **매 라운드 진입 시 반드시 실행** — 본문 인용 범위의 시작점을 `## Steps` 헤딩이 아닌 §0 으로 명시한다 (R-006 회귀 방지). argument 는 `--contract`/`--entropy` 만 전달 (loop 전용 플래그는 제거).
+2. 그 본문의 **§0 "Auto-create .deep-review/"** + **§0.1 "자동 복원 (stale mutation recovery)"** + **"## Steps (리뷰 모드)"** 섹션 (Stage 1 ~ Stage 5.5 + Stage 6 `--entropy` 있을 때) 절차를 그대로 수행. §0.1 의 `auto_recover` 호출은 **매 라운드 진입 시 반드시 실행** — 본문 인용 범위의 시작점을 `## Steps` 헤딩이 아닌 §0 으로 명시한다 (R-006 회귀 방지). argument 전달은 **§2.0 의 2단 전달 규약**을 따른다(라운드별 파생 — loop 전용 플래그 제거, reviewer 플래그는 라운드에 따라 파생).
 3. `deep-review-workflow` 스킬은 본문 §Prerequisites 에 명시된 3단계 fallback 순서대로 로드 — 변경 없음.
 4. Stage 1 ~ Stage 5.5 까지 완료될 때까지 대기. 백그라운드 리뷰어 완료 알림은 런타임이 자동 전달하므로 polling 금지.
 
@@ -129,7 +148,7 @@ response_report_path (있으면, absolute path),
 verdict, count_red, count_yellow, count_info,
 accepted_count, rejected_count, deferred_count,
 implemented_count, halted (boolean), execution_path,
-findings_signature (Set<"{severity}:{file}:{line ±3}:{taxonomy_category}">) — §3.A.3 정체 감지용
+findings_signature (Set<"{severity}:{file}:{floor(line/7)}:{taxonomy_category}">) — §3.A.3 정체 감지용. line 버킷은 ultracode 내부 합성(§4.3 `ultracode-integration.md`)과 동일한 고정 버킷 `floor(line/7)` 을 써서 라운드 간 정체 판정을 일관시킨다(VOICE-4).
 ```
 
 **`taxonomy_category` 출처 (W6 명시)**: `report-format.md` 의 리포트 행에는 taxonomy 컬럼이 없으므로 skill 은 두 단계로 채운다:
@@ -151,7 +170,7 @@ findings_signature (Set<"{severity}:{file}:{line ±3}:{taxonomy_category}">) —
 
 1. `verdict == APPROVE` AND `count_red == 0` AND `count_yellow == 0` — 자연 수렴.
 2. 라운드 수 ≥ `--max` — 안전장치 한계.
-3. 직전 라운드와 **동일한 findings_signature 집합** (§2.3 정의: `{severity}:{file}:{line ±3}:{taxonomy_category}` 의 set) 이 절반 이상 재출현하고, 추가 변경(`implemented_count == 0` 또는 `halted == true`) 도 없음 — **수렴 정체**. 그 상태로 한 번 더 반복해도 진전 가능성 없음. (라운드 N 의 signature 집합 ∩ 라운드 N-1 의 signature 집합 의 크기가 max(|N|, |N-1|) 의 50% 이상일 때 정체로 판정. report-format.md 에 explicit issue id 컬럼이 없으므로 issue id 비교는 fallback 으로만 사용 — 본 signature 가 단일 정체 비교 키이다.)
+3. 직전 라운드와 **동일한 findings_signature 집합** (§2.3 정의: `{severity}:{file}:{floor(line/7)}:{taxonomy_category}` 의 set) 이 절반 이상 재출현하고, 추가 변경(`implemented_count == 0` 또는 `halted == true`) 도 없음 — **수렴 정체**. 그 상태로 한 번 더 반복해도 진전 가능성 없음. (라운드 N 의 signature 집합 ∩ 라운드 N-1 의 signature 집합 의 크기가 max(|N|, |N-1|) 의 50% 이상일 때 정체로 판정. report-format.md 에 explicit issue id 컬럼이 없으므로 issue id 비교는 fallback 으로만 사용 — 본 signature 가 단일 정체 비교 키이다.)
 4. mutation 복원 실패, lock 점유, dispatch 전면 실패 등 **운영 오류** 가 같은 라운드 안에 누적 ≥ 2 — 사람의 개입이 필요한 상태.
 5. 사용자가 어떤 가드 (`AskUserQuestion`) 에서 "중단" 또는 "DEFER 후 종료" 를 선택.
 
