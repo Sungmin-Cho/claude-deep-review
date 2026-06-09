@@ -95,6 +95,19 @@ t_source_enum(){
   assert_absent E5 "$ROOT/agents/phase6-implementer.md" 'opus-ultracode|Opus \(ultracode\)' "phase6-implementer untouched (no enum there)"
 }
 
+t_loop(){
+  assert_grep L1 "$LOOP" 'ultracode|codex-only' "SKILL-3: description/triggers mention ultracode/codex-only"
+  assert_grep L2 "$LOOP" 'never-forward|전달 안 함.*--max|--max.*전달 안' "LOOP-2: never-forward set"
+  assert_grep L3 "$LOOP" '--ultracode 토큰을 제거|라운드 2\+.*--ultracode.*제거|strip.*--ultracode' "LOOP-3: strip --ultracode in R2+"
+  assert_grep L4 "$LOOP" 'ultracode_consumed' "ultracode_consumed gate"
+  assert_grep L5 "$LOOP" 'ultracode_consumed == false.*중단|--codex-only.*중단|reviewer.*0.*중단' "LOOP-1: codex-only -> stop branch"
+  assert_grep L6 "$LOOP" 'ultracode_consumed == true.*단일 Opus|통합 루프.*단일 Opus' "LOOP-1: integrated -> single-opus fallback"
+  assert_grep L7 "$LOOP" '--no-agy.*주입|R2\+.*--no-agy|라운드 2\+.*agy' "CONS-4: agy off in R2+"
+  assert_grep L8 "$LOOP" 'floor\(line ?/ ?7\)' "VOICE-4: signature uses fixed bucket"
+  assert_absent L8b "$LOOP" 'line ±3' "VOICE-4: no stale ±3 bucket remains"
+  assert_absent L9 "$LOOP" '\-\-contract.*만 전달' "F3: stale forward-only rule removed"
+}
+
 # === main ===
 t_parse_validation
 t_precedence
@@ -104,6 +117,7 @@ t_cmd_ultracode
 t_reportfmt
 t_codexref
 t_source_enum
+t_loop
 echo "----"
 echo "ultracode-flags: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
