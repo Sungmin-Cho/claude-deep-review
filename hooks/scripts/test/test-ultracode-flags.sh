@@ -79,6 +79,13 @@ t_reportfmt(){
   assert_grep RF3 "$REPORTFMT" 'opus_status.*(≥1 샤드|쿼럼|partial)' "opus_status fan-out collapse documented"
 }
 
+t_codexref(){
+  assert_grep X1 "$CODEXREF" 'ultracode-integration\.md' "codex-integration links to ultracode SSOT"
+  assert_grep X2 "$CODEXREF" 'Claude\(ultracode\)|ultracode fan-out' "1-line note about ultracode voice"
+  # SKILL-4: collapse mechanics must NOT be duplicated here
+  assert_absent X3 "$CODEXREF" 'floor\(line ?/ ?7\)' "no duplicated collapse bucket here"
+}
+
 t_source_enum(){
   # T7 정정: delegation-spec 는 enum 줄이 없으므로(214=예시값) 제외. prompt-contract + response-format + CLAUDE.md 만.
   assert_grep E1 "$P6_PROMPT" 'Opus \(ultracode\)' "prompt-contract has Opus (ultracode)"
@@ -95,6 +102,7 @@ t_sec1
 t_ultra_ref
 t_cmd_ultracode
 t_reportfmt
+t_codexref
 t_source_enum
 echo "----"
 echo "ultracode-flags: PASS=$PASS FAIL=$FAIL"
