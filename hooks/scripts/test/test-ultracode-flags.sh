@@ -73,12 +73,19 @@ t_cmd_ultracode(){
   assert_grep C6 "$CMD" 'agent-fanout fallback|UNVERIFIED fallback' "SC-4: fallback label present"
 }
 
+t_reportfmt(){
+  assert_grep RF1 "$REPORTFMT" 'Claude=ultracode|ultracode\(5-lens' "report-format ultracode label"
+  assert_grep RF2 "$REPORTFMT" 'agy only|agy-only' "agy-only label (CONS-10)"
+  assert_grep RF3 "$REPORTFMT" 'opus_status.*(≥1 샤드|쿼럼|partial)' "opus_status fan-out collapse documented"
+}
+
 # === main ===
 t_parse_validation
 t_precedence
 t_sec1
 t_ultra_ref
 t_cmd_ultracode
+t_reportfmt
 echo "----"
 echo "ultracode-flags: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
