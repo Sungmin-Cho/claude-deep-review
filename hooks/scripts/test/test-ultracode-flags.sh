@@ -35,8 +35,20 @@ t_parse_validation(){
   assert_grep P6 "$CMD" 'argument-hint:.*\-\-ultracode|argument-hint:.*\-\-codex' "SKILL-7: argument-hint exposes flags"
 }
 
+t_precedence(){
+  # §2.3 precedence + BC-3 preservation + CONS-3 N=0
+  assert_grep PR1 "$CMD" 'claude_reviewer *=' "claude_reviewer precedence resolver present"
+  assert_grep PR2 "$CMD" 'none .*if .*\-\-no-opus' "no-opus -> none"
+  assert_grep PR3 "$CMD" 'ultracode-fanout .*\-\-ultracode' "ultracode -> fanout"
+  assert_grep PR4 "$CMD" 'single-opus .*else|single-opus.*기존 기본값' "else -> single-opus (BC-3 opus literal preserved)"
+  assert_grep PR5 "$CMD" 'AGY_USER_DECLINED_THIS_RUN' "BC-3: per-run agy decline conjunct retained"
+  assert_grep PR6 "$CMD" 'N_planned *=' "N_planned formula present"
+  assert_grep PR7 "$CMD" 'N_planned *= *0|N=0.*검증.*에러|단발.*리뷰어가 없' "CONS-3: single-shot N=0 validation error"
+}
+
 # === main ===
 t_parse_validation
+t_precedence
 echo "----"
 echo "ultracode-flags: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
