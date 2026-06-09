@@ -46,9 +46,15 @@ t_precedence(){
   assert_grep PR7 "$CMD" 'N_planned *= *0|N=0.*검증.*에러|단발.*리뷰어가 없' "CONS-3: single-shot N=0 validation error"
 }
 
+t_sec1(){
+  assert_grep S1 "$CMD" 'agy_included.*Stage 3\.5|Stage 3\.5.*agy_included|--no-agy.*Stage 3\.5.*(skip|건너)' "SEC-1: Stage 3.5 gated on agy_included"
+  assert_grep S2 "$CMD" '\-\-no-agy.*fingerprint.*(변경하지|미변경|not).*|fingerprint.*변경하지 않' "SEC-1: --no-agy does not mutate fingerprint"
+}
+
 # === main ===
 t_parse_validation
 t_precedence
+t_sec1
 echo "----"
 echo "ultracode-flags: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

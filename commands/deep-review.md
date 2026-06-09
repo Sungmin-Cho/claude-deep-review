@@ -244,20 +244,12 @@ PY
 
 ### 3.5 agy sensitive-file acknowledgment (pre-spawn gate, fingerprint-based)
 
-Fix #4: Stage 3.5 used to check `agy in reviewers_planned`, but `reviewers_planned` is only
-computed in the reviewer-enumeration block (§4, around line 375) — later than this gate.
-At the time Stage 3.5 runs, `reviewers_planned` has no value → gate silently misfires.
+**SEC-1 — `agy_included` 로 게이팅**: §0.5/§2.3 의 `agy_included`(= `agy_cli && agy_enabled && NOT --no-agy && NOT AGY_USER_DECLINED_THIS_RUN`)를 이 게이트 **이전에** 계산하고, `agy_included=false` 면 본 Stage 3.5(find/scan 포함)를 **건너뛴다**. 특히 `--no-agy`(또는 `--codex-only` 전개)면 민감파일 스캔·프롬프트를 수행하지 않으며 `agy_sensitive_acked_fingerprint` 도 **변경하지 않는다**. (기존: raw `agy_cli && agy_enabled` 만 보면 `--no-agy` 로 agy 를 제외해도 민감파일 노출 프롬프트가 떴음.)
 
-Replaced with a direct config probe on the same two inputs that the enumeration block uses:
-- `agy_cli` — from Stage 1 detect-environment output
-- `agy_enabled` — from `.deep-review/config.yaml`
-
-If `agy_cli=true AND agy_enabled=true`: run this gate before spawning any reviewer.
-Otherwise: skip.
+If `agy_included=true`: run this gate before spawning any reviewer. Otherwise: skip.
 
 (Note: Stage 3.5 may set AGY_USER_DECLINED_THIS_RUN=1 if the user picks "N" in the AskUserQuestion.
-The reviewer-enumeration block at §4 consults BOTH `agy_cli && agy_enabled` (config) AND this session
-flag, so the user's per-run decline is honored without persisting any config change.)
+The reviewer-enumeration block at §4 consults `agy_included` which incorporates `agy_cli && agy_enabled` (config) AND the `--no-agy` flag AND this session flag, so the user's per-run decline is honored without persisting any config change.)
 
 **Critical (R7 carry-forward C-R7-1)**: `scan_sensitive_files` 은 `mutation-protocol.sh` 의 bash function 이며 외부 명령이 아니다. `xargs` 로 호출 불가. while-read 루프 사용:
 
