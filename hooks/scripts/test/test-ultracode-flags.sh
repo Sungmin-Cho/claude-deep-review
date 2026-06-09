@@ -51,10 +51,24 @@ t_sec1(){
   assert_grep S2 "$CMD" '\-\-no-agy.*fingerprint.*(변경하지|미변경|not).*|fingerprint.*변경하지 않' "SEC-1: --no-agy does not mutate fingerprint"
 }
 
+t_ultra_ref(){
+  assert_grep U1 "$ULTRA" '정확성|Correctness' "5 dimensions listed"
+  assert_grep U2 "$ULTRA" 'Workflow 가 .*문자 그대로 존재할 때만|도구 목록에 .Workflow' "ARCH-2 deterministic selection rule"
+  assert_grep U3 "$ULTRA" 'join 계약|codex/agy.*먼저.*spawn' "ARCH-1 join contract"
+  assert_grep U4 "$ULTRA" 'run-claude-reviewer\.sh' "path B bridge fallback"
+  assert_grep U5 "$ULTRA" 'floor\(line ?/ ?7\)|line_bucket' "VOICE-4 fixed bucket"
+  assert_absent U6 "$ULTRA" '\{severity\}:\{file\}:\{line ?.3\}:\{category\}' "VOICE-1/2: old dedup key NOT present"
+  assert_grep U7 "$ULTRA" 'confidence *= *.?low|강등.*보존|무음(삭제|삭제)' "VOICE-6 demote-not-drop"
+  assert_grep U8 "$ULTRA" 'partial-failure|K/5|≥1 샤드' "ARCH-8 partial-failure semantics"
+  assert_grep U9 "$WF_SKILL" 'ultracode-integration\.md' "SKILL points to new reference"
+  assert_grep U10 "$ULTRA" '최댓값 severity|severity 승격' "VOICE-1 max-severity promotion documented"
+}
+
 # === main ===
 t_parse_validation
 t_precedence
 t_sec1
+t_ultra_ref
 echo "----"
 echo "ultracode-flags: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
