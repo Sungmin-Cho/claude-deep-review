@@ -438,6 +438,12 @@ N_planned = len(reviewers_planned)
 | 2 | "2개 리뷰어(<composition>)를 백그라운드에서 실행합니다. 완료되면 결과를 합성하여 알려드리겠습니다." |
 | 1 | "Opus 리뷰를 백그라운드에서 실행합니다. 완료되면 결과를 알려드리겠습니다." |
 
+**Claude 쪽 리뷰어 — `claude_reviewer` 값에 따라 분기 (§0.5/§2.3):**
+
+- `single-opus` (기본) → 아래 기존 단일 Opus 경로(Agent tool / CLI bridge) 그대로.
+- `ultracode-fanout` (`--ultracode`) → `references/ultracode-integration.md` 의 하이브리드 fan-out 을 수행한다(5 차원 샤드 → 단일 "Claude(ultracode)" 보이스). **순서 계약(ARCH-1)**: 먼저 codex/agy 백그라운드 잡을 spawn 한 뒤 ultracode 를 호출하고, Stage 4 진입 전 ultracode 결과 + 모든 codex/agy 완료를 join 한다. ultracode 보이스는 `reviewers_planned` 의 단일 'opus' entry 를 대체한다.
+- `none` (`--no-opus`/`--codex-only`) → Claude 리뷰어 미spawn. (단발 N=0 은 §0.5 에서 이미 차단.)
+
 **Claude Opus reviewer (항상 시도):**
 
 동일한 reviewer prompt를 런타임별로 다른 실행 경로에 전달한다. prompt에 포함: diff 내용, rules.yaml (있으면), fitness.json (있으면), health_report (있으면), contract (있으면).
@@ -860,6 +866,15 @@ AGY_EXCLUDE_FROM_SYNTHESIS=0
 5. **사후 chat 메시지**: "⚠️ Verdict downgraded to CONCERN — Opus failed and only {N} external reviewer(s) responded. Treat findings as advisory."
 
 이는 deterministic — synthesis 단계에서 AskUserQuestion 없음. (R5 C-R5 / R7 §4.3.1 fix — async run_in_background 패러다임과 충돌 회피.)
+
+**ultracode 단일 보이스 & `opus_status` collapse (CONS-10):** `claude_reviewer = ultracode-fanout` 이면 5 샤드 findings 를 `ultracode-integration.md §4` 규칙으로 1건의 "Claude(ultracode)" 보이스로 collapse 한 뒤 cross-model N-way 매트릭스에 **Anthropic 한 표**로 넣는다(샤드 개별 투표 금지). degraded-mode 마커가 의존하는 `opus_status` 는 샤드 status 를 다음으로 collapse: **`success` iff ≥1 샤드 성공, `partial` iff 1≤성공<쿼럼(=3), `failed` iff 0 성공.** degraded 마커는 `opus_status != success` 일 때 발동(기존 결정성 유지).
+
+**Review Mode 라벨(v1.10.0):**
+- `--ultracode` + codex: `{N}-way Cross-Model — Claude=ultracode(5-lens, verified) + Codex 2-way`
+- `--ultracode` 단독: `1-way — Claude=ultracode(5-lens) only`
+- `--no-opus`/`--codex-only`: `1-way (codex-only)` / `2-way (codex-only + agy)` / `1-way (agy only)`
+- 폴백: `… Claude=ultracode(agent-fanout fallback, Workflow unavailable)` 또는 `(UNVERIFIED fallback)`
+상세 표는 `references/report-format.md`.
 
 3. 리포트 저장: `.deep-review/reports/{YYYY-MM-DD}-{HHmmss}-review.md` (Bash `date "+%Y-%m-%d-%H%M%S"`로 파일명 생성 — 같은 날 재실행 시 덮어쓰기 방지)
 

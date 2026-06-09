@@ -64,11 +64,21 @@ t_ultra_ref(){
   assert_grep U10 "$ULTRA" '최댓값 severity|severity 승격' "VOICE-1 max-severity promotion documented"
 }
 
+t_cmd_ultracode(){
+  assert_grep C1 "$CMD" 'ultracode-integration\.md' "command references ultracode SSOT"
+  assert_grep C2 "$CMD" 'codex/agy.*먼저.*spawn|먼저 codex/agy' "ARCH-1 ordering in command"
+  assert_grep C3 "$CMD" 'Claude\(ultracode\)|단일.*보이스|single.*voice' "single-voice collapse referenced"
+  assert_grep C4 "$CMD" 'opus_status.*(success|쿼럼|quorum)|≥1 샤드 성공' "CONS-10 opus_status fan-out collapse"
+  assert_grep C5 "$CMD" 'Claude=ultracode|ultracode\(5-lens' "Review Mode ultracode label"
+  assert_grep C6 "$CMD" 'agent-fanout fallback|UNVERIFIED fallback' "SC-4: fallback label present"
+}
+
 # === main ===
 t_parse_validation
 t_precedence
 t_sec1
 t_ultra_ref
+t_cmd_ultracode
 echo "----"
 echo "ultracode-flags: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
