@@ -4,6 +4,14 @@
 
 deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)와 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
+## [1.11.0] — 2026-06-16
+
+### 추가
+
+- **보안 리뷰 관점(6번째 기준)** — `review-criteria.md`에 보안 관점 추가(입력 검증, 인증/인가 우회, 인젝션(prompt injection 포함), 비밀 노출, 위험한 연산). recurring-findings `security` taxonomy와 1:1 대응. ultracode 샤드 5→6, quorum을 `floor(n/2)+1`(=4)로 공식화.
+- **severity 기준** — severity = 영향 × 도달 가능성. diff로 도달 가능성을 확정 못하면 강등하지 않는 보수적 기본값.
+- **anti-criteria** — 억제 규칙(pre-existing, 린터 자동수정 스타일, 근거 없는 추측, 단순 취향)으로 리뷰 노이즈 감소.
+
 ## [1.10.0] — 2026-06-09
 
 ### 추가

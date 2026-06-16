@@ -4,6 +4,14 @@
 
 All notable changes to deep-review are documented here. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] — 2026-06-16
+
+### Added
+
+- **Security review lens (6th criterion)** — `review-criteria.md` adds a Security lens (input validation, authz bypass, injection incl. prompt injection, secret exposure, unsafe ops), mapping 1:1 to the recurring-findings `security` taxonomy. ultracode shards go 5→6 and the quorum is formalized to `floor(n/2)+1` (=4).
+- **Severity rubric** — severity = impact × reachability, with a conservative default: do not downgrade when reachability is unprovable from the diff.
+- **Anti-criteria** — suppression rules (pre-existing issues, lint-autofixable style, unsubstantiated speculation, pure preference) to cut review noise.
+
 ## [1.10.0] — 2026-06-09
 
 ### Added

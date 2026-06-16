@@ -92,7 +92,7 @@ diff 제외 대상: 바이너리, `vendor/`, `node_modules/`, `*.min.js`, `*.gen
 
 ### Stage 3: Deep Review (심층 리뷰)
 
-독립 `code-reviewer` 에이전트가 `model: opus`, `run_in_background: true`로 생성됩니다. Codex / non-Claude 런타임에서는 동일 reviewer를 `claude -p --agent code-reviewer`로 실행합니다. spawn 전 실행될 리뷰어 구성(Opus 단독 또는 교차 모델)을 고지합니다. 에이전트는 diff, rules, contract만 받으며 — 원본 세션 컨텍스트는 절대 받지 않습니다 — 5가지 관점을 평가합니다:
+독립 `code-reviewer` 에이전트가 `model: opus`, `run_in_background: true`로 생성됩니다. Codex / non-Claude 런타임에서는 동일 reviewer를 `claude -p --agent code-reviewer`로 실행합니다. spawn 전 실행될 리뷰어 구성(Opus 단독 또는 교차 모델)을 고지합니다. 에이전트는 diff, rules, contract만 받으며 — 원본 세션 컨텍스트는 절대 받지 않습니다 — 6가지 관점을 평가합니다:
 
 | # | 관점 | 검사 내용 |
 |---|---|---|
@@ -101,6 +101,7 @@ diff 제외 대상: 바이너리, `vendor/`, `node_modules/`, `*.min.js`, `*.gen
 | 3 | 엔트로피 | 중복 코드, 패턴 드리프트, ad-hoc 헬퍼 |
 | 4 | 테스트 충분성 | 변경 대비 커버리지, 누락 시나리오 |
 | 5 | 가독성 | 다음 에이전트가 처음 읽을 때 이해 가능한가 |
+| 6 | 보안 | 입력 검증, 인증/인가 우회, 인젝션(prompt injection 포함), 비밀 노출, 위험한 연산 |
 
 ### Stage 4: Verdict (판정)
 

@@ -12,7 +12,7 @@ user-invocable: false
 
 ## 참조 문서
 
-- `references/review-criteria.md` — 5가지 리뷰 관점
+- `references/review-criteria.md` — 6가지 리뷰 관점
 - `references/codex-integration.md` — Codex 교차 검증
 - `references/ultracode-integration.md` — `--ultracode` 하이브리드 fan-out(차원 샤딩, 경로 A/B, join 계약, 단일 보이스 collapse). `--ultracode` 가 지정된 리뷰에서 읽는다.
 - `references/contract-schema.md` — Sprint Contract 스키마

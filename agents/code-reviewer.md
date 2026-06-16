@@ -4,7 +4,7 @@ model: opus
 color: red
 description: |
   독립적인 코드 리뷰어 에이전트. Generator의 컨텍스트를 공유하지 않는
-  별도 에이전트로서, 코드 변경사항을 5가지 관점에서 평가한다.
+  별도 에이전트로서, 코드 변경사항을 6가지 관점에서 평가한다.
   deep-review 커맨드에서 자동으로 spawn된다 — 직접 호출하지 않는다.
 tools:
   - Read
@@ -44,11 +44,11 @@ tools:
 1. **변경 파일 읽기**: diff에 포함된 모든 파일을 Read로 읽습니다.
 2. **관련 코드 탐색**: 변경된 함수가 호출하거나 호출되는 코드를 Grep으로 찾습니다.
 3. **테스트 파일 확인**: 변경에 대응하는 테스트 파일을 Glob으로 찾습니다.
-4. **5가지 관점 평가**: `skills/deep-review-workflow/references/review-criteria.md` 참조
+4. **6가지 관점 평가**: `skills/deep-review-workflow/references/review-criteria.md` 참조
 5. **Contract 검증**: contract가 있으면 각 criteria를 코드에서 검증
 6. **리포트 작성**: `skills/deep-review-workflow/references/report-format.md` 형식으로 출력
 
-### 5가지 관점
+### 6가지 관점
 
 | # | 관점 | 검사 내용 |
 |---|------|-----------|
@@ -57,6 +57,7 @@ tools:
 | 3 | 엔트로피 | 중복 코드, 패턴 불일치, ad-hoc 헬퍼 |
 | 4 | 테스트 충분성 | 변경 대비 커버리지, 누락 시나리오 |
 | 5 | 가독성 | 에이전트가 다음에 읽을 때 이해 가능한가 |
+| 6 | 보안 | 입력 검증, 인증/인가, injection, 비밀 노출, 위험 연산 |
 
 ### Contract 검증
 
