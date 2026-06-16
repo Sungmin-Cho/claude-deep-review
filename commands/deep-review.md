@@ -443,7 +443,7 @@ N_planned = len(reviewers_planned)
 **Claude 쪽 리뷰어 — `claude_reviewer` 값에 따라 분기 (§4 리뷰어 열거):**
 
 - `single-opus` (기본) → 아래 "Claude Opus reviewer" 단일 Opus 경로(Agent tool / CLI bridge) 그대로.
-- `ultracode-fanout` (`--ultracode`) → `references/ultracode-integration.md` 의 하이브리드 fan-out 을 수행한다(5 차원 샤드 → 단일 "Claude(ultracode)" 보이스). **순서 계약(ARCH-1)**: 먼저 codex/agy 백그라운드 잡을 spawn 한 뒤 ultracode 를 호출하고, Stage 4 진입 전 ultracode 결과 + 모든 codex/agy 완료를 join 한다. ultracode 보이스는 `reviewers_planned` 의 단일 'opus' entry 를 대체한다. **아래 "Claude Opus reviewer" 블록은 수행하지 않는다.**
+- `ultracode-fanout` (`--ultracode`) → `references/ultracode-integration.md` 의 하이브리드 fan-out 을 수행한다(6 차원 샤드 → 단일 "Claude(ultracode)" 보이스). **순서 계약(ARCH-1)**: 먼저 codex/agy 백그라운드 잡을 spawn 한 뒤 ultracode 를 호출하고, Stage 4 진입 전 ultracode 결과 + 모든 codex/agy 완료를 join 한다. ultracode 보이스는 `reviewers_planned` 의 단일 'opus' entry 를 대체한다. **아래 "Claude Opus reviewer" 블록은 수행하지 않는다.**
 - `none` (`--no-opus`/`--codex-only`) → Claude 리뷰어 미spawn. **아래 "Claude Opus reviewer" 블록은 수행하지 않는다.** (단발 N=0 은 §4 CONS-3 가드 + Stage 4.3.1 N_actual 가드에서 차단.)
 
 **Claude Opus reviewer (`claude_reviewer == single-opus` 일 때만):**
@@ -873,11 +873,11 @@ AGY_EXCLUDE_FROM_SYNTHESIS=0
 
 **N_actual == 0 런타임 가드 (SPEC-3 / SEC-CONS3-1):** `claude_reviewer == none`(`--no-opus`/`--codex-only`) 인데 실제로 완료된 외부 reviewer 가 0개(codex/agy 가 전부 미설치·인증실패·timeout·실패)면 — `N_planned` 는 flag/감지 기준이라 통과했더라도 — **빈 리포트로 APPROVE/CONCERN 을 내지 말고** CONS-3 식 운영 에러로 중단한다: "리뷰어가 0개 실행됨 — codex/agy 가 필요하지만 실행에 실패했습니다. 인증/설치를 확인하세요." (parse·열거 시점의 `N_planned` 가드(§4 CONS-3)와 달리, 본 가드는 preflight 이후 **실제 실행 결과**(`N_actual`) 기준이다.)
 
-**ultracode 단일 보이스 & `opus_status` collapse (CONS-10):** `claude_reviewer = ultracode-fanout` 이면 5 샤드 findings 를 `ultracode-integration.md §4` 규칙으로 1건의 "Claude(ultracode)" 보이스로 collapse 한 뒤 cross-model N-way 매트릭스에 **Anthropic 한 표**로 넣는다(샤드 개별 투표 금지). degraded-mode 마커가 의존하는 `opus_status` 는 샤드 성공 수 K 를 **disjoint quorum 밴드**(우선순위 failed→partial→success)로 collapse 한다: **`failed` iff K=0; `partial` iff 1 ≤ K < 쿼럼(=3); `success` iff K ≥ 쿼럼(=3).** 따라서 degraded 마커(`opus_status != success`)는 **K<3 (쿼럼 미달)** 일 때 발동한다(단일 Opus 와 동등 이상 안전성 유지). 정의 단일 출처는 `ultracode-integration.md §2(B)`.
+**ultracode 단일 보이스 & `opus_status` collapse (CONS-10):** `claude_reviewer = ultracode-fanout` 이면 6 샤드 findings 를 `ultracode-integration.md §4` 규칙으로 1건의 "Claude(ultracode)" 보이스로 collapse 한 뒤 cross-model N-way 매트릭스에 **Anthropic 한 표**로 넣는다(샤드 개별 투표 금지). degraded-mode 마커가 의존하는 `opus_status` 는 샤드 성공 수 K 를 **disjoint quorum 밴드**(우선순위 failed→partial→success)로 collapse 한다: **`failed` iff K=0; `partial` iff 1 ≤ K < 쿼럼(=4); `success` iff K ≥ 쿼럼(=4).** 따라서 degraded 마커(`opus_status != success`)는 **K<4 (쿼럼 미달)** 일 때 발동한다(단일 Opus 와 동등 이상 안전성 유지). 정의 단일 출처는 `ultracode-integration.md §2(B)`.
 
 **Review Mode 라벨(v1.10.0):**
-- `--ultracode` + codex: `{N}-way Cross-Model — Claude=ultracode(5-lens, verified) + Codex 2-way`
-- `--ultracode` 단독: `1-way — Claude=ultracode(5-lens) only`
+- `--ultracode` + codex: `{N}-way Cross-Model — Claude=ultracode(6-lens, verified) + Codex 2-way`
+- `--ultracode` 단독: `1-way — Claude=ultracode(6-lens) only`
 - `--no-opus`/`--codex-only`: `1-way (codex-only)` / `2-way (codex-only + agy)` / `1-way (agy only)`
 - 폴백: `… Claude=ultracode(agent-fanout fallback, Workflow unavailable)` 또는 `(UNVERIFIED fallback)`
 상세 표는 `references/report-format.md`.
