@@ -81,7 +81,7 @@ Codex 3-way 리뷰 진입 전 반드시 확인:
 Codex가 사용 가능할 때 3개 리뷰를 **백그라운드에서 동시 실행**:
 
 1. **Claude Opus reviewer**
-   - 독립 컨텍스트에서 5가지 관점 리뷰
+   - 독립 컨텍스트에서 6가지 관점 리뷰
    - 항상 실행됨
    - Claude Code 런타임: Agent tool (`code-reviewer`, model: opus, run_in_background: true)
    - Codex / non-Claude 런타임: Agent tool이 없으므로 `hooks/scripts/run-claude-reviewer.sh`를 Bash로 실행. helper는 동일 prompt를 받아 `claude -p --plugin-dir "{CLAUDE_PLUGIN_ROOT}" --agent code-reviewer --model opus`를 호출한다.
@@ -238,4 +238,4 @@ Codex 플러그인 미설치 시 (codex_plugin=false):
 
 리포트의 Summary에 `Review Mode: {N-way, executed=[reviewer list]}`로 실제 구성을 명시.
 
-> **ultracode (v1.10.0)**: `--ultracode` 시 "Claude (Opus)" 한 칸은 5차원 fan-out 의 **단일 "Claude(ultracode)" 보이스**가 채운다(Anthropic 한 표 유지 — 샤드 개별 투표 아님). collapse 키/verify 정책 등 메커니즘은 [`ultracode-integration.md`](./ultracode-integration.md) 가 단일 출처다(여기서 재서술하지 않음).
+> **ultracode (v1.10.0)**: `--ultracode` 시 "Claude (Opus)" 한 칸은 6차원 fan-out 의 **단일 "Claude(ultracode)" 보이스**가 채운다(Anthropic 한 표 유지 — 샤드 개별 투표 아님). collapse 키/verify 정책 등 메커니즘은 [`ultracode-integration.md`](./ultracode-integration.md) 가 단일 출처다(여기서 재서술하지 않음).
