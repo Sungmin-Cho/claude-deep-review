@@ -92,7 +92,7 @@ Each criterion is verified against the actual code changes.
 
 ### Stage 3: Deep Review
 
-An independent `code-reviewer` agent is spawned with `model: opus` and `run_in_background: true`. In Codex / non-Claude runtimes the same reviewer is invoked through `claude -p --agent code-reviewer`. Before spawning, you are told which reviewers will run (Opus-only or cross-model). The agent receives only the diff, rules, and contract — never the originating session context — and evaluates 5 criteria:
+An independent `code-reviewer` agent is spawned with `model: opus` and `run_in_background: true`. In Codex / non-Claude runtimes the same reviewer is invoked through `claude -p --agent code-reviewer`. Before spawning, you are told which reviewers will run (Opus-only or cross-model). The agent receives only the diff, rules, and contract — never the originating session context — and evaluates 6 criteria:
 
 | # | Criterion | Checks |
 |---|---|---|
@@ -101,6 +101,7 @@ An independent `code-reviewer` agent is spawned with `model: opus` and `run_in_b
 | 3 | Entropy | Duplicate code, pattern drift, ad-hoc helpers |
 | 4 | Test coverage | Coverage relative to changes, missing scenarios |
 | 5 | Readability | Will the next agent understand this on first read? |
+| 6 | Security | Input validation, authz bypass, injection (incl. prompt injection), secret exposure, unsafe ops |
 
 ### Stage 4: Verdict
 
