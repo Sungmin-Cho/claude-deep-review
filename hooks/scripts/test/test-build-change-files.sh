@@ -95,6 +95,59 @@ outcu=$("$SCRIPT" --repo "$cleanu" --change-state clean --review-base "$base")
 assert_success "printf '%s\\n' \"\$outcu\" | grep -q '\"path\": *\"committed.ts\"'" "clean+leftover: committed in-scope file present"
 assert_failure "printf '%s\\n' \"\$outcu\" | grep -q 'leftover-untracked.txt'" "clean+leftover: out-of-scope untracked file NOT unioned"
 
+# --- Fix 3 (spec §4.1 byte budget): the manifest is capped by BYTES, not just rows. A repo with
+# many long-path untracked files staged must, under a small OCR_CHANGE_FILES_MAX_BYTES, emit the
+# {omitted,truncated} trailer once the cumulative serialized size would exceed the budget — and
+# the surviving emitted bytes must stay within (≈) the budget.
+bytecap=$(setup_test_repo)
+( cd "$bytecap"
+  mkdir -p src
+  i=0
+  while [ "$i" -lt 60 ]; do
+    printf 'x\n' > "src/this-is-a-deliberately-long-path-segment-to-burn-bytes-file-$i.ts"
+    i=$((i+1))
+  done
+  git add -A )
+# Budget 512 bytes: each row's JSON is ~90+ bytes, so well under 60 rows fit → trailer emitted.
+outbc=$(OCR_CHANGE_FILES_MAX_BYTES=512 "$SCRIPT" --repo "$bytecap" --change-state staged)
+assert_success "printf '%s\\n' \"\$outbc\" | grep -q '\"truncated\": *true'" "byte budget: truncation trailer emitted when manifest exceeds OCR_CHANGE_FILES_MAX_BYTES"
+assert_success "printf '%s\\n' \"\$outbc\" | grep -q '\"omitted\":'" "byte budget: trailer reports omitted count"
+# omitted count must be positive and the non-trailer rows must be FEWER than the 60 staged files.
+emitted_rows=$(printf '%s\n' "$outbc" | grep -c '"status"' || true)
+assert_success "[ \"\$emitted_rows\" -lt 60 ]" "byte budget: fewer rows emitted than total (some omitted by byte cap)"
+assert_success "[ \"\$emitted_rows\" -ge 1 ]" "byte budget: at least one row still emitted (not a bare trailer)"
+# A generous budget over the same repo must emit ALL 60 rows and NO trailer (cap is not spurious).
+outbc2=$(OCR_CHANGE_FILES_MAX_BYTES=1000000 "$SCRIPT" --repo "$bytecap" --change-state staged)
+all_rows=$(printf '%s\n' "$outbc2" | grep -c '"status"' || true)
+assert_equal "60" "$all_rows" "byte budget: generous budget emits all rows"
+assert_failure "printf '%s\\n' \"\$outbc2\" | grep -q '\"truncated\"'" "byte budget: generous budget emits no trailer"
+
+# --- Fix 4 (spec §4.1 untracked-binary exclusion): `git diff --numstat` never sees untracked
+# files, so an untracked binary (NUL byte in first chunk) must be dropped by the content-sniff,
+# while an untracked text file beside it survives. Covers BOTH the dirty-state union and `initial`.
+ubin=$(setup_test_repo)
+( cd "$ubin"
+  printf 'hello\nworld\n' > untracked-text.txt          # untracked text → kept
+  printf 'PK\003\004\000\000bin' > untracked.bin         # untracked binary (has NUL) → dropped
+  printf 'no-nul-just-bytes\xff\xfe' > untracked-hi.dat ) # high bytes but NO NUL → kept (git heuristic)
+outub=$("$SCRIPT" --repo "$ubin" --change-state unstaged)
+assert_success "printf '%s\\n' \"\$outub\" | grep -q '\"path\": *\"untracked-text.txt\"'" "untracked-binary: untracked text file kept"
+assert_failure "printf '%s\\n' \"\$outub\" | grep -q '\"path\": *\"untracked.bin\"'" "untracked-binary: untracked NUL-containing binary dropped"
+assert_success "printf '%s\\n' \"\$outub\" | grep -q '\"path\": *\"untracked-hi.dat\"'" "untracked-binary: high-byte-but-no-NUL file kept (NUL heuristic only)"
+# initial state (no commits yet) routes untracked through the same add() → binary still dropped.
+ibin=$(mktemp -d "${TMPDIR:-/tmp}/dr-ibin.XXXXXX")
+( cd "$ibin"; git init -q
+  printf 'plain text\n' > init-text.txt
+  printf '\000\001\002BIN' > init.bin )
+outib=$("$SCRIPT" --repo "$ibin" --change-state initial)
+assert_success "printf '%s\\n' \"\$outib\" | grep -q '\"path\": *\"init-text.txt\"'" "untracked-binary(initial): text file kept"
+assert_failure "printf '%s\\n' \"\$outib\" | grep -q '\"path\": *\"init.bin\"'" "untracked-binary(initial): NUL binary dropped"
+# Unreadable/missing path must be fail-open (recorded), not a crash: feed a non-git manual path
+# that does not exist on disk — the sniff returns False (non-binary) and the row is kept.
+ffz_missing=$(mktemp); printf 'ghost-does-not-exist.txt\0' > "$ffz_missing"
+outmiss=$("$SCRIPT" --repo "$ubin" --change-state non-git --files-from-z "$ffz_missing")
+assert_success "printf '%s\\n' \"\$outmiss\" | grep -q 'ghost-does-not-exist.txt'" "untracked-binary: missing path fails open (recorded, no crash)"
+
 teardown_test_repo
-rm -rf "$weird" "$init" "$ffz" "$excl" "$wip" "$cleanu"
+rm -rf "$weird" "$init" "$ffz" "$excl" "$wip" "$cleanu" "$bytecap" "$ubin" "$ibin" "$ffz_missing"
 test_summary

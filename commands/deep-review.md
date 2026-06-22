@@ -166,8 +166,9 @@ Codex 또는 다른 non-Claude 런타임에서는 `claude_cli` / `claude_cli_pat
 **git + untracked-only:**
 - `git ls-files --others --exclude-standard`로 파일 목록 수집 후 내용 읽기
 
-**모든 git 상태에서 untracked > 0이면:**
-- `git ls-files --others --exclude-standard`로 추가 파일을 리뷰 대상에 포함
+**dirty working-tree 상태(staged/unstaged/mixed/untracked-only)에서 untracked > 0이면:**
+- `git ls-files --others --exclude-standard`로 추가 파일을 리뷰 대상에 포함 (primary state 의 diff 와 union).
+- **단, `clean` 은 union에서 제외** — clean 의 실효 대상은 커밋된 `review_base..HEAD` 이므로 leftover untracked 파일은 그 대상 집합에 없다(unioning 하면 out-of-scope 파일 유출, spec §4.1). `initial` 은 자체 `--cached --others` 열거를 쓴다. 이 규칙은 `build-change-files.sh` 의 `if state in ("staged","unstaged","mixed","untracked-only")` union 분기와 **글자 그대로 일치**해야 한다(diff 와 change_files manifest 의 대상 집합 일치).
 
 diff에서 제외 (**Stage-1 표준 제외 목록 — 이 줄이 단일 출처(SoT)**. `hooks/scripts/build-change-files.sh` 의 `EXCLUDE_SEGMENTS`/`EXCLUDE_BASENAME_GLOBS` 와 **멤버십이 글자 그대로 동일**해야 한다 — diff 와 change_files manifest 의 대상 집합 불일치 방지, spec §4.1):
 - 디렉토리 세그먼트: `node_modules/`, `dist/`, `build/`, `.next/`, `target/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `vendor/`, `.git/`

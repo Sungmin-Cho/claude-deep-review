@@ -152,4 +152,43 @@ assert_failure "grep -Eq 'extract-fp-doctrine|fp-doctrine:start' \"$CI\"" "codex
 CR="$HERE/../../../agents/code-reviewer.md"
 assert_success "grep -q 'cross-file 컨텍스트' \"$CR\"" "code-reviewer has Strict-Focus guard"
 
+# --- Fix-propagation (codex R4): the v1.12.0 contract must not survive in stale duplicate copies.
+SK="$HERE/../../../skills/deep-review-workflow/SKILL.md"
+
+# F1 (command SSOT): the Stage-1 collection prose in commands/deep-review.md must ALSO carry the
+# dirty-states-only union (clean excluded) — the earlier rounds fixed build-change-files.sh + the
+# §4.1 exclusion doc but left the :169 collection prose saying the stale all-states union, which an
+# executor follows directly. Lock it: no stale all-states union, and the dirty-only rule present.
+assert_failure "grep -q '모든 git 상태에서 untracked' \"$CMD\"" "command Stage-1 prose dropped the stale 'all git states' untracked union"
+assert_success "grep -q 'dirty working-tree 상태' \"$CMD\"" "command Stage-1 union is dirty-working-tree-states-only"
+assert_success "grep -Eq 'clean .* union에서 제외|union에서 제외' \"$CMD\"" "command Stage-1 documents clean is excluded from the untracked union"
+
+# F1: SKILL.md Stage-1 must NOT carry the OLD "모든 git 상태" all-states union (clean was excluded
+# from the union when build-change-files made it dirty-states-only). Regression-trip if it returns.
+assert_failure "grep -q '모든 git 상태에서 untracked' \"$SK\"" "SKILL.md Stage-1 dropped the stale 'all git states' untracked union"
+# It must instead state the dirty-only union (clean excluded) AND defer the exclusion list to the SSOT.
+assert_success "grep -q 'dirty working-tree 상태' \"$SK\"" "SKILL.md Stage-1 union is dirty-working-tree-states-only"
+assert_success "grep -Eq 'clean .* union에서 제외|union에서 제외' \"$SK\"" "SKILL.md Stage-1 documents clean is excluded from the untracked union"
+assert_success "grep -q 'commands/deep-review.md:172' \"$SK\"" "SKILL.md Stage-1 defers the exclusion set to the commands SSOT (no 4th divergent copy)"
+# And it must NOT restate the OLD short exclusion list verbatim (the divergent 5-token copy).
+assert_failure "grep -q 'diff에서 제외: 바이너리, vendor/, node_modules/, \*.min.js, \*.generated.\*, \*.lock' \"$SK\"" "SKILL.md Stage-1 no longer restates the stale short exclusion list"
+
+# F2: codex-integration.md claude-bridge must NOT mint a fresh prompt mktemp — it must consume the
+# captured shared PROMPT_FILE literal (carrying fp-doctrine + change_files), same as commands SSOT.
+assert_failure "grep -q 'prompt_file=\$(mktemp' \"$CI\"" "codex-integration claude-bridge no longer mints a fresh prompt mktemp"
+assert_success "grep -q -- \"--prompt-file '<captured PROMPT_FILE literal>'\" \"$CI\"" "codex-integration claude-bridge passes the captured PROMPT_FILE literal"
+assert_success "grep -q '공유 PROMPT_FILE 소비' \"$CI\"" "codex-integration claude-bridge has the shared-PROMPT_FILE-consumption directive"
+assert_success "grep -q 'commands/deep-review.md:505-508' \"$CI\"" "codex-integration claude-bridge points to the commands SSOT call form"
+
+# Repo-wide lock: the ONLY sanctioned place that mints the reviewer prompt_file is the single
+# "공유 reviewer payload 조립" block in commands/deep-review.md (the SSOT — asserted hoisted above).
+# No reference skill or agent may re-mint a reviewer-prompt mktemp (that would bypass the captured
+# shared PROMPT_FILE carrying fp-doctrine + change_files). Scope: skills/ + agents/ only.
+ROOT="$HERE/../../.."
+assert_failure "grep -rIl --include='*.md' --include='*.sh' 'prompt_file=\$(mktemp' \"$ROOT/skills\" \"$ROOT/agents\"" "no reference skill/agent re-mints a reviewer-prompt mktemp (shared PROMPT_FILE only)"
+# And commands/deep-review.md mints it EXACTLY ONCE — the canonical shared-payload assembly. More
+# than one would mean a reviewer branch re-minted its own prompt instead of consuming the shared one.
+mktemp_count=$(grep -c 'prompt_file=$(mktemp' "$CMD" || true)
+assert_equal "1" "$mktemp_count" "commands SSOT mints the shared prompt_file exactly once (canonical assembly block)"
+
 test_summary

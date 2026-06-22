@@ -2,6 +2,12 @@
 # Build the change_files manifest (JSONL) for the full Stage-1 review target set.
 # Uses python3 for correct JSON encoding (all C0 control bytes), rename/copy
 # arity + score splitting, and deterministic path-byte sort. NUL-safe.
+#
+# Env vars (spec §4.1 — cap the manifest by BOTH, whichever triggers first):
+#   OCR_CHANGE_FILES_MAX_ENTRIES  row cap (default 500)
+#   OCR_CHANGE_FILES_MAX_BYTES    cumulative serialized-byte cap (default 65536; kept
+#                                 well under the agy 198KB body limit). On either cap a
+#                                 final {"omitted":N,"truncated":true} trailer is emitted.
 set -Eeuo pipefail
 
 repo="."; change_state=""; review_base=""; files_from=""
@@ -20,10 +26,15 @@ if [ "$change_state" = "clean" ] && [ -z "$review_base" ]; then
 fi
 
 REPO="$repo" STATE="$change_state" BASE="$review_base" FILES_FROM="$files_from" \
-MAX_ENTRIES="${OCR_CHANGE_FILES_MAX_ENTRIES:-500}" python3 - <<'PY'
+MAX_ENTRIES="${OCR_CHANGE_FILES_MAX_ENTRIES:-500}" \
+MAX_BYTES="${OCR_CHANGE_FILES_MAX_BYTES:-65536}" python3 - <<'PY'
 import os, json, subprocess, sys
 repo=os.environ["REPO"]; state=os.environ["STATE"]; base=os.environ.get("BASE","")
 ff=os.environ.get("FILES_FROM",""); maxn=int(os.environ.get("MAX_ENTRIES","500"))
+# Byte budget (spec §4.1: cap by max bytes AND max entries — whichever triggers first).
+# Default 65536 stays well under the agy 198KB body limit so the manifest never blows the
+# prompt budget before the diff is appended. Override via OCR_CHANGE_FILES_MAX_BYTES.
+maxb=int(os.environ.get("MAX_BYTES","65536"))
 def git_z(*args):
     r=subprocess.run(["git","-C",repo,*args],capture_output=True)
     if r.returncode!=0:
@@ -51,13 +62,31 @@ def is_excluded(path_str):
         return True
     base=parts[-1] if parts else path_str
     return any(fnmatch.fnmatch(base, g) for g in EXCLUDE_BASENAME_GLOBS)
+def dec(b): return b.decode("utf-8","surrogateescape")
+# Best-effort UNTRACKED-binary detection. `git diff --numstat` (collect_binary below)
+# only sees TRACKED diffs, so an untracked/initial/session/non-git path's binary-ness
+# is invisible to it — yet Stage-1 excludes binaries (commands/deep-review.md:172). We
+# apply the common git heuristic: read the first chunk and treat the file as binary if
+# it contains a NUL byte. NUL-safe (operates on raw bytes), python3-only, non-fatal on
+# read errors (missing/unreadable path → treated as non-binary, i.e. recorded). 'p' is
+# the raw path-bytes; join under the repo so we read the actual working-tree file.
+_BIN_SNIFF_BYTES=8192
+def looks_binary_untracked(p_bytes):
+    try:
+        fp=os.path.join(os.fsencode(repo), p_bytes)
+        with open(fp,"rb") as fh:
+            return b"\x00" in fh.read(_BIN_SNIFF_BYTES)
+    except Exception:
+        return False                       # unreadable → don't drop (fail-open: record it)
 def add(rec):  # rec is a dict with bytes 'p' key
     if is_excluded(rec["path"]):           # path-glob/segment excludes (required)
         rec.pop("p"); return               # drop out-of-scope path before recording
-    if rec["path"] in binary_paths:        # binary excludes (best-effort numstat)
+    if rec["path"] in binary_paths:        # binary excludes (best-effort numstat, TRACKED diffs)
+        rec.pop("p"); return
+    # untracked/initial/session/non-git paths bypass numstat → content-sniff for NUL.
+    if rec.get("status") in ("untracked","initial","session","non-git") and looks_binary_untracked(rec["p"]):
         rec.pop("p"); return
     items.setdefault(rec.pop("p"), rec)
-def dec(b): return b.decode("utf-8","surrogateescape")
 # Best-effort binary detection: `git diff -z --numstat` emits "-\t-\t" for binary
 # blobs. Same -z record model as name-status: a rename/copy row is "added\tdeleted\t"
 # (empty path field) followed by two standalone NUL tokens old,new; a normal row is
@@ -137,6 +166,18 @@ rows=[items[k] for k in sorted(items)]            # deterministic path-byte sort
 # ensure_ascii=True: non-UTF-8 path bytes (surrogateescape) are emitted as \uXXXX,
 # keeping the JSONL strictly ASCII/UTF-8 valid (R2 fix — ensure_ascii=False could
 # print raw invalid bytes or raise UnicodeEncodeError on lone surrogates).
-for d in rows[:maxn]: print(json.dumps(d, ensure_ascii=True))
-if len(rows)>maxn: print(json.dumps({"omitted":len(rows)-maxn,"truncated":True}))
+# Dual cap (spec §4.1): stop at the ROW cap (maxn) OR once the cumulative serialized
+# BYTE size would exceed the budget (maxb) — whichever triggers first. With many long
+# paths the row cap alone can still exceed the agy 198KB body limit, so the byte budget
+# is the real guard. Remaining rows are counted into the {omitted,truncated} trailer.
+emitted=0; nbytes=0
+for d in rows:
+    line=json.dumps(d, ensure_ascii=True)
+    add_bytes=len(line.encode("utf-8"))+1            # +1 for the trailing newline
+    # Stop BEFORE exceeding either cap. Always allow at least the first row through so a
+    # single oversized record still appears rather than yielding a bare trailer.
+    if emitted>0 and (emitted>=maxn or nbytes+add_bytes>maxb):
+        break
+    print(line); emitted+=1; nbytes+=add_bytes
+if emitted<len(rows): print(json.dumps({"omitted":len(rows)-emitted,"truncated":True}))
 PY
