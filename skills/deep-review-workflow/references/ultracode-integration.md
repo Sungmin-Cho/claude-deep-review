@@ -21,7 +21,7 @@
 5. 가독성 (Agent Readability)
 6. 보안 (Security)
 
-각 샤드는 기존 `agents/code-reviewer.md` 에이전트를 **prompt 로 한 관점에 집중**시켜 spawn(에이전트 frontmatter 변경 불필요). 각 샤드 prompt 에는 단일 Opus 리뷰어와 **동일한 컨텍스트**(diff, rules.yaml, fitness.json, health_report, contract)를 포함한다. 차원 수는 6으로 고정(가변 샤드는 백로그).
+각 샤드는 기존 `agents/code-reviewer.md` 에이전트를 **prompt 로 한 관점에 집중**시켜 spawn(에이전트 frontmatter 변경 불필요). 각 샤드 prompt 에는 단일 Opus 리뷰어와 **동일한 컨텍스트**를 **동일한 공유 prompt-builder(`build-reviewer-payload.sh`, 고정 순서)** 로 포함한다 — fp_doctrine(+보수적 균형), change_files, rules.yaml, fitness.json, health_report, contract, 그리고 맨 뒤 diff. (샤드만 순서가 어긋나지 않도록 single-opus·agy 와 동일 빌더를 쓴다.) 차원 수는 6으로 고정(가변 샤드는 백로그).
 
 ## 2. 경로 선택 (하이브리드 — orchestrator 결정)
 

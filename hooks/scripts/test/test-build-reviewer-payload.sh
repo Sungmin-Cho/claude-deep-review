@@ -22,4 +22,15 @@ out2=$("$SCRIPT" --diff-file "$diff")
 assert_success "printf '%s' \"$out2\" | grep -q 'DIFF_MARKER'" "diff-only payload builds"
 
 rm -f "$doc" "$cf" "$ctx" "$diff"
+
+# M-2 carry-over: negative assertion — skip-empty guard omits doctrine header from diff-only payload
+assert_failure "printf '%s' \"$out2\" | grep -q 'REVIEW SUPPRESSION DOCTRINE'" "diff-only payload omits doctrine header (skip-empty)"
+
+# Doc-structure assertions (Task 5)
+UC="$HERE/../../../skills/deep-review-workflow/references/ultracode-integration.md"
+assert_success "grep -q 'build-reviewer-payload.sh' \"$UC\"" "ultracode shards use shared builder"
+assert_success "grep -q 'fp_doctrine' \"$UC\"" "ultracode shards include fp_doctrine"
+RF="$HERE/../../../skills/deep-review-workflow/references/report-format.md"
+assert_success "grep -q 'Warnings' \"$RF\"" "report-format has Warnings line"
+
 test_summary

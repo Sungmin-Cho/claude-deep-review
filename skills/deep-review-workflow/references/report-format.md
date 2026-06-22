@@ -15,6 +15,7 @@
 - **Verdict**: {APPROVE | REQUEST_CHANGES | CONCERN}
 - **Review Mode**: {Claude Opus Only | Claude=ultracode(6-lens[, verified]) | 2-way Cross-Model | 3-way Cross-Model | 4-way Cross-Model | 1-way (codex-only) | 2-way (codex-only + agy) | 1-way (agy only) | (… agent-fanout fallback / UNVERIFIED fallback)}
 - **Issues**: {🔴 N건, 🟡 N건, ℹ️ N건}
+- **Warnings**: {운영 경고 0건이면 생략. 페이로드 조립 실패(OCR_WARNINGS)를 포함한 운영 경고를 기록 — 예: `fp-doctrine extraction failed (injection skipped)`, `change_files unavailable (omitted)`. verdict 에는 영향 없음 — 감사용.}
 
 ## Sprint Contract: {SLICE-ID} (있을 때만)
 | 기준 | 상태 | 근거 |
