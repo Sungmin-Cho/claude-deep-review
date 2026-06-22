@@ -440,17 +440,11 @@ N_planned = len(reviewers_planned)
 | 2 | "2개 리뷰어(<composition>)를 백그라운드에서 실행합니다. 완료되면 결과를 합성하여 알려드리겠습니다." |
 | 1 | "Opus 리뷰를 백그라운드에서 실행합니다. 완료되면 결과를 알려드리겠습니다." |
 
-**Claude 쪽 리뷰어 — `claude_reviewer` 값에 따라 분기 (§4 리뷰어 열거):**
+**공유 reviewer payload 조립 (리뷰어 분기·spawn 이전 — 모든 Claude/agy 경로 공통):**
 
-- `single-opus` (기본) → 아래 "Claude Opus reviewer" 단일 Opus 경로(Agent tool / CLI bridge) 그대로.
-- `ultracode-fanout` (`--ultracode`) → `references/ultracode-integration.md` 의 하이브리드 fan-out 을 수행한다(6 차원 샤드 → 단일 "Claude(ultracode)" 보이스). **순서 계약(ARCH-1)**: 먼저 codex/agy 백그라운드 잡을 spawn 한 뒤 ultracode 를 호출하고, Stage 4 진입 전 ultracode 결과 + 모든 codex/agy 완료를 join 한다. ultracode 보이스는 `reviewers_planned` 의 단일 'opus' entry 를 대체한다. **아래 "Claude Opus reviewer" 블록은 수행하지 않는다.**
-- `none` (`--no-opus`/`--codex-only`) → Claude 리뷰어 미spawn. **아래 "Claude Opus reviewer" 블록은 수행하지 않는다.** (단발 N=0 은 §4 CONS-3 가드 + Stage 4.3.1 N_actual 가드에서 차단.)
-
-**Claude Opus reviewer (`claude_reviewer == single-opus` 일 때만):**
-
-> 이 블록은 `claude_reviewer == single-opus` 인 경우에만 적용한다. `ultracode-fanout` 은 위 분기대로 `ultracode-integration.md` 를 따르고, `none` 은 Claude 리뷰어를 건너뛴다.
-
-공유 reviewer payload 를 **리뷰어 분기 이전에** 1개 자기완결 bash 블록으로 조립한다(셸 상태 비의존 — Stage 1 값은 오케스트레이터가 리터럴로 치환). 블록은 `prompt_file` 경로와 `warnings` 를 **출력**하고, single-opus(Agent tool 입력), agy/claude bridge `--prompt-file`, ultracode 샤드가 그 **동일 경로**를 공통으로 쓴다. 표준 `codex review`·Codex adversarial 에는 주입하지 않는다.
+> 이 블록은 **리뷰어 분기 이전, 그리고 mutation/codex 자동노출(§3.0) ·WIP 커밋 이전**에 **무조건** 1회 수행한다(셸 상태 비의존 — Stage 1 값은 오케스트레이터가 리터럴로 치환). 어떤 Claude/agy 리뷰어든 계획돼 있으면(single-opus·ultracode-fanout·agy) 이 블록이 산출한 `prompt_file` 을 **동일 경로**로 공통 소비한다: single-opus(Agent tool 입력 / claude bridge `--prompt-file`), agy bridge `--prompt-file`, ultracode 6 샤드. 분기·노출 이전에 돌리므로 `<CHANGE_STATE>` 가 **실효 리뷰 대상**(아직 dirty 한 워크트리)과 일치한다. 표준 `codex review`·Codex adversarial 에는 주입하지 않는다.
+>
+> **Finding 2 — 순서 불변(WIP/auto-exposure 이전 필수)**: 이 블록은 반드시 codex 자동노출(`git add -f -N`, §3.0)·WIP 커밋 생성 **이전**에 돌아야 한다. 그래야 `<CHANGE_STATE>`(Stage 1 리터럴)가 dirty 워크트리를 가리킨다. 만약 어떤 경로로든 payload 조립 **이전에 WIP 커밋이 이미 생성**됐다면(`mixed` → `git diff HEAD` 가 빈/stale 가 됨), 실효 대상을 clean 으로 보정해 조립한다: `build-change-files.sh --change-state clean --review-base <REVIEW_BASE>` (= `review_base..HEAD`). Stage 2 의 WIP 커밋 UX 는 이 블록 이전 단계(Collect/Contract)에 위치하므로, 본 보정은 그 경우의 안전망이다.
 
 ```bash
 # 오케스트레이터가 Stage 1 파싱값을 리터럴로 채운다 (예: --change-state staged).
@@ -477,6 +471,18 @@ printf 'OCR_WARNINGS=%s\n' "$warnings"     # → Stage 4 Summary.Warnings (verdi
 ```
 
 (`<CHANGE_STATE>` = Stage-1 값을 리터럴로; `<REVIEW_BASE_OPT>` = clean 상태에서만 `--review-base <REVIEW_BASE>` 두 토큰, **비-clean 이면 토큰 자체를 생략** — 빈 문자열 `""` 인자를 넘기지 말 것(build-change-files 가 unknown-arg 로 exit 2 → change_files 누락).) 이후 단계는 캡처한 `PROMPT_FILE` **리터럴 경로**를 쓴다 — Agent tool 은 그 파일 내용을, agy/claude bridge 는 `--prompt-file '<PROMPT_FILE literal>'` 로(셸 변수 `$PROMPT_FILE` 의존 금지 — 다음 Bash 호출엔 그 변수가 없다). diff 가 맨 뒤인 것은 **지시-우선(instruction-attention) 순서**일 뿐이며 agy 절단 생존 보장이 아니다(절단되면 agy 는 prompt_too_large 로 제외).
+
+**Claude 쪽 리뷰어 — `claude_reviewer` 값에 따라 분기 (§4 리뷰어 열거):**
+
+- `single-opus` (기본) → 아래 "Claude Opus reviewer" 단일 Opus 경로(Agent tool / CLI bridge) 그대로.
+- `ultracode-fanout` (`--ultracode`) → `references/ultracode-integration.md` 의 하이브리드 fan-out 을 수행한다(6 차원 샤드 → 단일 "Claude(ultracode)" 보이스). **순서 계약(ARCH-1)**: 먼저 codex/agy 백그라운드 잡을 spawn 한 뒤 ultracode 를 호출하고, Stage 4 진입 전 ultracode 결과 + 모든 codex/agy 완료를 join 한다. ultracode 보이스는 `reviewers_planned` 의 단일 'opus' entry 를 대체한다. **아래 "Claude Opus reviewer" 블록은 수행하지 않는다.**
+- `none` (`--no-opus`/`--codex-only`) → Claude 리뷰어 미spawn. **아래 "Claude Opus reviewer" 블록은 수행하지 않는다.** (단발 N=0 은 §4 CONS-3 가드 + Stage 4.3.1 N_actual 가드에서 차단.)
+
+**Claude Opus reviewer (`claude_reviewer == single-opus` 일 때만):**
+
+> 이 블록은 `claude_reviewer == single-opus` 인 경우에만 적용한다. `ultracode-fanout` 은 위 분기대로 `ultracode-integration.md` 를 따르고, `none` 은 Claude 리뷰어를 건너뛴다.
+
+single-opus 경로는 **위 "공유 reviewer payload 조립" 블록이 캡처한 `PROMPT_FILE`** 을 그대로 소비한다(별도 조립 없음) — Agent tool 은 그 리터럴 경로의 파일 내용을 프롬프트로 읽고, claude bridge 는 `--prompt-file '<captured PROMPT_FILE literal>'` 로 전달한다. 표준 `codex review`·Codex adversarial 에는 그 payload 를 주입하지 않는다.
 
 1. **Claude Code 런타임 (`Agent` tool 사용 가능)**:
    - 캡처한 `PROMPT_FILE` 리터럴 경로의 파일 내용을 읽어 Agent tool 프롬프트로 사용한다.
@@ -859,6 +865,8 @@ AGY_EXCLUDE_FROM_SYNTHESIS=0
 >   - `AGY_TRUNCATED=1` (prompt_too_large): `⚠️ agy reviewed a truncated diff (>200KB) — findings may be incomplete`.
 >   - Other non-success `AGY_STATUS`: `⚠️ agy did not complete successfully (status: ${AGY_STATUS}) — excluded from synthesis`.
 > - Do NOT promote agy findings into verdict — treat agy as "not_attempted" for synthesis purposes.
+
+> **OCR_WARNINGS render step (payload-helper warnings → Summary)**: 공유 payload 조립 블록이 캡처한 `OCR_WARNINGS` 문자열을 Summary 의 `Warnings:` 줄에 그대로 렌더링한다(세미콜론 구분 항목; 0건이면 줄 자체를 생략). 이는 helper 실패 진단(fp-doctrine/change_files 누락) 고지일 뿐 **verdict 는 불변** — agy 의 `AGY_EXCLUDE_FROM_SYNTHESIS` 경고와 달리 `N_actual` 에 영향을 주지 않는다. Warnings 줄의 단일 출처 정의는 `references/report-format.md`.
 
 1. 교차 검증 합성 (Codex 결과가 있을 때):
    - 전원 일치 지적 → 🔴 높은 확신

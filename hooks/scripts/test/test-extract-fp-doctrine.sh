@@ -97,6 +97,15 @@ assert_success "grep -q 'build-change-files.sh' \"$CMD\"" "command wires build-c
 assert_success "grep -q 'build-reviewer-payload.sh' \"$CMD\"" "command wires shared payload builder"
 assert_success "grep -q 'Summary.Warnings' \"$CMD\"" "command renders helper-failure warnings into Summary"
 assert_success "grep -q 'adversarial 에는 주입하지 않는다' \"$CMD\"" "adversarial not injected (documented)"
+# Finding 1 lock: shared payload assembly is HOISTED above the reviewer branch (not single-opus-gated).
+# The payload marker (build-reviewer-payload.sh) must appear at an earlier line than the
+# 'claude_reviewer == single-opus' header — i.e. the block runs for ultracode/agy too, not just single-opus.
+payload_line=$(grep -n 'build-reviewer-payload.sh' "$CMD" | head -1 | cut -d: -f1)
+singleopus_line=$(grep -n 'claude_reviewer == single-opus' "$CMD" | head -1 | cut -d: -f1)
+assert_success "[ -n \"$payload_line\" ] && [ -n \"$singleopus_line\" ]" "payload + single-opus markers both present"
+assert_success "[ \"$payload_line\" -lt \"$singleopus_line\" ]" "shared payload assembly hoisted ABOVE the reviewer-branch (not single-opus-gated)"
+# Finding 3: Stage-4 explicitly renders captured OCR_WARNINGS into Summary.Warnings (distinct from the :470 capture comment).
+assert_success "grep -q 'OCR_WARNINGS render step' \"$CMD\"" "Stage-4 renders OCR_WARNINGS into Summary.Warnings (explicit step)"
 # focus_text negative (W7): the adversarial focus_text builder must NOT pull in the doctrine
 CI="$HERE/../../../skills/deep-review-workflow/references/codex-integration.md"
 assert_failure "grep -Eq 'extract-fp-doctrine|fp-doctrine:start' \"$CI\"" "codex-integration does not inject fp-doctrine into adversarial focus_text"
