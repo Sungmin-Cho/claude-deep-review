@@ -442,9 +442,12 @@ N_planned = len(reviewers_planned)
 
 **공유 reviewer payload 조립 (리뷰어 분기·spawn 이전 — 모든 Claude/agy 경로 공통):**
 
-> 이 블록은 **리뷰어 분기 이전, 그리고 mutation/codex 자동노출(§3.0) ·WIP 커밋 이전**에 **무조건** 1회 수행한다(셸 상태 비의존 — Stage 1 값은 오케스트레이터가 리터럴로 치환). 어떤 Claude/agy 리뷰어든 계획돼 있으면(single-opus·ultracode-fanout·agy) 이 블록이 산출한 `prompt_file` 을 **동일 경로**로 공통 소비한다: single-opus(Agent tool 입력 / claude bridge `--prompt-file`), agy bridge `--prompt-file`, ultracode 6 샤드. 분기·노출 이전에 돌리므로 `<CHANGE_STATE>` 가 **실효 리뷰 대상**(아직 dirty 한 워크트리)과 일치한다. 표준 `codex review`·Codex adversarial 에는 주입하지 않는다.
+> 이 블록은 **리뷰어 분기 이전, 그리고 mutation/codex 자동노출(§3.0) 이전**에 **무조건** 1회 수행한다(셸 상태 비의존 — Stage 1 값은 오케스트레이터가 리터럴로 치환). 어떤 Claude/agy 리뷰어든 계획돼 있으면(single-opus·ultracode-fanout·agy) 이 블록이 산출한 `prompt_file` 을 **동일 경로**로 공통 소비한다: single-opus(Agent tool 입력 / claude bridge `--prompt-file`), agy bridge `--prompt-file`, ultracode 6 샤드. 오케스트레이터는 `<CHANGE_STATE>`/`<REVIEW_BASE_OPT>`/diff 를 **실효(post-WIP) 리뷰 대상**으로 채운다(아래 실효-타깃 규칙). 표준 `codex review`·Codex adversarial 에는 주입하지 않는다.
 >
-> **Finding 2 — 순서 불변(WIP/auto-exposure 이전 필수)**: 이 블록은 반드시 codex 자동노출(`git add -f -N`, §3.0)·WIP 커밋 생성 **이전**에 돌아야 한다. 그래야 `<CHANGE_STATE>`(Stage 1 리터럴)가 dirty 워크트리를 가리킨다. 만약 어떤 경로로든 payload 조립 **이전에 WIP 커밋이 이미 생성**됐다면(`mixed` → `git diff HEAD` 가 빈/stale 가 됨), 실효 대상을 clean 으로 보정해 조립한다: `build-change-files.sh --change-state clean --review-base <REVIEW_BASE>` (= `review_base..HEAD`). Stage 2 의 WIP 커밋 UX 는 이 블록 이전 단계(Collect/Contract)에 위치하므로, 본 보정은 그 경우의 안전망이다.
+> **Finding 2/3 — 실효(post-WIP) 타깃 규칙(필수)**: payload 조립 시점에 워크트리·HEAD 상태가 Stage-1 수집 시점과 다를 수 있다 — Stage 1 (Collect) 의 WIP 커밋 UX(§2, "Codex 교차 검증을 위해 WIP 커밋을 생성할까요?")는 이 블록보다 **앞**에 위치하므로, 사용자가 옵션 A/B 를 수락했다면 이 블록이 도는 시점엔 워크트리가 이미 clean 이고 HEAD 가 WIP 커밋이다. 따라서 오케스트레이터는 다음을 **기계적으로** 적용한다:
+> - **WIP 수락(옵션 A/B) → `--change-state clean` + `--review-base <REVIEW_BASE>`**(실효 변경셋 = `review_base..HEAD`). 이 경우 Stage-1 의 원래 `change_state`(예: `mixed`)를 쓰면 `git diff HEAD` 가 빈/stale → **성공했지만 빈 manifest**(무경고)로 리뷰어가 change_files 를 통째로 잃는다(spec §3.2 silent-empty). 그래서 `mixed`/`staged`/`unstaged` 가 아니라 `clean`+`review_base..HEAD` 로 채운다.
+> - **WIP 거부(옵션 C) 또는 WIP UX 미발생 → Stage-1 `change_state` 그대로**(dirty 워크트리가 곧 리뷰 대상).
+> codex 자동노출(`git add -f -N`, §3.0)도 이 블록 **이후**여야 한다(노출이 먼저면 dirty 상태가 오염됨).
 
 ```bash
 # 오케스트레이터가 Stage 1 파싱값을 리터럴로 채운다 (예: --change-state staged).
@@ -455,6 +458,8 @@ doc=$(mktemp); cf=$(mktemp); ctx_file=$(mktemp); diff_file=$(mktemp); prompt_fil
 
 # (오케스트레이터가 이 블록 안에서) diff → $diff_file, 세션/비-git 타겟(NUL) → $manual_files_z,
 # rules.yaml/contract/fitness.json/health_report(있으면) → $ctx_file 를 채운다.
+# diff 는 위 "실효(post-WIP) 타깃 규칙"과 동일한 범위를 써야 change_files 와 일치한다:
+#   WIP 수락 → `git diff <REVIEW_BASE>..HEAD` (= review_base..HEAD), WIP 거부/미발생 → Stage-1 상태별 diff.
 
 if ! bash "$P/extract-fp-doctrine.sh" "$PR/skills/deep-review-workflow/references/review-criteria.md" > "$doc" 2>/dev/null; then
   : > "$doc"; warnings="${warnings}fp-doctrine extraction failed (injection skipped); "
@@ -470,7 +475,7 @@ printf 'PROMPT_FILE=%s\n' "$prompt_file"   # 오케스트레이터가 캡처
 printf 'OCR_WARNINGS=%s\n' "$warnings"     # → Stage 4 Summary.Warnings (verdict 불변)
 ```
 
-(`<CHANGE_STATE>` = Stage-1 값을 리터럴로; `<REVIEW_BASE_OPT>` = clean 상태에서만 `--review-base <REVIEW_BASE>` 두 토큰, **비-clean 이면 토큰 자체를 생략** — 빈 문자열 `""` 인자를 넘기지 말 것(build-change-files 가 unknown-arg 로 exit 2 → change_files 누락).) 이후 단계는 캡처한 `PROMPT_FILE` **리터럴 경로**를 쓴다 — Agent tool 은 그 파일 내용을, agy/claude bridge 는 `--prompt-file '<PROMPT_FILE literal>'` 로(셸 변수 `$PROMPT_FILE` 의존 금지 — 다음 Bash 호출엔 그 변수가 없다). diff 가 맨 뒤인 것은 **지시-우선(instruction-attention) 순서**일 뿐이며 agy 절단 생존 보장이 아니다(절단되면 agy 는 prompt_too_large 로 제외).
+(`<CHANGE_STATE>` = **실효(post-WIP) 리뷰 대상 상태**를 리터럴로 — 1차 규칙: Stage-1 에서 WIP 커밋이 수락됐으면 `clean`, 아니면 Stage-1 `change_state`. `<REVIEW_BASE_OPT>` = 실효 상태가 clean 일 때만 `--review-base <REVIEW_BASE>` 두 토큰(WIP 수락 시 = `review_base..HEAD`), **비-clean 이면 토큰 자체를 생략** — 빈 문자열 `""` 인자를 넘기지 말 것(build-change-files 가 unknown-arg 로 exit 2 → change_files 누락).) 이후 단계는 캡처한 `PROMPT_FILE` **리터럴 경로**를 쓴다 — Agent tool 은 그 파일 내용을, agy/claude bridge 는 `--prompt-file '<PROMPT_FILE literal>'` 로(셸 변수 `$PROMPT_FILE` 의존 금지 — 다음 Bash 호출엔 그 변수가 없다). diff 가 맨 뒤인 것은 **지시-우선(instruction-attention) 순서**일 뿐이며 agy 절단 생존 보장이 아니다(절단되면 agy 는 prompt_too_large 로 제외).
 
 **Claude 쪽 리뷰어 — `claude_reviewer` 값에 따라 분기 (§4 리뷰어 열거):**
 

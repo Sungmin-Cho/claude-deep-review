@@ -40,6 +40,44 @@ assert_success "\"$SCRIPT\" --repo \"$init\" --change-state initial | grep -q on
 ffz=$(mktemp); printf 'man1.txt\0man2.txt\0' > "$ffz"
 assert_success "\"$SCRIPT\" --repo \"$repo\" --change-state non-git --files-from-z \"$ffz\" | grep -q man1.txt" "non-git uses files-from-z"
 
+# --- Finding B (out-of-scope exclusions): change_files must mirror commands/deep-review.md:172.
+# Stage a normal src file alongside vendored/build/generated/lock/.DS_Store + a binary;
+# only the real source file must survive (rest are out of the review DIFF target set).
+excl=$(setup_test_repo)
+( cd "$excl"
+  mkdir -p vendor node_modules dist build .next target .venv __pycache__ .pytest_cache src
+  printf 'a\n' > vendor/x.js;        printf 'b\n' > node_modules/y.js
+  printf 'c\n' > a.min.js;           printf 'd\n' > b.generated.ts
+  printf 'e\n' > c.lock;             printf 'real\n' > src/real.ts
+  printf 'z\n' > dist/z.js;          printf 'z\n' > build/z.js
+  printf 'z\n' > .next/z.js;         printf 'z\n' > target/z.js
+  printf 'z\n' > .venv/z.py;         printf 'z\n' > __pycache__/z.pyc
+  printf 'z\n' > .pytest_cache/z;    printf 'x\n' > src/.DS_Store
+  printf '\000\001\002BIN' > src/img.bin                       # binary blob
+  git add -A )
+oute=$("$SCRIPT" --repo "$excl" --change-state staged)
+assert_success "printf '%s\\n' \"\$oute\" | grep -q '\"path\": *\"src/real.ts\"'" "exclusion: src/real.ts kept"
+for bad in 'vendor/x.js' 'node_modules/y.js' 'a.min.js' 'b.generated.ts' 'c.lock' \
+           'dist/z.js' 'build/z.js' '.next/z.js' 'target/z.js' '.venv/z.py' \
+           '__pycache__/z.pyc' '.pytest_cache/z' 'src/.DS_Store' 'src/img.bin'; do
+  assert_failure "printf '%s\\n' \"\$oute\" | grep -q '\"path\": *\"$bad\"'" "exclusion: $bad dropped"
+done
+
+# --- Finding A (effective post-WIP target): simulate the orchestrator's WIP-accepted path.
+# Changes are COMMITTED in BASE..HEAD; calling with --change-state clean --review-base BASE
+# (the effective target the block fills after a Stage-1 WIP commit) must yield a NON-EMPTY
+# manifest for those committed files — proving the effective-target call is not silent-empty.
+wip=$(setup_test_repo)
+( cd "$wip"
+  base=$(git rev-parse HEAD)
+  printf 'wip-change\n' > committed.ts
+  git add committed.ts; git commit -q -m "wip: deep-review checkpoint"
+  echo "$base" > "$wip/.base" )
+base=$(cat "$wip/.base")
+outwip=$("$SCRIPT" --repo "$wip" --change-state clean --review-base "$base")
+assert_success "[ -n \"\$outwip\" ]" "WIP effective-target: manifest non-empty (not silent-empty)"
+assert_success "printf '%s\\n' \"\$outwip\" | grep -q '\"path\": *\"committed.ts\"'" "WIP effective-target: committed file present in review_base..HEAD"
+
 teardown_test_repo
-rm -rf "$weird" "$init" "$ffz"
+rm -rf "$weird" "$init" "$ffz" "$excl" "$wip"
 test_summary
