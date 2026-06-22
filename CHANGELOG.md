@@ -313,7 +313,7 @@ All notable changes to deep-review are documented here. Follows [Keep a Changelo
 
 ### Fixed
 
-- Always include untracked files in review regardless of change state.
+- Always include untracked files in review regardless of change state. *(Refined in v1.12.0: the untracked union now applies to dirty states only — `clean` is excluded.)*
 - Aligned Codex synthesis rules with verdict logic (2/3 → `CONCERN`).
 - Added a Codex preflight check to prevent silent degradation.
 - Added shallow-clone handling, archived-contract filtering, and malformed-YAML error handling.

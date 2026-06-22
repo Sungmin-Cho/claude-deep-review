@@ -313,7 +313,7 @@ deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Ke
 
 ### 수정
 
-- change state에 관계없이 항상 untracked 파일을 리뷰에 포함.
+- change state에 관계없이 항상 untracked 파일을 리뷰에 포함. *(v1.12.0에서 정제: untracked 유니온은 이제 dirty 상태에만 적용되며 `clean`은 제외됨.)*
 - Codex 합성 규칙을 verdict 로직과 정렬(2/3 → `CONCERN`).
 - 무음 성능 저하를 방지하기 위한 Codex preflight 체크 추가.
 - shallow clone 처리, 아카이브된 contract 필터, malformed YAML 오류 처리 추가.
