@@ -106,6 +106,46 @@ assert_success "[ -n \"$payload_line\" ] && [ -n \"$singleopus_line\" ]" "payloa
 assert_success "[ \"$payload_line\" -lt \"$singleopus_line\" ]" "shared payload assembly hoisted ABOVE the reviewer-branch (not single-opus-gated)"
 # Finding 3: Stage-4 explicitly renders captured OCR_WARNINGS into Summary.Warnings (distinct from the :470 capture comment).
 assert_success "grep -q 'OCR_WARNINGS render step' \"$CMD\"" "Stage-4 renders OCR_WARNINGS into Summary.Warnings (explicit step)"
+
+# --- Finding 1 (codex R3): the agy reviewer's {prompt_file} MUST be the captured shared PROMPT_FILE
+# from the "공유 reviewer payload 조립" block (carries fp-doctrine + change_files), NOT a fresh
+# agy-only mktemp — otherwise v1.12.0 #2 (doctrine reaches every reviewer) silently misses agy.
+assert_success "grep -q 'NOT a fresh agy-only mktemp' \"$CMD\"" "agy {prompt_file} = captured shared PROMPT_FILE (not a fresh agy mktemp)"
+assert_success "grep -q '공유 PROMPT_FILE 소비' \"$CMD\"" "agy section has the shared-PROMPT_FILE-consumption directive"
+# The agy section's {prompt_file} substitution example must tie it to the shared payload-assembly
+# block by name. This phrasing is unique to the agy section (the single-opus tie at :493 uses
+# different wording), so head -1 cannot collide with the single-opus block.
+agy_line=$(grep -n '^4\. \*\*agy reviewer\*\*' "$CMD" | head -1 | cut -d: -f1)
+sharedref_line=$(grep -n 'captured .PROMPT_FILE. literal path from the .공유 reviewer payload 조립. block above' "$CMD" | head -1 | cut -d: -f1)
+assert_success "[ -n \"$agy_line\" ] && [ -n \"$sharedref_line\" ]" "agy section + agy {prompt_file} shared-PROMPT_FILE reference both present"
+assert_success "[ \"$sharedref_line\" -gt \"$agy_line\" ]" "agy {prompt_file} shared-PROMPT_FILE reference lives inside the agy reviewer section"
+
+# --- Finding 3 (codex R3): the Stage-1 'diff에서 제외' list (commands/deep-review.md:172, the SoT)
+# must contain EXACTLY the same exclusion tokens as build-change-files.sh's EXCLUDE_SEGMENTS +
+# EXCLUDE_BASENAME_GLOBS. Token-by-token cross-check (membership must be textually identical) so
+# the diff-collection rule and the change_files manifest target the same set (spec §4.1).
+BCF="$HERE/../build-change-files.sh"
+# Isolate ONLY the Stage-1 ':172' exclusion block: from the 'diff에서 제외' line to the FIRST
+# blank line. Must terminate at the blank line (not at 'best-effort') so it cannot sweep in the
+# §2.1 session-inference exclusion list at :183-188, which legitimately repeats many of the same
+# tokens — making the cross-check discriminate the SoT bullets specifically (RED-meaningful: the
+# old one-liner :172 lacks dist/.next/target/.DS_Store, so those assertions fail pre-fix).
+excl_block=$(awk '/diff에서 제외/{f=1} f&&/^[[:space:]]*$/{exit} f{print}' "$CMD")
+for tok in node_modules dist build .next target .venv __pycache__ .pytest_cache vendor .git \
+           '*.min.js' '*.generated.*' '*.lock' .DS_Store; do
+  # token must be present in BOTH the helper source AND the doc SoT block
+  assert_success "grep -Fq -- '$tok' \"$BCF\"" "helper EXCLUDE set contains '$tok'"
+  assert_success "printf '%s\\n' \"\$excl_block\" | grep -Fq -- '$tok'" "deep-review.md:172 SoT list contains '$tok'"
+done
+# Reverse direction: the helper must not silently carry an excluded segment the doc SoT omits.
+# (EXCLUDE_SEGMENTS membership lock — extract the python set literals and confirm each is in the doc.)
+helper_segs=$(awk '/EXCLUDE_SEGMENTS=\{/{f=1} f{print} f&&/\}/{exit}' "$BCF" | grep -oE '"[^"]+"' | tr -d '"')
+while IFS= read -r seg; do
+  [ -z "$seg" ] && continue
+  assert_success "printf '%s\\n' \"\$excl_block\" | grep -Fq -- '$seg'" "doc SoT covers helper segment '$seg' (no helper-only exclusion)"
+done <<EOF
+$helper_segs
+EOF
 # focus_text negative (W7): the adversarial focus_text builder must NOT pull in the doctrine
 CI="$HERE/../../../skills/deep-review-workflow/references/codex-integration.md"
 assert_failure "grep -Eq 'extract-fp-doctrine|fp-doctrine:start' \"$CI\"" "codex-integration does not inject fp-doctrine into adversarial focus_text"

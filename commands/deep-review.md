@@ -169,7 +169,10 @@ Codex 또는 다른 non-Claude 런타임에서는 `claude_cli` / `claude_cli_pat
 **모든 git 상태에서 untracked > 0이면:**
 - `git ls-files --others --exclude-standard`로 추가 파일을 리뷰 대상에 포함
 
-diff에서 제외: 바이너리, vendor/, node_modules/, *.min.js, *.generated.*, *.lock
+diff에서 제외 (**Stage-1 표준 제외 목록 — 이 줄이 단일 출처(SoT)**. `hooks/scripts/build-change-files.sh` 의 `EXCLUDE_SEGMENTS`/`EXCLUDE_BASENAME_GLOBS` 와 **멤버십이 글자 그대로 동일**해야 한다 — diff 와 change_files manifest 의 대상 집합 불일치 방지, spec §4.1):
+- 디렉토리 세그먼트: `node_modules/`, `dist/`, `build/`, `.next/`, `target/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `vendor/`, `.git/`
+- 파일명 글로브: `*.min.js`, `*.generated.*`, `*.lock`, `.DS_Store`
+- 바이너리 (best-effort: `git diff --numstat` 가 `-\t-` 로 표시하는 블롭)
 
 ### 2.1 세션 컨텍스트 기반 대상 확장 (Case 3 전용)
 
@@ -682,11 +685,19 @@ Codex 리뷰 대상은 change_state에 따라 결정:
 
 4. **agy reviewer** (Bash tool, run_in_background: true)
 
+  > **공유 PROMPT_FILE 소비 (필수 — Finding 1/2 #2 doctrine 도달)**: agy 의 `{prompt_file}` 은
+  > **위 "공유 reviewer payload 조립" 블록이 캡처한 `PROMPT_FILE` 리터럴 경로 바로 그것**이다 —
+  > single-opus(Agent tool 입력 / claude bridge `--prompt-file`)와 ultracode 6 샤드가 소비하는
+  > **동일한 하나의 파일**. agy 전용으로 새 `mktemp` 를 만들지 **않는다**. 그 payload 에는
+  > fp-doctrine(거짓양성 독트린)과 change_files manifest 가 이미 들어 있으므로, agy 를 이 공유
+  > PROMPT_FILE 로 구동해야 v1.12.0 의 #2(독트린·변경셋이 모든 리뷰어에 도달) 가 agy 에도 성립한다.
+  > **금지**: payload 없는 prompt(독트린/change_files 누락)를 agy 에 넘기는 것 — agy 만 빠진 #2 가 됨.
+  >
   > **Read-only 강제 (v1.8.1)**: agy CLI 는 read-only 모드가 없다 (`-p` 가 권한 플래그
   > 유무와 무관하게 Edit/Write 를 자동 승인 — 실측 확인). `run-agy-reviewer.sh` 가
-  > `{prompt_file}` 본문 앞에 read-only preamble 을 **무조건 prepend** 하므로, orchestrator 는
-  > Opus / Codex 와 동일한 일반 reviewer prompt 만 `{prompt_file}` 에 쓰면 된다 — read-only
-  > 지시를 직접 넣을 필요 없다. 이렇게 해야 agy 가 합성(Stage 4) 전에 코드를 수정하지 않는다.
+  > **이 공유 PROMPT_FILE 본문 앞에** read-only preamble 을 **무조건 prepend** 하므로(payload 는
+  > 그대로 유지), orchestrator 는 위 블록이 캡처한 `PROMPT_FILE` 을 그대로 넘기기만 하면 된다 —
+  > read-only 지시를 직접 넣을 필요 없다. 이렇게 해야 agy 가 합성(Stage 4) 전에 코드를 수정하지 않는다.
   > 자세한 rationale 은 `skills/deep-review-workflow/references/agy-integration.md` 참조.
 
   > **LLM substitution note**: `{placeholder}` values (e.g. `{agy_cli_path}`, `{prompt_file}`,
@@ -698,8 +709,8 @@ Codex 리뷰 대상은 change_state에 따라 결정:
   **Concrete substitution example** (orchestrator fills before invoking Bash):
   - `{agy_cli_path}` → `/usr/local/bin/agy` (from Stage 1 `agy_cli_path` detection)
   - `{project_root}` → `/home/user/myrepo` (from `git rev-parse --show-toplevel`)
-  - `{prompt_file}` → `/tmp/deep-review-agy-prompt.xXxXxX` (from mktemp in earlier Bash call)
-  - `{output_file}` → `/tmp/deep-review-agy-output.xXxXxX` (from mktemp in earlier Bash call)
+  - `{prompt_file}` → **the captured `PROMPT_FILE` literal path from the "공유 reviewer payload 조립" block above** (e.g. `/tmp/tmp.xXxXxX` — the SAME file single-opus and the ultracode shards consume, NOT a fresh agy-only mktemp; it already carries fp-doctrine + change_files). `run-agy-reviewer.sh` prepends the read-only preamble on top of this shared payload.
+  - `{output_file}` → `/tmp/deep-review-agy-output.xXxXxX` (from a fresh mktemp in an earlier Bash call — agy's output sink is per-reviewer, unlike the shared input prompt)
 
   > Note: `agy_model` is NOT a `{placeholder}` — it is free-form text from (possibly untrusted) config and is resolved as a shell variable inside the bridge-invocation Bash call (see "model tier" below), so it can never be literal-substituted into the command string.
 
@@ -725,7 +736,7 @@ Codex 리뷰 대상은 change_state에 따라 결정:
 
   > ⚠️ **보안 (shell injection 방지)**: `agy_model` 은 `.deep-review/config.yaml` / `AGY_MODEL` 에서 오는 **free-form 문자열**이고, 신뢰할 수 없는 repo 가 `.deep-review/config.yaml` 을 commit 해 ship 할 수 있다. enum 으로 검증되는 `--mode` 와 달리 model 은 자유 문자열이므로, **LLM 이 이 값을 `{placeholder}` 리터럴로 Bash 명령 문자열에 치환하면 shell injection** 이 된다 (예: `agy_model: '"; rm -rf ~ ; #'`). 따라서 model 은 **반드시 bridge 호출과 같은 Bash 세션 안에서 shell 변수로 해석**하고 `--model "$agy_model"` 로 **변수 전개**한다 — 절대 `{agy_model}` 리터럴로 치환하지 않는다. 1차 방어로 charset allowlist 가드를 둔다. (이는 codex focus_text 를 stdin 으로만 넘기는 §위 패턴과 동일한 원칙이다.)
 
-  agy 4번째 reviewer 는 **이 전체 블록을 하나의 `Bash({ command: '...', run_in_background: true })` 호출**로 실행한다 — 다른 reviewer(Opus/Codex)와 동일한 background 실행 계약이며, 한 Bash 호출 = 한 shell 이므로 `agy_model` / `agy_model_args` 의 변수 scope 가 bridge invocation 과 일치한다. `{agy_cli_path}` / `{project_root}` / `{prompt_file}` / `{output_file}` / `{agy_fingerprint_mode}` 만 리터럴 치환 (신뢰된 detection/mktemp/enum 값); `agy_model` 은 **절대 리터럴 치환하지 않고** shell 변수로만 전개한다.
+  agy 4번째 reviewer 는 **이 전체 블록을 하나의 `Bash({ command: '...', run_in_background: true })` 호출**로 실행한다 — 다른 reviewer(Opus/Codex)와 동일한 background 실행 계약이며, 한 Bash 호출 = 한 shell 이므로 `agy_model` / `agy_model_args` 의 변수 scope 가 bridge invocation 과 일치한다. `{agy_cli_path}` / `{project_root}` / `{prompt_file}` / `{output_file}` / `{agy_fingerprint_mode}` 만 리터럴 치환 (신뢰된 detection/mktemp/enum 값 — 특히 `{prompt_file}` = 위 "공유 reviewer payload 조립" 블록이 캡처한 `PROMPT_FILE`, single-opus/ultracode 와 **동일한** mktemp 산 경로); `agy_model` 은 **절대 리터럴 치환하지 않고** shell 변수로만 전개한다.
 
   ```
   Bash({ command: '

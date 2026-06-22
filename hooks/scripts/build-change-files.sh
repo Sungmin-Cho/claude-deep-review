@@ -31,10 +31,13 @@ def git_z(*args):
         sys.exit(5)                      # → orchestrator omits change_files + warns
     return [x for x in r.stdout.split(b"\0") if x!=b""]
 items={}  # path-bytes -> record dict (later inserts do not override earlier richer ones)
-# --- Stage-1 review-target exclusions (MUST mirror commands/deep-review.md:172,
-# the diff exclusion list — keep in sync). change_files == the exact review DIFF
-# target set (spec §4.1), so any path the diff omits must be omitted here too;
-# otherwise reviewers see out-of-scope files (vendored/build/generated/lock/binary).
+# --- Stage-1 review-target exclusions. CANONICAL SOURCE OF TRUTH: the
+# "diff에서 제외" list at commands/deep-review.md:172 (the Stage-1 diff exclusion
+# rule). The two MUST stay textually identical in membership — this set and that
+# list are the same target filter (change_files == the exact review DIFF target
+# set, spec §4.1), so any path the diff omits must be omitted here too; otherwise
+# reviewers see out-of-scope files (vendored/build/generated/lock/binary). When you
+# edit one, edit the other to match.
 # Applied to the DECODED path so glob/segment matching is on real path text while
 # the dict key stays the raw path-bytes (NUL-safety + byte-sort preserved).
 import fnmatch, posixpath
@@ -116,8 +119,13 @@ elif state=="initial":
         add({"p":p,"status":"initial","path":dec(p)})
 elif state in ("untracked-only","non-git"): pass
 else: sys.stderr.write(f"build-change-files: unknown state {state}\n"); sys.exit(2)
-# has_untracked union for every git state except initial/non-git
-if state not in ("initial","non-git"):
+# has_untracked union ONLY for DIRTY working-tree states. `clean` is excluded:
+# its effective target is committed `base..HEAD` (incl. the WIP-accepted tracked-only
+# path that calls `--change-state clean --review-base <BASE>`), so leftover untracked
+# files are NOT part of that diff/target set — unioning them would list out-of-scope
+# files (spec §4.1: change_files == the exact review DIFF target set). `initial` keeps
+# its own --cached --others enumeration above; `non-git` uses --files-from-z only.
+if state in ("staged","unstaged","mixed","untracked-only"):
     for p in git_z("ls-files","-z","--others","--exclude-standard"):
         add({"p":p,"status":"untracked","path":dec(p)})
 # manual / session-inferred paths (non-git or session-expansion)

@@ -78,6 +78,23 @@ outwip=$("$SCRIPT" --repo "$wip" --change-state clean --review-base "$base")
 assert_success "[ -n \"\$outwip\" ]" "WIP effective-target: manifest non-empty (not silent-empty)"
 assert_success "printf '%s\\n' \"\$outwip\" | grep -q '\"path\": *\"committed.ts\"'" "WIP effective-target: committed file present in review_base..HEAD"
 
+# --- Finding 2 (clean state must NOT union leftover untracked): the WIP-accepted tracked-only
+# path calls `--change-state clean --review-base BASE`; its effective target is committed
+# base..HEAD ONLY. A leftover untracked file in the worktree is NOT part of that diff, so the
+# manifest must list the committed file but MUST NOT list the untracked file (spec §4.1 — clean
+# is excluded from the untracked union; unioning it would leak out-of-scope files).
+cleanu=$(setup_test_repo)
+( cd "$cleanu"
+  base=$(git rev-parse HEAD)
+  printf 'in-scope\n' > committed.ts
+  git add committed.ts; git commit -q -m "wip: deep-review checkpoint"
+  printf 'leftover\n' > leftover-untracked.txt   # untracked, NOT in base..HEAD
+  echo "$base" > "$cleanu/.base" )
+base=$(cat "$cleanu/.base")
+outcu=$("$SCRIPT" --repo "$cleanu" --change-state clean --review-base "$base")
+assert_success "printf '%s\\n' \"\$outcu\" | grep -q '\"path\": *\"committed.ts\"'" "clean+leftover: committed in-scope file present"
+assert_failure "printf '%s\\n' \"\$outcu\" | grep -q 'leftover-untracked.txt'" "clean+leftover: out-of-scope untracked file NOT unioned"
+
 teardown_test_repo
-rm -rf "$weird" "$init" "$ffz" "$excl" "$wip"
+rm -rf "$weird" "$init" "$ffz" "$excl" "$wip" "$cleanu"
 test_summary
