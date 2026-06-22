@@ -33,9 +33,10 @@ user-invocable: false
    - `change_state=unstaged` → `git diff`
    - `change_state=mixed` → `git diff HEAD` (staged + unstaged 모두)
    - `change_state=untracked-only` → `git ls-files --others --exclude-standard`로 파일 목록 수집
-4. **모든 git 상태에서 untracked > 0이면:**
-   - `git ls-files --others --exclude-standard`로 추가 파일을 리뷰 대상에 포함 (primary state의 diff와 union)
-5. diff에서 제외: 바이너리, vendor/, node_modules/, *.min.js, *.generated.*, *.lock
+4. **dirty working-tree 상태(staged/unstaged/mixed/untracked-only)에서 untracked > 0이면:**
+   - `git ls-files --others --exclude-standard`로 추가 파일을 리뷰 대상에 포함 (primary state의 diff와 union).
+   - **단, `clean` 은 union에서 제외** — clean 의 실효 대상은 커밋된 `review_base..HEAD` 이므로 leftover untracked 파일은 그 대상 집합에 없다(spec §4.1). `initial` 은 자체 `--cached --others` 열거를 쓴다.
+5. diff에서 제외 (**SSOT: `commands/deep-review.md:172` 의 "diff에서 제외" 목록 + `hooks/scripts/build-change-files.sh` 의 `EXCLUDE_SEGMENTS`/`EXCLUDE_BASENAME_GLOBS`**). 여기서 목록을 재기술하지 않는다 — 디렉토리 세그먼트(node_modules/dist/build/.next/target/.venv/__pycache__/.pytest_cache/vendor/.git)·파일명 글로브(*.min.js/*.generated.*/*.lock/.DS_Store)·바이너리의 **정확한 멤버십은 그 단일 출처를 따른다**. 이 목록은 diff 와 change_files manifest 의 대상 집합이 동일하도록(spec §4.1) 변경 시 SSOT 한 곳만 고치면 된다.
 
 ### Stage 2: Contract Check (계약 검증)
 

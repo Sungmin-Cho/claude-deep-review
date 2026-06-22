@@ -4,6 +4,23 @@
 
 deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)와 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
+## [1.12.0] — 2026-06-22
+
+### 추가
+
+- **FP-억제 독트린 주입 (#2)** — `extract-fp-doctrine.sh`가 단일 소스 독트린 파일에서 `fp-doctrine` + `fp-conservative` 블록을 HTML 주석 마커로 추출(블록별 엄격 검증, fail-closed)하고 `build-reviewer-payload.sh`를 통해 Opus 리뷰어 프롬프트, 모든 ultracode 샤드, agy 페이로드에 주입. 억제 규칙과 함께 conservative-balance 반대 가중치가 항상 공동 주입됨. 적대적 리뷰어는 의도적으로 제외.
+- **`change_files` 교차 파일 매니페스트 (#3)** — `build-change-files.sh`가 NUL-safe, 상태 인식 교차 파일 매니페스트를 생성. 이름 변경/복사 감지(`-M -C`), 추적되지 않은 파일 유니온, 초기 커밋 처리, `python3 -c`를 통한 파일 경로 JSON 인코딩 포함. 200개 항목 제한. 매니페스트는 `build-reviewer-payload.sh`를 통해 공유 리뷰어 페이로드에 추가(diff-last 지시문 주의 순서).
+
+### 변경
+
+- `build-reviewer-payload.sh`가 모든 Claude · agy 리뷰어가 사용하는 순서 있는 페이로드를 조합: 독트린 블록 → 컨텍스트 → change_files 매니페스트 → diff(마지막, 지시문 주의 우선순위용).
+- `commands/deep-review.md`가 모든 리뷰어 경로에 `extract-fp-doctrine.sh` + `build-change-files.sh` + `build-reviewer-payload.sh`를 연결. 페이로드 빌더가 사용 가능할 때 직접 diff 주입을 차단하는 Strict-Focus 가드 추가.
+- ultracode 샤드가 공유 페이로드에서 독트린 + change_files를 상속(Task 5); `skills/deep-review-workflow/references/report-format.md`에 `change_files` 크기 초과/누락 경고 추가.
+
+### 보류
+
+- 위조방지 게이트(#1) 보류 — `diff_integrity` + 안정적인 finding ID + receiving-review/recurring/loop 제약 조건이 갖춰질 때까지 안전하게 출시 불가(spec §9.1 참조).
+
 ## [1.11.0] — 2026-06-16
 
 ### 추가

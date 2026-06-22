@@ -166,10 +166,14 @@ Codex 또는 다른 non-Claude 런타임에서는 `claude_cli` / `claude_cli_pat
 **git + untracked-only:**
 - `git ls-files --others --exclude-standard`로 파일 목록 수집 후 내용 읽기
 
-**모든 git 상태에서 untracked > 0이면:**
-- `git ls-files --others --exclude-standard`로 추가 파일을 리뷰 대상에 포함
+**dirty working-tree 상태(staged/unstaged/mixed/untracked-only)에서 untracked > 0이면:**
+- `git ls-files --others --exclude-standard`로 추가 파일을 리뷰 대상에 포함 (primary state 의 diff 와 union).
+- **단, `clean` 은 union에서 제외** — clean 의 실효 대상은 커밋된 `review_base..HEAD` 이므로 leftover untracked 파일은 그 대상 집합에 없다(unioning 하면 out-of-scope 파일 유출, spec §4.1). `initial` 은 자체 `--cached --others` 열거를 쓴다. 이 규칙은 `build-change-files.sh` 의 `if state in ("staged","unstaged","mixed","untracked-only")` union 분기와 **글자 그대로 일치**해야 한다(diff 와 change_files manifest 의 대상 집합 일치).
 
-diff에서 제외: 바이너리, vendor/, node_modules/, *.min.js, *.generated.*, *.lock
+diff에서 제외 (**Stage-1 표준 제외 목록 — 이 줄이 단일 출처(SoT)**. `hooks/scripts/build-change-files.sh` 의 `EXCLUDE_SEGMENTS`/`EXCLUDE_BASENAME_GLOBS` 와 **멤버십이 글자 그대로 동일**해야 한다 — diff 와 change_files manifest 의 대상 집합 불일치 방지, spec §4.1):
+- 디렉토리 세그먼트: `node_modules/`, `dist/`, `build/`, `.next/`, `target/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `vendor/`, `.git/`
+- 파일명 글로브: `*.min.js`, `*.generated.*`, `*.lock`, `.DS_Store`
+- 바이너리 (best-effort: `git diff --numstat` 가 `-\t-` 로 표시하는 블롭)
 
 ### 2.1 세션 컨텍스트 기반 대상 확장 (Case 3 전용)
 
@@ -440,6 +444,43 @@ N_planned = len(reviewers_planned)
 | 2 | "2개 리뷰어(<composition>)를 백그라운드에서 실행합니다. 완료되면 결과를 합성하여 알려드리겠습니다." |
 | 1 | "Opus 리뷰를 백그라운드에서 실행합니다. 완료되면 결과를 알려드리겠습니다." |
 
+**공유 reviewer payload 조립 (리뷰어 분기·spawn 이전 — 모든 Claude/agy 경로 공통):**
+
+> 이 블록은 **리뷰어 분기 이전, 그리고 mutation/codex 자동노출(§3.0) 이전**에 **무조건** 1회 수행한다(셸 상태 비의존 — Stage 1 값은 오케스트레이터가 리터럴로 치환). 어떤 Claude/agy 리뷰어든 계획돼 있으면(single-opus·ultracode-fanout·agy) 이 블록이 산출한 `prompt_file` 을 **동일 경로**로 공통 소비한다: single-opus(Agent tool 입력 / claude bridge `--prompt-file`), agy bridge `--prompt-file`, ultracode 6 샤드. 오케스트레이터는 `<CHANGE_STATE>`/`<REVIEW_BASE_OPT>`/diff 를 **실효(post-WIP) 리뷰 대상**으로 채운다(아래 실효-타깃 규칙). 표준 `codex review`·Codex adversarial 에는 주입하지 않는다.
+>
+> **Finding 2/3 — 실효(post-WIP) 타깃 규칙(필수)**: payload 조립 시점에 워크트리·HEAD 상태가 Stage-1 수집 시점과 다를 수 있다 — Stage 1 (Collect) 의 WIP 커밋 UX(§2, "Codex 교차 검증을 위해 WIP 커밋을 생성할까요?")는 이 블록보다 **앞**에 위치하므로, 사용자가 옵션 A/B 를 수락했다면 이 블록이 도는 시점엔 워크트리가 이미 clean 이고 HEAD 가 WIP 커밋이다. 따라서 오케스트레이터는 다음을 **기계적으로** 적용한다:
+> - **WIP 수락(옵션 A/B) → `--change-state clean` + `--review-base <REVIEW_BASE>`**(실효 변경셋 = `review_base..HEAD`). 이 경우 Stage-1 의 원래 `change_state`(예: `mixed`)를 쓰면 `git diff HEAD` 가 빈/stale → **성공했지만 빈 manifest**(무경고)로 리뷰어가 change_files 를 통째로 잃는다(spec §3.2 silent-empty). 그래서 `mixed`/`staged`/`unstaged` 가 아니라 `clean`+`review_base..HEAD` 로 채운다.
+> - **WIP 거부(옵션 C) 또는 WIP UX 미발생 → Stage-1 `change_state` 그대로**(dirty 워크트리가 곧 리뷰 대상).
+> codex 자동노출(`git add -f -N`, §3.0)도 이 블록 **이후**여야 한다(노출이 먼저면 dirty 상태가 오염됨).
+
+```bash
+# 오케스트레이터가 Stage 1 파싱값을 리터럴로 채운다 (예: --change-state staged).
+PR="${CLAUDE_PLUGIN_ROOT}"; P="$PR/hooks/scripts"
+repoDir="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+warnings=""
+doc=$(mktemp); cf=$(mktemp); ctx_file=$(mktemp); diff_file=$(mktemp); prompt_file=$(mktemp); manual_files_z=$(mktemp)
+
+# (오케스트레이터가 이 블록 안에서) diff → $diff_file, 세션/비-git 타겟(NUL) → $manual_files_z,
+# rules.yaml/contract/fitness.json/health_report(있으면) → $ctx_file 를 채운다.
+# diff 는 위 "실효(post-WIP) 타깃 규칙"과 동일한 범위를 써야 change_files 와 일치한다:
+#   WIP 수락 → `git diff <REVIEW_BASE>..HEAD` (= review_base..HEAD), WIP 거부/미발생 → Stage-1 상태별 diff.
+
+if ! bash "$P/extract-fp-doctrine.sh" "$PR/skills/deep-review-workflow/references/review-criteria.md" > "$doc" 2>/dev/null; then
+  : > "$doc"; warnings="${warnings}fp-doctrine extraction failed (injection skipped); "
+fi
+# <CHANGE_STATE>/<REVIEW_BASE> 는 오케스트레이터가 Stage 1 값으로 치환하는 리터럴.
+if ! bash "$P/build-change-files.sh" --repo "$repoDir" --change-state <CHANGE_STATE> \
+        <REVIEW_BASE_OPT> --files-from-z "$manual_files_z" > "$cf" 2>/dev/null; then
+  : > "$cf"; warnings="${warnings}change_files unavailable (omitted); "
+fi
+bash "$P/build-reviewer-payload.sh" --doctrine-file "$doc" --change-files-file "$cf" \
+     --context-file "$ctx_file" --diff-file "$diff_file" > "$prompt_file"
+printf 'PROMPT_FILE=%s\n' "$prompt_file"   # 오케스트레이터가 캡처
+printf 'OCR_WARNINGS=%s\n' "$warnings"     # → Stage 4 Summary.Warnings (verdict 불변)
+```
+
+(`<CHANGE_STATE>` = **실효(post-WIP) 리뷰 대상 상태**를 리터럴로 — 1차 규칙: Stage-1 에서 WIP 커밋이 수락됐으면 `clean`, 아니면 Stage-1 `change_state`. `<REVIEW_BASE_OPT>` = 실효 상태가 clean 일 때만 `--review-base <REVIEW_BASE>` 두 토큰(WIP 수락 시 = `review_base..HEAD`), **비-clean 이면 토큰 자체를 생략** — 빈 문자열 `""` 인자를 넘기지 말 것(build-change-files 가 unknown-arg 로 exit 2 → change_files 누락).) 이후 단계는 캡처한 `PROMPT_FILE` **리터럴 경로**를 쓴다 — Agent tool 은 그 파일 내용을, agy/claude bridge 는 `--prompt-file '<PROMPT_FILE literal>'` 로(셸 변수 `$PROMPT_FILE` 의존 금지 — 다음 Bash 호출엔 그 변수가 없다). diff 가 맨 뒤인 것은 **지시-우선(instruction-attention) 순서**일 뿐이며 agy 절단 생존 보장이 아니다(절단되면 agy 는 prompt_too_large 로 제외).
+
 **Claude 쪽 리뷰어 — `claude_reviewer` 값에 따라 분기 (§4 리뷰어 열거):**
 
 - `single-opus` (기본) → 아래 "Claude Opus reviewer" 단일 Opus 경로(Agent tool / CLI bridge) 그대로.
@@ -450,9 +491,10 @@ N_planned = len(reviewers_planned)
 
 > 이 블록은 `claude_reviewer == single-opus` 인 경우에만 적용한다. `ultracode-fanout` 은 위 분기대로 `ultracode-integration.md` 를 따르고, `none` 은 Claude 리뷰어를 건너뛴다.
 
-동일한 reviewer prompt를 런타임별로 다른 실행 경로에 전달한다. prompt에 포함: diff 내용, rules.yaml (있으면), fitness.json (있으면), health_report (있으면), contract (있으면).
+single-opus 경로는 **위 "공유 reviewer payload 조립" 블록이 캡처한 `PROMPT_FILE`** 을 그대로 소비한다(별도 조립 없음) — Agent tool 은 그 리터럴 경로의 파일 내용을 프롬프트로 읽고, claude bridge 는 `--prompt-file '<captured PROMPT_FILE literal>'` 로 전달한다. 표준 `codex review`·Codex adversarial 에는 그 payload 를 주입하지 않는다.
 
 1. **Claude Code 런타임 (`Agent` tool 사용 가능)**:
+   - 캡처한 `PROMPT_FILE` 리터럴 경로의 파일 내용을 읽어 Agent tool 프롬프트로 사용한다.
    - Agent tool로 `code-reviewer` 에이전트를 백그라운드에서 spawn:
      - `model: "opus"` (config.yaml의 review_model로 오버라이드 가능)
      - `run_in_background: true`
@@ -460,13 +502,11 @@ N_planned = len(reviewers_planned)
 2. **Codex / non-Claude 런타임 (`Agent` tool 없음)**:
    - `claude_cli=true`이면 Bash로 CLI bridge를 백그라운드 실행:
      ```bash
-     prompt_file=$(mktemp "${TMPDIR:-/tmp}/deep-review-claude-prompt.XXXXXX")
      output_file=$(mktemp "${TMPDIR:-/tmp}/deep-review-claude-output.XXXXXX")
-     # prompt_file에는 위 Agent tool에 넘길 것과 동일한 reviewer prompt를 기록한다.
      "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-claude-reviewer.sh" \
        --project-root "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" \
        --plugin-root "${CLAUDE_PLUGIN_ROOT}" \
-       --prompt-file "$prompt_file" \
+       --prompt-file '<captured PROMPT_FILE literal>' \
        --output "$output_file" \
        --model "${review_model:-opus}"
      ```
@@ -646,11 +686,19 @@ Codex 리뷰 대상은 change_state에 따라 결정:
 
 4. **agy reviewer** (Bash tool, run_in_background: true)
 
+  > **공유 PROMPT_FILE 소비 (필수 — Finding 1/2 #2 doctrine 도달)**: agy 의 `{prompt_file}` 은
+  > **위 "공유 reviewer payload 조립" 블록이 캡처한 `PROMPT_FILE` 리터럴 경로 바로 그것**이다 —
+  > single-opus(Agent tool 입력 / claude bridge `--prompt-file`)와 ultracode 6 샤드가 소비하는
+  > **동일한 하나의 파일**. agy 전용으로 새 `mktemp` 를 만들지 **않는다**. 그 payload 에는
+  > fp-doctrine(거짓양성 독트린)과 change_files manifest 가 이미 들어 있으므로, agy 를 이 공유
+  > PROMPT_FILE 로 구동해야 v1.12.0 의 #2(독트린·변경셋이 모든 리뷰어에 도달) 가 agy 에도 성립한다.
+  > **금지**: payload 없는 prompt(독트린/change_files 누락)를 agy 에 넘기는 것 — agy 만 빠진 #2 가 됨.
+  >
   > **Read-only 강제 (v1.8.1)**: agy CLI 는 read-only 모드가 없다 (`-p` 가 권한 플래그
   > 유무와 무관하게 Edit/Write 를 자동 승인 — 실측 확인). `run-agy-reviewer.sh` 가
-  > `{prompt_file}` 본문 앞에 read-only preamble 을 **무조건 prepend** 하므로, orchestrator 는
-  > Opus / Codex 와 동일한 일반 reviewer prompt 만 `{prompt_file}` 에 쓰면 된다 — read-only
-  > 지시를 직접 넣을 필요 없다. 이렇게 해야 agy 가 합성(Stage 4) 전에 코드를 수정하지 않는다.
+  > **이 공유 PROMPT_FILE 본문 앞에** read-only preamble 을 **무조건 prepend** 하므로(payload 는
+  > 그대로 유지), orchestrator 는 위 블록이 캡처한 `PROMPT_FILE` 을 그대로 넘기기만 하면 된다 —
+  > read-only 지시를 직접 넣을 필요 없다. 이렇게 해야 agy 가 합성(Stage 4) 전에 코드를 수정하지 않는다.
   > 자세한 rationale 은 `skills/deep-review-workflow/references/agy-integration.md` 참조.
 
   > **LLM substitution note**: `{placeholder}` values (e.g. `{agy_cli_path}`, `{prompt_file}`,
@@ -662,8 +710,8 @@ Codex 리뷰 대상은 change_state에 따라 결정:
   **Concrete substitution example** (orchestrator fills before invoking Bash):
   - `{agy_cli_path}` → `/usr/local/bin/agy` (from Stage 1 `agy_cli_path` detection)
   - `{project_root}` → `/home/user/myrepo` (from `git rev-parse --show-toplevel`)
-  - `{prompt_file}` → `/tmp/deep-review-agy-prompt.xXxXxX` (from mktemp in earlier Bash call)
-  - `{output_file}` → `/tmp/deep-review-agy-output.xXxXxX` (from mktemp in earlier Bash call)
+  - `{prompt_file}` → **the captured `PROMPT_FILE` literal path from the "공유 reviewer payload 조립" block above** (e.g. `/tmp/tmp.xXxXxX` — the SAME file single-opus and the ultracode shards consume, NOT a fresh agy-only mktemp; it already carries fp-doctrine + change_files). `run-agy-reviewer.sh` prepends the read-only preamble on top of this shared payload.
+  - `{output_file}` → `/tmp/deep-review-agy-output.xXxXxX` (from a fresh mktemp in an earlier Bash call — agy's output sink is per-reviewer, unlike the shared input prompt)
 
   > Note: `agy_model` is NOT a `{placeholder}` — it is free-form text from (possibly untrusted) config and is resolved as a shell variable inside the bridge-invocation Bash call (see "model tier" below), so it can never be literal-substituted into the command string.
 
@@ -689,7 +737,7 @@ Codex 리뷰 대상은 change_state에 따라 결정:
 
   > ⚠️ **보안 (shell injection 방지)**: `agy_model` 은 `.deep-review/config.yaml` / `AGY_MODEL` 에서 오는 **free-form 문자열**이고, 신뢰할 수 없는 repo 가 `.deep-review/config.yaml` 을 commit 해 ship 할 수 있다. enum 으로 검증되는 `--mode` 와 달리 model 은 자유 문자열이므로, **LLM 이 이 값을 `{placeholder}` 리터럴로 Bash 명령 문자열에 치환하면 shell injection** 이 된다 (예: `agy_model: '"; rm -rf ~ ; #'`). 따라서 model 은 **반드시 bridge 호출과 같은 Bash 세션 안에서 shell 변수로 해석**하고 `--model "$agy_model"` 로 **변수 전개**한다 — 절대 `{agy_model}` 리터럴로 치환하지 않는다. 1차 방어로 charset allowlist 가드를 둔다. (이는 codex focus_text 를 stdin 으로만 넘기는 §위 패턴과 동일한 원칙이다.)
 
-  agy 4번째 reviewer 는 **이 전체 블록을 하나의 `Bash({ command: '...', run_in_background: true })` 호출**로 실행한다 — 다른 reviewer(Opus/Codex)와 동일한 background 실행 계약이며, 한 Bash 호출 = 한 shell 이므로 `agy_model` / `agy_model_args` 의 변수 scope 가 bridge invocation 과 일치한다. `{agy_cli_path}` / `{project_root}` / `{prompt_file}` / `{output_file}` / `{agy_fingerprint_mode}` 만 리터럴 치환 (신뢰된 detection/mktemp/enum 값); `agy_model` 은 **절대 리터럴 치환하지 않고** shell 변수로만 전개한다.
+  agy 4번째 reviewer 는 **이 전체 블록을 하나의 `Bash({ command: '...', run_in_background: true })` 호출**로 실행한다 — 다른 reviewer(Opus/Codex)와 동일한 background 실행 계약이며, 한 Bash 호출 = 한 shell 이므로 `agy_model` / `agy_model_args` 의 변수 scope 가 bridge invocation 과 일치한다. `{agy_cli_path}` / `{project_root}` / `{prompt_file}` / `{output_file}` / `{agy_fingerprint_mode}` 만 리터럴 치환 (신뢰된 detection/mktemp/enum 값 — 특히 `{prompt_file}` = 위 "공유 reviewer payload 조립" 블록이 캡처한 `PROMPT_FILE`, single-opus/ultracode 와 **동일한** mktemp 산 경로); `agy_model` 은 **절대 리터럴 치환하지 않고** shell 변수로만 전개한다.
 
   ```
   Bash({ command: '
@@ -834,6 +882,8 @@ AGY_EXCLUDE_FROM_SYNTHESIS=0
 >   - `AGY_TRUNCATED=1` (prompt_too_large): `⚠️ agy reviewed a truncated diff (>200KB) — findings may be incomplete`.
 >   - Other non-success `AGY_STATUS`: `⚠️ agy did not complete successfully (status: ${AGY_STATUS}) — excluded from synthesis`.
 > - Do NOT promote agy findings into verdict — treat agy as "not_attempted" for synthesis purposes.
+
+> **OCR_WARNINGS render step (payload-helper warnings → Summary)**: 공유 payload 조립 블록이 캡처한 `OCR_WARNINGS` 문자열을 Summary 의 `Warnings:` 줄에 그대로 렌더링한다(세미콜론 구분 항목; 0건이면 줄 자체를 생략). 이는 helper 실패 진단(fp-doctrine/change_files 누락) 고지일 뿐 **verdict 는 불변** — agy 의 `AGY_EXCLUDE_FROM_SYNTHESIS` 경고와 달리 `N_actual` 에 영향을 주지 않는다. Warnings 줄의 단일 출처 정의는 `references/report-format.md`.
 
 1. 교차 검증 합성 (Codex 결과가 있을 때):
    - 전원 일치 지적 → 🔴 높은 확신
