@@ -79,7 +79,7 @@ Environment detection determines the git state and collects the matching diff:
 - `mixed` — `git diff HEAD`
 - `untracked-only` — read untracked files directly
 
-Excluded from the diff: binaries, `vendor/`, `node_modules/`, `*.min.js`, `*.generated.*`, `*.lock`.
+Excluded from the diff: binaries, `vendor/`, `node_modules/`, `dist/`, `build/`, `.next/`, `target/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.git/`, `*.min.js`, `*.generated.*`, `*.lock`, `.DS_Store`.
 
 ### Stage 2: Contract check
 
@@ -102,6 +102,11 @@ An independent `code-reviewer` agent is spawned with `model: opus` and `run_in_b
 | 4 | Test coverage | Coverage relative to changes, missing scenarios |
 | 5 | Readability | Will the next agent understand this on first read? |
 | 6 | Security | Input validation, authz bypass, injection (incl. prompt injection), secret exposure, unsafe ops |
+
+Since v1.12.0 the shared reviewer payload — used by the Opus reviewer, ultracode shards, and agy — carries two additions:
+
+- **`change_files` manifest** — a NUL-safe, capped cross-file manifest (rename/copy detection, dirty-state untracked union) so reviewers see the whole changeset, not just one diff; the diff itself is ordered last for instruction-attention. It honors the same Stage 1 exclusions as the diff.
+- **FP-suppression doctrine** — a false-positive-suppression doctrine plus a conservative-balance counterweight, single-sourced from `review-criteria.md` and injected into the Opus prompt, ultracode shards, and the agy payload. The standard `codex review` and Codex adversarial passes are intentionally excluded, preserving their aggression.
 
 ### Stage 4: Verdict
 

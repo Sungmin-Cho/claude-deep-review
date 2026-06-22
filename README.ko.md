@@ -79,7 +79,7 @@ Stage 5: Respond      — 증거 기반 피드백 대응 (--respond로 진입)
 - `mixed` — `git diff HEAD`
 - `untracked-only` — untracked 파일 직접 읽기
 
-diff 제외 대상: 바이너리, `vendor/`, `node_modules/`, `*.min.js`, `*.generated.*`, `*.lock`.
+diff 제외 대상: 바이너리, `vendor/`, `node_modules/`, `dist/`, `build/`, `.next/`, `target/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.git/`, `*.min.js`, `*.generated.*`, `*.lock`, `.DS_Store`.
 
 ### Stage 2: Contract 검증
 
@@ -102,6 +102,11 @@ diff 제외 대상: 바이너리, `vendor/`, `node_modules/`, `*.min.js`, `*.gen
 | 4 | 테스트 충분성 | 변경 대비 커버리지, 누락 시나리오 |
 | 5 | 가독성 | 다음 에이전트가 처음 읽을 때 이해 가능한가 |
 | 6 | 보안 | 입력 검증, 인증/인가 우회, 인젝션(prompt injection 포함), 비밀 노출, 위험한 연산 |
+
+v1.12.0부터 공유 리뷰어 페이로드(Opus 리뷰어, ultracode 샤드, agy가 사용)에 두 가지가 추가됩니다:
+
+- **`change_files` 매니페스트** — NUL-safe, capped 교차 파일 매니페스트(이름 변경/복사 감지, dirty 상태 untracked 유니온)로 리뷰어가 diff 하나가 아닌 전체 변경 집합을 봅니다. diff 자체는 instruction-attention을 위해 마지막에 배치되며, 위 Stage 1 제외 목록을 동일하게 따릅니다.
+- **FP-억제 독트린** — false-positive 억제 독트린과 conservative-balance 반대 가중치를 `review-criteria.md` 단일 출처에서 Opus 프롬프트, ultracode 샤드, agy 페이로드에 주입합니다. 표준 `codex review`와 Codex adversarial 패스는 공격성 보존을 위해 의도적으로 제외됩니다.
 
 ### Stage 4: Verdict (판정)
 
