@@ -28,6 +28,9 @@ assert_equal "0" "$rc" "happy path exits 0"
 assert_success "printf '%s' \"\$(\"$SCRIPT\" \"$F\")\" | grep -q '근거 없는 추측'" "output contains a doctrine bullet"
 assert_success "printf '%s' \"\$(\"$SCRIPT\" \"$F\")\" | grep -q '강등하지 않는다'" "output contains conservative phrase"
 assert_failure "\"$SCRIPT\" \"$F\" | grep -q 'VOICE-6'" "VOICE-6 note is excluded"
+# W9: conservative-balance block must come BEFORE the suppression block
+first_section=$(printf '%s' "$("$SCRIPT" "$F")" | grep '^###' | head -1)
+assert_equal "### Severity — conservative default" "$first_section" "conservative-balance block emitted first (W9)"
 
 # 2) missing doctrine markers → fail-closed (non-zero, empty stdout)
 F2=$(mktemp); mkfix "$F2" <<'EOF'
@@ -50,6 +53,23 @@ x 강등하지 않는다
 EOF
 assert_failure "\"$SCRIPT\" \"$F3\"" "duplicate doctrine markers fail closed"
 
+# 3b) duplicate conservative markers → fail-closed (symmetric to 3)
+F3b=$(mktemp); mkfix "$F3b" <<'EOF'
+<!-- fp-conservative:start -->
+강등하지 않는다
+<!-- fp-conservative:end -->
+<!-- fp-conservative:start -->
+강등하지 않는다 again
+<!-- fp-conservative:end -->
+<!-- fp-doctrine:start -->
+- pre-existing
+- 린터
+- 추측
+- 취향
+<!-- fp-doctrine:end -->
+EOF
+assert_failure "\"$SCRIPT\" \"$F3b\"" "duplicate conservative markers fail closed"
+
 # 4) empty doctrine body → fail-closed
 F4=$(mktemp); mkfix "$F4" <<'EOF'
 <!-- fp-conservative:start -->
@@ -60,9 +80,13 @@ F4=$(mktemp); mkfix "$F4" <<'EOF'
 EOF
 assert_failure "\"$SCRIPT\" \"$F4\"" "empty doctrine body fails closed"
 
-# 5) real repo file extracts successfully
+# 5) missing argument / nonexistent file → fail-closed
+assert_failure "\"$SCRIPT\"" "no-arg invocation fails closed"
+assert_failure "\"$SCRIPT\" /nonexistent/path/file.md" "nonexistent file fails closed"
+
+# 6) real repo file extracts successfully
 REAL="$HERE/../../../skills/deep-review-workflow/references/review-criteria.md"
 assert_success "\"$SCRIPT\" \"$REAL\"" "real review-criteria.md extracts"
 
-rm -f "$F" "$F2" "$F3" "$F4"
+rm -f "$F" "$F2" "$F3" "$F3b" "$F4"
 test_summary
