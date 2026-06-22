@@ -89,4 +89,18 @@ REAL="$HERE/../../../skills/deep-review-workflow/references/review-criteria.md"
 assert_success "\"$SCRIPT\" \"$REAL\"" "real review-criteria.md extracts"
 
 rm -f "$F" "$F2" "$F3" "$F3b" "$F4"
+
+# doc-structure: orchestrator wires the extractor + builder + warnings render, and adversarial is NOT injected
+CMD="$HERE/../../../commands/deep-review.md"
+assert_success "grep -q 'extract-fp-doctrine.sh' \"$CMD\"" "command wires extract-fp-doctrine.sh"
+assert_success "grep -q 'build-change-files.sh' \"$CMD\"" "command wires build-change-files.sh"
+assert_success "grep -q 'build-reviewer-payload.sh' \"$CMD\"" "command wires shared payload builder"
+assert_success "grep -q 'Summary.Warnings' \"$CMD\"" "command renders helper-failure warnings into Summary"
+assert_success "grep -q 'adversarial 에는 주입하지 않는다' \"$CMD\"" "adversarial not injected (documented)"
+# focus_text negative (W7): the adversarial focus_text builder must NOT pull in the doctrine
+CI="$HERE/../../../skills/deep-review-workflow/references/codex-integration.md"
+assert_failure "grep -Eq 'extract-fp-doctrine|fp-doctrine:start' \"$CI\"" "codex-integration does not inject fp-doctrine into adversarial focus_text"
+CR="$HERE/../../../agents/code-reviewer.md"
+assert_success "grep -q 'cross-file 컨텍스트' \"$CR\"" "code-reviewer has Strict-Focus guard"
+
 test_summary

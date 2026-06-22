@@ -450,9 +450,36 @@ N_planned = len(reviewers_planned)
 
 > 이 블록은 `claude_reviewer == single-opus` 인 경우에만 적용한다. `ultracode-fanout` 은 위 분기대로 `ultracode-integration.md` 를 따르고, `none` 은 Claude 리뷰어를 건너뛴다.
 
-동일한 reviewer prompt를 런타임별로 다른 실행 경로에 전달한다. prompt에 포함: diff 내용, rules.yaml (있으면), fitness.json (있으면), health_report (있으면), contract (있으면).
+공유 reviewer payload 를 **리뷰어 분기 이전에** 1개 자기완결 bash 블록으로 조립한다(셸 상태 비의존 — Stage 1 값은 오케스트레이터가 리터럴로 치환). 블록은 `prompt_file` 경로와 `warnings` 를 **출력**하고, single-opus(Agent tool 입력), agy/claude bridge `--prompt-file`, ultracode 샤드가 그 **동일 경로**를 공통으로 쓴다. 표준 `codex review`·Codex adversarial 에는 주입하지 않는다.
+
+```bash
+# 오케스트레이터가 Stage 1 파싱값을 리터럴로 채운다 (예: --change-state staged).
+PR="${CLAUDE_PLUGIN_ROOT}"; P="$PR/hooks/scripts"
+repoDir="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+warnings=""
+doc=$(mktemp); cf=$(mktemp); ctx_file=$(mktemp); diff_file=$(mktemp); prompt_file=$(mktemp); manual_files_z=$(mktemp)
+
+# (오케스트레이터가 이 블록 안에서) diff → $diff_file, 세션/비-git 타겟(NUL) → $manual_files_z,
+# rules.yaml/contract/fitness.json/health_report(있으면) → $ctx_file 를 채운다.
+
+if ! bash "$P/extract-fp-doctrine.sh" "$PR/skills/deep-review-workflow/references/review-criteria.md" > "$doc" 2>/dev/null; then
+  : > "$doc"; warnings="${warnings}fp-doctrine extraction failed (injection skipped); "
+fi
+# <CHANGE_STATE>/<REVIEW_BASE> 는 오케스트레이터가 Stage 1 값으로 치환하는 리터럴.
+if ! bash "$P/build-change-files.sh" --repo "$repoDir" --change-state <CHANGE_STATE> \
+        <REVIEW_BASE_OPT> --files-from-z "$manual_files_z" > "$cf" 2>/dev/null; then
+  : > "$cf"; warnings="${warnings}change_files unavailable (omitted); "
+fi
+bash "$P/build-reviewer-payload.sh" --doctrine-file "$doc" --change-files-file "$cf" \
+     --context-file "$ctx_file" --diff-file "$diff_file" > "$prompt_file"
+printf 'PROMPT_FILE=%s\n' "$prompt_file"   # 오케스트레이터가 캡처
+printf 'OCR_WARNINGS=%s\n' "$warnings"     # → Stage 4 Summary.Warnings (verdict 불변)
+```
+
+(`<CHANGE_STATE>` = Stage-1 값을 리터럴로; `<REVIEW_BASE_OPT>` = clean 상태에서만 `--review-base <REVIEW_BASE>` 두 토큰, **비-clean 이면 토큰 자체를 생략** — 빈 문자열 `""` 인자를 넘기지 말 것(build-change-files 가 unknown-arg 로 exit 2 → change_files 누락).) 이후 단계는 캡처한 `PROMPT_FILE` **리터럴 경로**를 쓴다 — Agent tool 은 그 파일 내용을, agy/claude bridge 는 `--prompt-file '<PROMPT_FILE literal>'` 로(셸 변수 `$PROMPT_FILE` 의존 금지 — 다음 Bash 호출엔 그 변수가 없다). diff 가 맨 뒤인 것은 **지시-우선(instruction-attention) 순서**일 뿐이며 agy 절단 생존 보장이 아니다(절단되면 agy 는 prompt_too_large 로 제외).
 
 1. **Claude Code 런타임 (`Agent` tool 사용 가능)**:
+   - 캡처한 `PROMPT_FILE` 리터럴 경로의 파일 내용을 읽어 Agent tool 프롬프트로 사용한다.
    - Agent tool로 `code-reviewer` 에이전트를 백그라운드에서 spawn:
      - `model: "opus"` (config.yaml의 review_model로 오버라이드 가능)
      - `run_in_background: true`
@@ -460,13 +487,11 @@ N_planned = len(reviewers_planned)
 2. **Codex / non-Claude 런타임 (`Agent` tool 없음)**:
    - `claude_cli=true`이면 Bash로 CLI bridge를 백그라운드 실행:
      ```bash
-     prompt_file=$(mktemp "${TMPDIR:-/tmp}/deep-review-claude-prompt.XXXXXX")
      output_file=$(mktemp "${TMPDIR:-/tmp}/deep-review-claude-output.XXXXXX")
-     # prompt_file에는 위 Agent tool에 넘길 것과 동일한 reviewer prompt를 기록한다.
      "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-claude-reviewer.sh" \
        --project-root "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" \
        --plugin-root "${CLAUDE_PLUGIN_ROOT}" \
-       --prompt-file "$prompt_file" \
+       --prompt-file '<captured PROMPT_FILE literal>' \
        --output "$output_file" \
        --model "${review_model:-opus}"
      ```

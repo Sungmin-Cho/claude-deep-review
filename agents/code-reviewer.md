@@ -43,6 +43,7 @@ tools:
 
 1. **변경 파일 읽기**: diff에 포함된 모든 파일을 Read로 읽습니다.
 2. **관련 코드 탐색**: 변경된 함수가 호출하거나 호출되는 코드를 Grep으로 찾습니다.
+   - **change_files (cross-file 컨텍스트)**: 프롬프트의 `CHANGED FILES` 목록은 *리뷰 대상 hunk 의 finding 을 설명·확증하기 위한 컨텍스트로만* Read/Grep 한다. 주된 결함이 리뷰 대상(diff) 밖에 있는 finding 은 만들지 않는다(형제 변경 파일은 평가 대상이 아니라 참고 자료).
 3. **테스트 파일 확인**: 변경에 대응하는 테스트 파일을 Glob으로 찾습니다.
 4. **6가지 관점 평가**: `skills/deep-review-workflow/references/review-criteria.md` 참조
 5. **Contract 검증**: contract가 있으면 각 criteria를 코드에서 검증
