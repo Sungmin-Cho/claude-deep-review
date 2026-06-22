@@ -4,6 +4,23 @@
 
 All notable changes to deep-review are documented here. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] — 2026-06-22
+
+### Added
+
+- **FP-suppression doctrine injection (#2)** — `extract-fp-doctrine.sh` extracts `fp-doctrine` + `fp-conservative` blocks (via strict HTML-comment markers with per-block validation, fail-closed) from a single-source doctrine file and injects them into the Opus reviewer prompt, all ultracode shards, and the agy payload via `build-reviewer-payload.sh`. Conservative-balance counterweight is always co-injected alongside suppression rules. Adversarial reviewer is intentionally excluded.
+- **`change_files` cross-file manifest (#3)** — `build-change-files.sh` builds a NUL-safe, state-aware cross-file manifest with rename/copy detection (`-M -C`), untracked-file union, initial-commit handling, and per-file path JSON-encoding via `python3 -c`. Capped at 200 entries. The manifest is appended to the shared reviewer payload (diff-last instruction-attention ordering) via `build-reviewer-payload.sh`.
+
+### Changed
+
+- `build-reviewer-payload.sh` assembles the ordered payload consumed by all Claude and agy reviewers: doctrine block → context → change_files manifest → diff (last, for instruction-attention priority).
+- `commands/deep-review.md` wires `extract-fp-doctrine.sh` + `build-change-files.sh` + `build-reviewer-payload.sh` for every reviewer path; Strict-Focus guard blocks direct diff injection when the payload builder is available.
+- ultracode shards inherit doctrine + change_files from the shared payload (Task 5); `skills/deep-review-workflow/references/report-format.md` adds Warnings for oversized / missing `change_files`.
+
+### Deferred
+
+- Falsifiability gate (#1) deferred — requires `diff_integrity` + stable finding IDs + receiving-review/recurring/loop constraints before it can ship safely (see spec §9.1).
+
 ## [1.11.0] — 2026-06-16
 
 ### Added

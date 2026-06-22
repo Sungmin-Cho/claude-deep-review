@@ -56,3 +56,15 @@ jobs:
 
       - name: ultracode/codex flags structural test
         run: bash hooks/scripts/test/test-ultracode-flags.sh
+
+      - name: extract-fp-doctrine
+        run: bash hooks/scripts/test/test-extract-fp-doctrine.sh
+
+      - name: build-change-files
+        run: bash hooks/scripts/test/test-build-change-files.sh
+
+      - name: build-reviewer-payload
+        run: bash hooks/scripts/test/test-build-reviewer-payload.sh
+
+      - name: payload-ordering
+        run: bash hooks/scripts/test/test-payload-ordering.sh
