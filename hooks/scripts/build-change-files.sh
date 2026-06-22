@@ -28,7 +28,7 @@ fi
 REPO="$repo" STATE="$change_state" BASE="$review_base" FILES_FROM="$files_from" \
 MAX_ENTRIES="${OCR_CHANGE_FILES_MAX_ENTRIES:-500}" \
 MAX_BYTES="${OCR_CHANGE_FILES_MAX_BYTES:-65536}" python3 - <<'PY'
-import os, json, subprocess, sys
+import os, json, subprocess, sys, stat
 repo=os.environ["REPO"]; state=os.environ["STATE"]; base=os.environ.get("BASE","")
 ff=os.environ.get("FILES_FROM",""); maxn=int(os.environ.get("MAX_ENTRIES","500"))
 # Byte budget (spec §4.1: cap by max bytes AND max entries — whichever triggers first).
@@ -74,6 +74,12 @@ _BIN_SNIFF_BYTES=8192
 def looks_binary_untracked(p_bytes):
     try:
         fp=os.path.join(os.fsencode(repo), p_bytes)
+        # lstat BEFORE open: a FIFO, socket, device, or symlink to one will block
+        # open(fp,"rb") indefinitely. lstat does NOT follow symlinks, so S_ISLNK is
+        # also non-regular here. Non-regular files are fail-open (not detected as
+        # binary → still recorded); we simply skip the blocking open() call.
+        if not stat.S_ISREG(os.lstat(fp).st_mode):
+            return False
         with open(fp,"rb") as fh:
             return b"\x00" in fh.read(_BIN_SNIFF_BYTES)
     except Exception:

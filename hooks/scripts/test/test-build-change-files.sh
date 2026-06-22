@@ -148,6 +148,36 @@ ffz_missing=$(mktemp); printf 'ghost-does-not-exist.txt\0' > "$ffz_missing"
 outmiss=$("$SCRIPT" --repo "$ubin" --change-state non-git --files-from-z "$ffz_missing")
 assert_success "printf '%s\\n' \"\$outmiss\" | grep -q 'ghost-does-not-exist.txt'" "untracked-binary: missing path fails open (recorded, no crash)"
 
+# --- Fix 5 (codex R5 — special-file hang): looks_binary_untracked must NOT block on a FIFO,
+# socket, device, or symlink-to-one passed via --files-from-z / --change-state non-git.
+# Before the lstat-before-open guard was added, open(fp,"rb") on a FIFO blocks forever (the
+# reader waits for a writer). The guard makes the script return promptly; this test asserts exit 0
+# (non-hang). A timeout wrapper is used when portably available (gtimeout/timeout); without one
+# the test still asserts exit 0 — the lstat fix ensures it returns immediately.
+fifo_repo=$(setup_test_repo)
+fifo_path="$fifo_repo/test.fifo"
+mkfifo "$fifo_path"
+# Feed the FIFO path as a manual file via --files-from-z + --change-state non-git.
+# The committed plain file (a.txt from setup_test_repo) is not in scope here; we only care
+# that the script completes (does not block) and exits 0.
+ffz_fifo=$(mktemp); printf '%s\0' "$fifo_path" > "$ffz_fifo"
+# Use a timeout guard if available; without one, the lstat fix guarantees prompt return.
+_timeout_wrap() {
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout 10 "$@"
+  elif command -v timeout >/dev/null 2>&1; then
+    timeout 10 "$@"
+  else
+    "$@"
+  fi
+}
+assert_success "_timeout_wrap \"$SCRIPT\" --repo \"$fifo_repo\" --change-state non-git --files-from-z \"$ffz_fifo\" >/dev/null" \
+  "special-file(FIFO): script completes without hanging (lstat guard)"
+# Also confirm a normal text file in the same repo still survives a regular staged run.
+( cd "$fifo_repo"; printf 'normal\n' > normal.txt; git add normal.txt )
+outfifo=$("$SCRIPT" --repo "$fifo_repo" --change-state staged)
+assert_success "printf '%s\\n' \"\$outfifo\" | grep -q '\"path\": *\"normal.txt\"'" "special-file(FIFO): normal staged file unaffected by FIFO in worktree"
+
 teardown_test_repo
-rm -rf "$weird" "$init" "$ffz" "$excl" "$wip" "$cleanu" "$bytecap" "$ubin" "$ibin" "$ffz_missing"
+rm -rf "$weird" "$init" "$ffz" "$excl" "$wip" "$cleanu" "$bytecap" "$ubin" "$ibin" "$ffz_missing" "$fifo_repo" "$ffz_fifo"
 test_summary
