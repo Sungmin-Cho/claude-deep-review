@@ -130,4 +130,4 @@ PR 코멘트 게시(`gh api .../replies`)는 rate limit / 네트워크 오류 / 
 | `mixed` | 일부 그룹은 subagent, 일부는 main fallback (중간 그룹에서 dispatch 실패 시) |
 | `n/a` | ACCEPT 항목 0건으로 Phase 6 전체 skip |
 
-결정 절차는 `commands/deep-review.md`의 `--respond` Steps 2.5(Phase 6 subagent dispatch) 및 스펙 §5.4 결정표 참조.
+결정 절차는 `skills/receiving-review/references/respond-execution.md` Step 2.5(Phase 6 subagent dispatch) 및 스펙 §5.4 결정표 참조.

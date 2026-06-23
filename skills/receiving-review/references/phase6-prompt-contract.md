@@ -610,7 +610,7 @@ v1.3.3 agent는 literal 치환만 지시. v1.3.4부터 single-quote wrap 필수.
 
 ## 참조
 
-- **Authoritative main 절차**: `commands/deep-review.md` `--respond` Step 2.5
+- **Authoritative main 절차**: `skills/receiving-review/references/respond-execution.md` Step 2.5
 - **Subagent system prompt**: `agents/phase6-implementer.md` (단일 소스)
 - **Response 리포트 형식**: `skills/receiving-review/references/response-format.md`
 - **설계 배경**: `skills/receiving-review/references/phase6-delegation-spec.md`

@@ -112,7 +112,7 @@ agent의 5번째 원칙과 동일한 심각도(🔴 Critical, taxonomy `security
 - 공통 유틸리티가 필요한가?
 ```
 
-**소유권**: 분류/매칭/경고는 이 문서(response-protocol.md Phase 1)가 단일 소스다. SKILL.md와 commands/deep-review.md는 요약만 포함하고 상세는 이 섹션을 참조한다.
+**소유권**: 분류/매칭/경고는 이 문서(response-protocol.md Phase 1)가 단일 소스다. SKILL.md와 respond-execution.md는 요약만 포함하고 상세는 이 섹션을 참조한다.
 
 ---
 
@@ -268,7 +268,7 @@ Phase 6는 심각도 그룹(🔴 → 🟡 → ℹ️)별로 `phase6-implementer`
 
 | 영역 | 단일 소스 |
 |---|---|
-| Main의 구현 절차 (pre-snapshot, dispatch, DELTA 검증, allowlist, 그룹 커밋, dirty recovery) | `commands/deep-review.md` `--respond` Step 2.5 |
+| Main의 구현 절차 (pre-snapshot, dispatch, DELTA 검증, allowlist, 그룹 커밋, dirty recovery) | `skills/receiving-review/references/respond-execution.md` Step 2.5 |
 | Main↔Subagent 입출력 계약 | `references/phase6-prompt-contract.md` |
 | 설계 배경·결정 사항 | `references/phase6-delegation-spec.md` |
 | Subagent의 구현 절차 | `agents/phase6-implementer.md` 시스템 프롬프트 |

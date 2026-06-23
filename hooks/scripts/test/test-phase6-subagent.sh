@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test-phase6-subagent.sh — Phase 6 subagent delegation 구조 회귀 검증
-# exit 0 = 10개 체크 모두 PASS, exit 1 = 1건 이상 FAIL.
+# exit 0 = 11개 체크 모두 PASS, exit 1 = 1건 이상 FAIL.
 
 set -u
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -15,6 +15,8 @@ RCVSKILL="$ROOT/skills/receiving-review/SKILL.md"
 PROTO="$ROOT/skills/receiving-review/references/response-protocol.md"
 FORMAT="$ROOT/skills/receiving-review/references/response-format.md"
 INITSETUP="$ROOT/skills/deep-review-workflow/references/init-setup.md"
+RESPEXEC="$ROOT/skills/receiving-review/references/respond-execution.md"
+LOOP="$ROOT/skills/deep-review-loop/SKILL.md"
 
 # 범위 추출 헬퍼: 첫 `^<start_pat>` 라인부터 다음 `^<end_pat>` 라인 직전까지
 # awk range의 "start==end" 문제를 회피하기 위해 grep -n 으로 라인 번호를 얻어 sed로 자른다.
@@ -79,11 +81,11 @@ if [[ -f "$AGENT" ]]; then
   fi
 fi
 
-# 4. commands/deep-review.md 에 phase6-implementer 참조 문자열 존재
-if grep -q "phase6-implementer" "$CMD"; then
-  pass 4 "phase6-implementer referenced in commands/deep-review.md"
+# 4. respond-execution.md 에 phase6-implementer 참조 문자열 존재
+if grep -q "phase6-implementer" "$RESPEXEC"; then
+  pass 4 "phase6-implementer referenced in respond-execution.md"
 else
-  fail 4 "phase6-implementer not referenced in commands/deep-review.md"
+  fail 4 "phase6-implementer not referenced in respond-execution.md"
 fi
 
 # 5. init-setup.md 의 .gitignore 권장 블록에 .deep-review/tmp/ 존재
@@ -102,13 +104,12 @@ else
   fail 6 "execution_path field missing from response-format.md"
 fi
 
-# 7. commands/deep-review.md --respond Steps 에 "subagent dispatch" 문구 존재
-# extract_range로 Steps (대응 모드) ~ Steps (init 모드) 사이만 추출
-respond_block=$(extract_range "$CMD" '^## Steps \(대응 모드' '^## Steps \(init 모드')
+# 7. respond-execution.md 에 "subagent dispatch" 문구 존재
+respond_block=$(cat "$RESPEXEC")
 if echo "$respond_block" | grep -qi "subagent dispatch\|서브에이전트 dispatch"; then
-  pass 7 "subagent dispatch section present in --respond Steps"
+  pass 7 "subagent dispatch section present in respond-execution.md"
 else
-  fail 7 "subagent dispatch section missing from --respond Steps"
+  fail 7 "subagent dispatch section missing from respond-execution.md"
 fi
 
 # 8. response-protocol.md Phase 6 섹션에 "group dispatch" 키워드
@@ -138,6 +139,15 @@ if [[ -z "$offenders" ]]; then
   pass 10 "no 'Execution path' (capitalized backtick variant) in commands/skills/agents/docs"
 else
   fail 10 "forbidden 'Execution path' variant found:\n$offenders"
+fi
+
+# 11. deep-review-loop 가 respond-execution.md 를 Read() 구문으로 재배선 + 옛 인라인 섹션 의존 제거 (P6, R3)
+# 단순 'respond-execution.md' 문자열 grep 금지(산문 언급만으로 통과) — 실제 Read({file_path:...}) 구문 매칭.
+if grep -Eq 'Read\(\{[[:space:]]*file_path:[^}]*respond-execution\.md' "$LOOP" \
+   && ! grep -q '## Steps (대응 모드' "$LOOP"; then
+  pass 11 "deep-review-loop uses Read(...respond-execution.md) and no longer inlines command --respond section"
+else
+  fail 11 "deep-review-loop rewiring incomplete (missing Read() call or stale '## Steps (대응 모드' dependency)"
 fi
 
 echo "---"

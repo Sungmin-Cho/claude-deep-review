@@ -74,7 +74,7 @@ user-invocable: true
 
 `/deep-review` 본문의 "리뷰 모드" 절차를 인라인으로 수행합니다 (skill 은 다른 슬래시 커맨드를 다시 dispatch 할 수 없으므로 본문을 Read 해서 따라간다):
 
-1. `Read({ file_path: "${CLAUDE_PLUGIN_ROOT}/commands/deep-review.md" })` — 첫 라운드에서만 1회 (이후 라운드는 이미 컨텍스트에 있음).
+1. `Read({ file_path: "${CLAUDE_PLUGIN_ROOT}/commands/deep-review.md" })` — 첫 라운드에서만 1회 (이후 라운드는 이미 컨텍스트에 있음). `Read({ file_path: "${CLAUDE_PLUGIN_ROOT}/skills/receiving-review/references/respond-execution.md" })` — 첫 라운드에서 Respond 전 1회 로드 (respond 절차는 respond-execution.md가 SSOT).
 2. 그 본문의 **§0 "Auto-create .deep-review/"** + **§0.1 "자동 복원 (stale mutation recovery)"** + **"## Steps (리뷰 모드)"** 섹션 (Stage 1 ~ Stage 5.5 + Stage 6 `--entropy` 있을 때) 절차를 그대로 수행. §0.1 의 `auto_recover` 호출은 **매 라운드 진입 시 반드시 실행** — 본문 인용 범위의 시작점을 `## Steps` 헤딩이 아닌 §0 으로 명시한다 (R-006 회귀 방지). argument 전달은 **§2.0 의 2단 전달 규약**을 따른다(라운드별 파생 — loop 전용 플래그 제거, reviewer 플래그는 라운드에 따라 파생).
 3. `deep-review-workflow` 스킬은 본문 §Prerequisites 에 명시된 3단계 fallback 순서대로 로드 — 변경 없음.
 4. Stage 1 ~ Stage 5.5 까지 완료될 때까지 대기. 백그라운드 리뷰어 완료 알림은 런타임이 자동 전달하므로 polling 금지.
@@ -120,7 +120,9 @@ round_review_report_path=$(cd "$(dirname "$round_review_report_path")" && pwd)/$
 
 대응 진행은 다음과 같이:
 
-1. wrapper 변수 `respond_arg_path="$round_review_report_path"` 를 설정. 이미 컨텍스트에 있는 `commands/deep-review.md` 의 **"## Steps (대응 모드 — `--respond` 인수)"** 섹션 (Step 0 ~ Step 4) 을 인라인 수행. argument 는 **`--respond ${respond_arg_path}`** — §2.1 에서 캡처한 절대 경로를 **명시 전달** (mtime fallback 의존 금지, race 회귀 방지). `receiving-review` 스킬은 본문 §Prerequisites 의 3단계 fallback 으로 로드.
+1. wrapper 변수 `respond_arg_path="$round_review_report_path"` 를 설정. 아래 Read 구문으로 respond 절차를 로드한 뒤 그대로 수행. argument 는 **`--respond ${respond_arg_path}`** — §2.1 에서 캡처한 절대 경로를 **명시 전달** (mtime fallback 의존 금지, race 회귀 방지). `receiving-review` 스킬은 respond-execution.md §Prerequisites 의 3단계 fallback 으로 로드.
+
+   `Read({ file_path: "$CLAUDE_PLUGIN_ROOT/skills/receiving-review/references/respond-execution.md" })`
 2. **Invariant check**: 본문 §1 이 로드한 리포트 경로가 wrapper 캡처값과 일치하는지 확인. skill 이 본문을 inline 수행하므로 sub-process argv (`$1`) 가 아닌 skill-context 변수로 직접 비교한다 (W1 회귀 방지):
    ```bash
    # 본문 §1 의 path-load 결과를 명시적으로 변수에 복사 (skill context).
@@ -207,12 +209,12 @@ findings_signature (Set<"{severity}:{file}:{floor(line/7)}:{taxonomy_category}">
 2. 저장: `.deep-review/responses/{YYYY-MM-DD}-{HHmmss}-loop-summary.md`
    - 매 라운드의 `review_report_path` / `response_report_path` 를 링크 형태로 나열.
    - 마지막 라운드의 verdict 와 잔여 항목을 그대로 인용.
-   - 이 파일은 `.deep-review/responses/` 디렉토리 규칙(§대응 모드 Step 3) 을 따르며, `.gitignore` 정책상 untracked.
+   - 이 파일은 `.deep-review/responses/` 디렉토리 규칙(respond-execution.md Step 3) 을 따르며, `.gitignore` 정책상 untracked.
 
 ## 5. 동시성 / 안전성
 
 - 동일 세션 안에서 직렬 실행 — 한 라운드의 모든 백그라운드 리뷰어가 완료될 때까지 다음 라운드 진입 금지.
-- `auto_recover` 는 **각 라운드 진입 시점에 매번 호출** (이미 `/deep-review` 와 `/deep-review --respond` 본문에서 호출되므로 skill 이 따로 호출할 필요 없음 — 단, Read fallback 으로 본문을 인라인 수행할 때는 본문이 이 호출을 포함하는지 확인).
+- `auto_recover` 는 **각 라운드 진입 시점에 매번 호출** (이미 `/deep-review` 와 respond-execution.md 가 각각 호출하므로 skill 이 따로 호출할 필요 없음 — 단, Read fallback 으로 본문을 인라인 수행할 때는 본문이 이 호출을 포함하는지 확인).
 - mutation lock 이 다른 세션에 의해 점유된 경우: 즉시 §3.A.4 로 중단 + 사용자에게 안내.
 - 루프 도중 사용자가 `Ctrl-C` 등으로 인터럽트 → 직전까지 저장된 리포트는 보존, 진행 중이던 mutation 은 다음 세션의 `auto_recover` 가 복원.
 
