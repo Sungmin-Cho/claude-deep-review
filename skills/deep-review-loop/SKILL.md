@@ -74,7 +74,8 @@ user-invocable: true
 
 `/deep-review` 본문의 "리뷰 모드" 절차를 인라인으로 수행합니다 (skill 은 다른 슬래시 커맨드를 다시 dispatch 할 수 없으므로 본문을 Read 해서 따라간다):
 
-1. `Read({ file_path: "${CLAUDE_PLUGIN_ROOT}/commands/deep-review.md" })` — 첫 라운드에서만 1회 (이후 라운드는 이미 컨텍스트에 있음). `Read({ file_path: "${CLAUDE_PLUGIN_ROOT}/skills/receiving-review/references/respond-execution.md" })` — 첫 라운드에서 Respond 전 1회 로드 (respond 절차는 respond-execution.md가 SSOT).
+1. `Read({ file_path: "${CLAUDE_PLUGIN_ROOT}/commands/deep-review.md" })` — 첫 라운드에서만 1회 (이후 라운드는 이미 컨텍스트에 있음).
+   `Read({ file_path: "${CLAUDE_PLUGIN_ROOT}/skills/receiving-review/references/respond-execution.md" })` — 첫 라운드의 Respond 단계 진입 전 1회 로드 (respond 절차는 respond-execution.md가 SSOT).
 2. 그 본문의 **§0 "Auto-create .deep-review/"** + **§0.1 "자동 복원 (stale mutation recovery)"** + **"## Steps (리뷰 모드)"** 섹션 (Stage 1 ~ Stage 5.5 + Stage 6 `--entropy` 있을 때) 절차를 그대로 수행. §0.1 의 `auto_recover` 호출은 **매 라운드 진입 시 반드시 실행** — 본문 인용 범위의 시작점을 `## Steps` 헤딩이 아닌 §0 으로 명시한다 (R-006 회귀 방지). argument 전달은 **§2.0 의 2단 전달 규약**을 따른다(라운드별 파생 — loop 전용 플래그 제거, reviewer 플래그는 라운드에 따라 파생).
 3. `deep-review-workflow` 스킬은 본문 §Prerequisites 에 명시된 3단계 fallback 순서대로 로드 — 변경 없음.
 4. Stage 1 ~ Stage 5.5 까지 완료될 때까지 대기. 백그라운드 리뷰어 완료 알림은 런타임이 자동 전달하므로 polling 금지.

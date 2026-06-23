@@ -161,7 +161,8 @@ tools:
 
 | 파일 | 변경 요지 |
 |------|----------|
-| `skills/receiving-review/references/respond-execution.md` | (a) `--respond` Steps 2("receiving-review 스킬 실행")를 개정: Phase 1~5는 main, Phase 6는 서브에이전트 dispatch. 0단계에 `.deep-review/tmp/phase6-*.log` 정리 한 줄 추가. (b) init 모드 Step 8의 `.gitignore` 권장 블록에 `.deep-review/tmp/` 라인 추가 (사용자 프로젝트용). `commands/deep-review.md`의 `--respond` 분기는 이 파일을 Read 하는 in-place 스텁으로 교체. |
+| `skills/receiving-review/references/respond-execution.md` | (a) `--respond` Steps 2("receiving-review 스킬 실행")를 개정: Phase 1~5는 main, Phase 6는 서브에이전트 dispatch. 0단계에 `.deep-review/tmp/phase6-*.log` 정리 한 줄 추가. `commands/deep-review.md`의 `--respond` 분기는 이 파일을 Read 하는 in-place 스텁으로 교체. |
+| `skills/deep-review-workflow/references/init-setup.md` | (b) init 모드 Step 8의 `.gitignore` 권장 블록에 `.deep-review/tmp/` 라인 추가 (사용자 프로젝트용). |
 | `skills/receiving-review/SKILL.md` | Phase 6 개요를 "심각도 그룹별 phase6-implementer dispatch"로 갱신. 기존 구현 원칙은 서브에이전트 정의로 이동했다고 주석. |
 | `skills/receiving-review/references/response-protocol.md` | **Phase 6 절(249~295행) 중 "구현 규칙" 서브섹션만 재작성** — 그룹 dispatch 절차, main 재검증 절차, 부분 실패 처리, dispatch 실패 fallback. **유지**되는 서브섹션: 우선순위(§5단계 confidence 기반), Response 리포트 생성, Re-review 제안. **조건 수정**되는 서브섹션: PR 코멘트 게시("서브에이전트가 PASS 반환 + main 검증 통과한 항목에 대해서만"). (W6) |
 | `skills/receiving-review/references/response-format.md` | Summary에 `execution_path: subagent \| main_fallback \| mixed \| n/a` 필드 추가. 각 Item의 Evidence에 `test_log: .deep-review/tmp/phase6-{severity}.log` 필드 추가 (ephemeral 주석). |
@@ -291,7 +292,7 @@ JSON 대신 labeled markdown을 선택한 이유:
 
 각 그룹 dispatch 완료 시 (정식 구현은 `skills/receiving-review/references/respond-execution.md` Step 2.5 단일 소스, 실행 검증은 `hooks/scripts/test/test-phase6-protocol-e2e.sh`).
 
-**Spec ↔ commands 매핑** (이 §5.4의 11개 sub-item은 commands Step 2.5의 8-step 중 3~7번 step + 후처리(§3)에 분산 배치됨):
+**Spec ↔ respond-execution.md 매핑** (이 §5.4의 11개 sub-item은 respond-execution.md Step 2.5의 8-step 중 3~7번 step + 후처리(§3)에 분산 배치됨):
 
 | Spec §5.4 | Commands | 주제 |
 |---|---|---|
