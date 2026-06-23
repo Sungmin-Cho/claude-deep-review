@@ -76,3 +76,38 @@ test_summary() {
     return 1
   fi
 }
+
+# extract_anchor <file> <name>
+# Emit the content BETWEEN `<!-- SSOT:<name> START -->` and `<!-- SSOT:<name> END -->`
+# (marker lines excluded). Enforces: exactly one START + one END, START before END,
+# non-empty body. (Repo-wide singleton + unanchored-copy drift are enforced separately
+# by per-test grep guards — see spec §5.1 R2-e; this helper is the per-file extractor.)
+extract_anchor() {
+  local file="$1" name="$2"
+  [ -f "$file" ] || { echo "extract_anchor: no such file: $file" >&2; return 1; }
+  awk -v name="$name" '
+    $0 == "<!-- SSOT:" name " START -->" { s++; if (s==1 && e==0) capturing=1; next }
+    $0 == "<!-- SSOT:" name " END -->"   { e++; capturing=0; next }
+    capturing { body = body $0 "\n" }
+    END {
+      if (s != 1 || e != 1) { print "extract_anchor: " name ": need exactly 1 START + 1 END (got S=" s " E=" e ")" > "/dev/stderr"; exit 1 }
+      if (length(body) == 0) { print "extract_anchor: " name ": empty block" > "/dev/stderr"; exit 1 }
+      printf "%s", body
+    }
+  ' "$file" | { body="$(cat)"; [ -n "$body" ] || return 1; printf '%s' "$body"; }
+}
+
+# assert_anchor_singleton <root> <name>
+# repo-wide singleton 게이트 (spec §5.1): 추적 + untracked(비-ignored) 파일 전수에서
+# START·END 가 각각 정확히 1회·동일 파일이면 0, 아니면 1.
+# --untracked 필수 (실증 확인): (1) Task 2 Step 11(커밋 전)의 untracked review-execution.md 도
+# 본다 — 일반 git grep 은 untracked 를 놓쳐 singleton 이 거짓 실패함. (2) gitignored docs/
+# (플랜·스펙의 예시 마커)는 자동 제외 → false-count 없음.
+assert_anchor_singleton() {
+  local root="$1" name="$2" scount ecount sfile efile
+  scount=$(git -C "$root" grep --untracked -F -e "<!-- SSOT:${name} START -->" -- '*.md' '*.sh' '*.js' 2>/dev/null | wc -l | tr -d ' ')
+  ecount=$(git -C "$root" grep --untracked -F -e "<!-- SSOT:${name} END -->"   -- '*.md' '*.sh' '*.js' 2>/dev/null | wc -l | tr -d ' ')
+  sfile=$(git -C "$root" grep --untracked -lF -e "<!-- SSOT:${name} START -->"  -- '*.md' '*.sh' '*.js' 2>/dev/null)
+  efile=$(git -C "$root" grep --untracked -lF -e "<!-- SSOT:${name} END -->"    -- '*.md' '*.sh' '*.js' 2>/dev/null)
+  [ "$scount" = "1" ] && [ "$ecount" = "1" ] && [ -n "$sfile" ] && [ "$sfile" = "$efile" ]
+}
