@@ -14,6 +14,7 @@ CMD="$ROOT/commands/deep-review.md"
 RCVSKILL="$ROOT/skills/receiving-review/SKILL.md"
 PROTO="$ROOT/skills/receiving-review/references/response-protocol.md"
 FORMAT="$ROOT/skills/receiving-review/references/response-format.md"
+INITSETUP="$ROOT/skills/deep-review-workflow/references/init-setup.md"
 
 # 범위 추출 헬퍼: 첫 `^<start_pat>` 라인부터 다음 `^<end_pat>` 라인 직전까지
 # awk range의 "start==end" 문제를 회피하기 위해 grep -n 으로 라인 번호를 얻어 sed로 자른다.
@@ -85,9 +86,9 @@ else
   fail 4 "phase6-implementer not referenced in commands/deep-review.md"
 fi
 
-# 5. commands/deep-review.md 의 init 모드 .gitignore 권장 블록에 .deep-review/tmp/ 존재
+# 5. init-setup.md 의 .gitignore 권장 블록에 .deep-review/tmp/ 존재
 # extract_range: "### 8. .gitignore" 라인부터 다음 "### " 라인 직전까지
-gitignore_block=$(extract_range "$CMD" '^### 8\. \.gitignore' '^### [0-9]')
+gitignore_block=$(extract_range "$INITSETUP" '^### 8\. \.gitignore' '^### [0-9]')
 if echo "$gitignore_block" | grep -q "\.deep-review/tmp/"; then
   pass 5 ".deep-review/tmp/ present in init .gitignore block"
 else
