@@ -43,12 +43,12 @@ def git_z(*args):
     return [x for x in r.stdout.split(b"\0") if x!=b""]
 items={}  # path-bytes -> record dict (later inserts do not override earlier richer ones)
 # --- Stage-1 review-target exclusions. CANONICAL SOURCE OF TRUTH: the
-# "diff에서 제외" list at commands/deep-review.md:172 (the Stage-1 diff exclusion
-# rule). The two MUST stay textually identical in membership — this set and that
-# list are the same target filter (change_files == the exact review DIFF target
-# set, spec §4.1), so any path the diff omits must be omitted here too; otherwise
-# reviewers see out-of-scope files (vendored/build/generated/lock/binary). When you
-# edit one, edit the other to match.
+# "diff에서 제외" list at review-execution.md SSOT:diff-exclusion-set (the Stage-1
+# diff exclusion rule). The two MUST stay textually identical in membership — this
+# set and that list are the same target filter (change_files == the exact review
+# DIFF target set, spec §4.1), so any path the diff omits must be omitted here
+# too; otherwise reviewers see out-of-scope files (vendored/build/generated/lock/
+# binary). When you edit one, edit the other to match.
 # Applied to the DECODED path so glob/segment matching is on real path text while
 # the dict key stays the raw path-bytes (NUL-safety + byte-sort preserved).
 import fnmatch, posixpath
@@ -65,7 +65,7 @@ def is_excluded(path_str):
 def dec(b): return b.decode("utf-8","surrogateescape")
 # Best-effort UNTRACKED-binary detection. `git diff --numstat` (collect_binary below)
 # only sees TRACKED diffs, so an untracked/initial/session/non-git path's binary-ness
-# is invisible to it — yet Stage-1 excludes binaries (commands/deep-review.md:172). We
+# is invisible to it — yet Stage-1 excludes binaries (review-execution.md SSOT:diff-exclusion-set). We
 # apply the common git heuristic: read the first chunk and treat the file as binary if
 # it contains a NUL byte. NUL-safe (operates on raw bytes), python3-only, non-fatal on
 # read errors (missing/unreadable path → treated as non-binary, i.e. recorded). 'p' is

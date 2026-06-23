@@ -180,7 +180,7 @@ tools:
 
 ### 5.1 Main → Subagent: 입력 프롬프트
 
-Main이 Agent tool을 호출할 때 **2단계 네임스페이스 fallback**을 적용한다 (Skill 로드 패턴 `commands/deep-review.md:478-485`과 symmetry):
+Main이 Agent tool을 호출할 때 **2단계 네임스페이스 fallback**을 적용한다 (Skill 로드 패턴 `commands/deep-review.md SSOT:skill-load-fallback`과 symmetry):
 
 1. 1차: `Agent({ subagent_type: "deep-review:phase6-implementer", prompt: <below> })`
 2. 1차가 "subagent_type not found" 또는 유사 에러 반환 시 2차: `Agent({ subagent_type: "phase6-implementer", prompt: <below> })`

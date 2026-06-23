@@ -188,7 +188,7 @@ rm -f "$stderr_log"
 
 ## Mutation Protocol 참조 (v1.3.2 신규)
 
-Case 3 에서 gitignored 세션 파일을 Codex 에 임시 노출하여 3-way 검증을 수행하는 프로토콜. 구현은 `hooks/scripts/mutation-protocol.sh` 에 캡슐화되어 있으며, `commands/deep-review.md` 의 Stage 0.1, 2.1/2.2, 3.0, 5.0 에서 호출. 상세 설계는 `docs/superpowers/specs/2026-04-21-codex-git-mutation-protocol-design.md` (로컬, gitignored).
+Case 3 에서 gitignored 세션 파일을 Codex 에 임시 노출하여 3-way 검증을 수행하는 프로토콜. 구현은 `hooks/scripts/mutation-protocol.sh` 에 캡슐화되어 있으며, `review-execution.md` 의 Stage 0.1, 2.1/2.2, 3.0, 5.0 에서 호출. 상세 설계는 `docs/superpowers/specs/2026-04-21-codex-git-mutation-protocol-design.md` (로컬, gitignored).
 
 ### Mutation gating: codex-only
 
