@@ -294,7 +294,7 @@ JSON 대신 labeled markdown을 선택한 이유:
 
 **Spec ↔ respond-execution.md 매핑** (이 §5.4의 11개 sub-item은 respond-execution.md Step 2.5의 8-step 중 3~7번 step + 후처리(§3)에 분산 배치됨):
 
-| Spec §5.4 | Commands | 주제 |
+| Spec §5.4 | respond-execution.md 위치 | 주제 |
 |---|---|---|
 | §5.4.1 | Step 3 | Pre-dispatch snapshot (allowlist + baseline) |
 | §5.4.2 | Step 4 + Step 5 preamble | Dispatch + 결과 파싱 |
@@ -305,7 +305,7 @@ JSON 대신 labeled markdown을 선택한 이유:
 | §5.4.7 | Step 5 | 실패 항목 log tail |
 | §5.4.8 | Step 6 | 전원 PASS 그룹 커밋 |
 | §5.4.9 | Step 7 | Dirty recovery |
-| §5.4.10 | commands §3 "Response 리포트 저장" | response.md |
+| §5.4.10 | respond-execution.md §3 "Response 리포트 저장" | response.md |
 | §5.4.11 | `--source=pr` 경로 | PR 코멘트 |
 
 1. **Pre-dispatch snapshot** (→ commands Step 3):
@@ -343,7 +343,7 @@ JSON 대신 labeled markdown을 선택한 이유:
    - **Baseline 존재 여부로 worktree 상태 결정**: baseline 이 있으면 `cp` 로 content 복원. 없으면 PRE 에 worktree 파일이 없었다는 뜻 (tracked-deleted 또는 untracked-absent) — 현재 worktree 에 파일이 있으면 `rm -f` 로 제거 → 원본 "파일 없음" 상태 재구성.
    - **Partial-hunk staging 경고 (W7)**: `PRE_STAGED_FILE` 에서 had_staged=true 경로 목록을 출력 — `git restore --staged` 가 사용자의 `git add -p` hunk-selection state 까지 un-stage 하므로 response.md 에 기록 + 사용자에게 재-stage 권고. 완전한 staged-blob 단위 복원은 v1.3.5 후보.
    - 파일 단위 복원은 binary/text 무관하게 동작.
-10. **Response 리포트** (→ commands §3 "Response 리포트 저장"): 모든 그룹 완료 후 `response-format.md` 형식으로 response.md 작성.
+10. **Response 리포트** (→ respond-execution.md §3 "Response 리포트 저장"): 모든 그룹 완료 후 `response-format.md` 형식으로 response.md 작성.
 11. **PR 코멘트 게시** (→ `--source=pr` 경로): **§5.4.3~§5.4.7 검증 통과한 PASS 항목만** `gh api` 로 코멘트 게시.
 
 **`execution_path` 값 결정표** (W5):
