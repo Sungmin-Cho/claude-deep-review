@@ -435,7 +435,7 @@ JSON 대신 labeled markdown을 선택한 이유:
 **원칙**: 직전 세션의 로그는 사용자가 검토할 때까지 보존, 2회 이전 세션 로그는 자동 삭제. 부분 실패 직후 `/deep-review --respond`를 한 번 더 실행해도 디버깅 증거가 소실되지 않도록 회전 방식을 사용한다.
 
 - **성공/실패 완료 시**: tmp 파일 그대로 유지 (현재 세션 결과).
-- **다음 `--respond` 시작 시** (`commands/deep-review.md`의 "0. 자동 복원" 바로 다음). v1.3.4 N2 교정: `.log` 외에도 TSV (C4 snapshot 파일) + `-baseline/` 디렉토리까지 동일 1단계 회전:
+- **다음 `--respond` 시작 시** (`respond-execution.md`의 `### 0. 자동 복원 + tmp 회전` 참조). v1.3.4 N2 교정: `.log` 외에도 TSV (C4 snapshot 파일) + `-baseline/` 디렉토리까지 동일 1단계 회전:
   ```bash
   mkdir -p .deep-review/tmp/prev
   if compgen -G ".deep-review/tmp/phase6-*.log" > /dev/null 2>&1; then
