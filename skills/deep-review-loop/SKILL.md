@@ -122,7 +122,7 @@ round_review_report_path=$(cd "$(dirname "$round_review_report_path")" && pwd)/$
 
 1. wrapper 변수 `respond_arg_path="$round_review_report_path"` 를 설정. 아래 Read 구문으로 respond 절차를 로드한 뒤 그대로 수행. argument 는 **`--respond ${respond_arg_path}`** — §2.1 에서 캡처한 절대 경로를 **명시 전달** (mtime fallback 의존 금지, race 회귀 방지). `receiving-review` 스킬은 respond-execution.md §Prerequisites 의 3단계 fallback 으로 로드.
 
-   `Read({ file_path: "$CLAUDE_PLUGIN_ROOT/skills/receiving-review/references/respond-execution.md" })`
+   `Read({ file_path: "${CLAUDE_PLUGIN_ROOT}/skills/receiving-review/references/respond-execution.md" })`
 2. **Invariant check**: 본문 §1 이 로드한 리포트 경로가 wrapper 캡처값과 일치하는지 확인. skill 이 본문을 inline 수행하므로 sub-process argv (`$1`) 가 아닌 skill-context 변수로 직접 비교한다 (W1 회귀 방지):
    ```bash
    # 본문 §1 의 path-load 결과를 명시적으로 변수에 복사 (skill context).

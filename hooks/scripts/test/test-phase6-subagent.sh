@@ -143,7 +143,7 @@ fi
 
 # 11. deep-review-loop 가 respond-execution.md 를 Read() 구문으로 재배선 + 옛 인라인 섹션 의존 제거 (P6, R3)
 # 단순 'respond-execution.md' 문자열 grep 금지(산문 언급만으로 통과) — 실제 Read({file_path:...}) 구문 매칭.
-if grep -Eq 'Read\(\{[[:space:]]*file_path:[^}]*respond-execution\.md' "$LOOP" \
+if grep -Eq 'Read\(\{[[:space:]]*file_path:.*respond-execution\.md' "$LOOP" \
    && ! grep -q '## Steps (대응 모드' "$LOOP"; then
   pass 11 "deep-review-loop uses Read(...respond-execution.md) and no longer inlines command --respond section"
 else
