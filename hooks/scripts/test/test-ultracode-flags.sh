@@ -124,11 +124,11 @@ t_docs(){
 }
 
 t_version(){
-  assert_grep V1 "$ROOT/.claude-plugin/plugin.json" '"version": *"1\.12\.1"' "claude plugin 1.12.1"
-  assert_grep V2 "$ROOT/.codex-plugin/plugin.json" '"version": *"1\.12\.1"' "codex plugin 1.12.1"
-  assert_grep V3 "$ROOT/package.json" '"version": *"1\.12\.1"' "package.json 1.12.1"
-  assert_grep V4 "$ROOT/CHANGELOG.md" '1\.12\.1' "CHANGELOG has 1.12.1"
-  assert_grep V5 "$ROOT/CHANGELOG.ko.md" '1\.12\.1' "CHANGELOG.ko has 1.12.1"
+  assert_grep V1 "$ROOT/.claude-plugin/plugin.json" '"version": *"1\.12\.2"' "claude plugin 1.12.2"
+  assert_grep V2 "$ROOT/.codex-plugin/plugin.json" '"version": *"1\.12\.2"' "codex plugin 1.12.2"
+  assert_grep V3 "$ROOT/package.json" '"version": *"1\.12\.2"' "package.json 1.12.2"
+  assert_grep V4 "$ROOT/CHANGELOG.md" '1\.12\.2' "CHANGELOG has 1.12.2"
+  assert_grep V5 "$ROOT/CHANGELOG.ko.md" '1\.12\.2' "CHANGELOG.ko has 1.12.2"
 }
 
 # === main ===

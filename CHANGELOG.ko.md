@@ -4,6 +4,12 @@
 
 deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)와 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
+## [1.12.2] — 2026-06-23
+
+### 변경
+
+- **thin-dispatcher Phase B (내부 리팩토링, 동작 보존)** — 리뷰 모드 본문을 `commands/deep-review.md`에서 on-demand 참조 파일(`skills/deep-review-workflow/references/review-execution.md`, Stage 5.5용 `skills/deep-review-workflow/references/recurring-findings-export.md`, `--entropy`용 `skills/deep-review-workflow/references/entropy-scan.md`)로 추출. 커맨드는 route-first thin router(~53줄)로 전환: `init` / `--respond` / `--qa` 경로가 더 이상 `deep-review-workflow` 스킬을 적재하지 않음(비-리뷰 호출 시 컨텍스트 적재 절감). 라인번호 SSOT 앵커(`:172` / `:505-508` / `:478-485`)를 이름 기반 `<!-- SSOT:name -->` HTML 주석 앵커로 전환하고, 공유 `extract_anchor` / `assert_anchor_singleton` 테스트 헬퍼로 추출·검증. SKILL split-brain 해소(실행 SSOT = `review-execution.md`). **동작 / 플래그 / verdict 불변.**
+
 ## [1.12.1] — 2026-06-23
 
 ### 변경
