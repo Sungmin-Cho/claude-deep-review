@@ -4,6 +4,12 @@
 
 All notable changes to deep-review are documented here. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.1] — 2026-06-23
+
+### Changed
+
+- **thin-dispatcher Phase A (internal refactor, behavior-preserving)** — extracted the `--respond` and `init` mode bodies out of the 1628-line `commands/deep-review.md` into on-demand reference files (`skills/receiving-review/references/respond-execution.md`, `skills/deep-review-workflow/references/init-setup.md`), leaving in-place dispatch stubs. The command shrinks 1628 → 1136 lines; the `--respond` / `init` procedures now load only when those modes run, lightening the common review path. The review-mode region (command lines 1–1122, holding the `:172` diff-exclusion and `:505-508` claude-bridge line-number anchors) is byte-identical — no behavior change. Added `scripts/run-all-tests.sh` (`npm run test:all`) as the single structural-suite gate (npm tests + every `hooks/scripts/test/test-*.sh` except `test-helpers.sh`). Route-first top-router restructure, review-mode extraction, and line-anchor de-anchoring are deferred to Phase B.
+
 ## [1.12.0] — 2026-06-22
 
 ### Added

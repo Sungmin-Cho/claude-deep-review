@@ -4,6 +4,12 @@
 
 deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)와 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
+## [1.12.1] — 2026-06-23
+
+### 변경
+
+- **thin-dispatcher Phase A (내부 리팩토링, 동작 보존)** — `--respond`·`init` 모드 본문을 1628줄 `commands/deep-review.md`에서 on-demand 참조 파일(`skills/receiving-review/references/respond-execution.md`, `skills/deep-review-workflow/references/init-setup.md`)로 추출하고, 그 자리에 dispatch 스텁을 남김. 커맨드는 1628 → 1136줄로 축소; `--respond`·`init` 절차는 해당 모드 실행 시에만 적재되어 공통 리뷰 경로가 가벼워짐. 리뷰 모드 영역(커맨드 1–1122줄, `:172` diff-제외 및 `:505-508` claude-bridge 라인번호 앵커 포함)은 byte-identical — 동작 변화 없음. 단일 구조 스위트 게이트 `scripts/run-all-tests.sh`(`npm run test:all`) 추가(npm 테스트 + `test-helpers.sh` 제외 모든 `hooks/scripts/test/test-*.sh`). 상단 thin-router(route-first) 재구조화, 리뷰 모드 추출, 라인앵커 디앵커는 Phase B로 이관.
+
 ## [1.12.0] — 2026-06-22
 
 ### 추가
