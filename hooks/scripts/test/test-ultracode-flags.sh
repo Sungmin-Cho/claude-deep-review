@@ -5,6 +5,9 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 CMD="$ROOT/commands/deep-review.md"
+# Phase B: review-mode runtime contracts (reviewer enumeration, precedence, SEC-1, ultracode
+# collapse) now live in review-execution.md. §0.5 flag parse/validate + frontmatter stay in $CMD.
+REVEXEC="$ROOT/skills/deep-review-workflow/references/review-execution.md"
 LOOP="$ROOT/skills/deep-review-loop/SKILL.md"
 WF_SKILL="$ROOT/skills/deep-review-workflow/SKILL.md"
 ULTRA="$ROOT/skills/deep-review-workflow/references/ultracode-integration.md"
@@ -36,19 +39,19 @@ t_parse_validation(){
 }
 
 t_precedence(){
-  # §2.3 precedence + BC-3 preservation + CONS-3 N=0
-  assert_grep PR1 "$CMD" 'claude_reviewer *=' "claude_reviewer precedence resolver present"
-  assert_grep PR2 "$CMD" 'none .*if .*\-\-no-opus' "no-opus -> none"
-  assert_grep PR3 "$CMD" 'ultracode-fanout .*\-\-ultracode' "ultracode -> fanout"
-  assert_grep PR4 "$CMD" 'single-opus .*else|single-opus.*기존 기본값' "else -> single-opus (BC-3 opus literal preserved)"
-  assert_grep PR5 "$CMD" 'AGY_USER_DECLINED_THIS_RUN' "BC-3: per-run agy decline conjunct retained"
-  assert_grep PR6 "$CMD" 'N_planned *=' "N_planned formula present"
-  assert_grep PR7 "$CMD" 'N_planned *= *0|N=0.*검증.*에러|단발.*리뷰어가 없' "CONS-3: single-shot N=0 validation error"
+  # §2.3 precedence + BC-3 preservation + CONS-3 N=0 — now in review-execution.md (Stage 3 enum)
+  assert_grep PR1 "$REVEXEC" 'claude_reviewer *=' "claude_reviewer precedence resolver present"
+  assert_grep PR2 "$REVEXEC" 'none .*if .*\-\-no-opus' "no-opus -> none"
+  assert_grep PR3 "$REVEXEC" 'ultracode-fanout .*\-\-ultracode' "ultracode -> fanout"
+  assert_grep PR4 "$REVEXEC" 'single-opus .*else|single-opus.*기존 기본값' "else -> single-opus (BC-3 opus literal preserved)"
+  assert_grep PR5 "$REVEXEC" 'AGY_USER_DECLINED_THIS_RUN' "BC-3: per-run agy decline conjunct retained"
+  assert_grep PR6 "$REVEXEC" 'N_planned *=' "N_planned formula present"
+  assert_grep PR7 "$REVEXEC" 'N_planned *= *0|N=0.*검증.*에러|단발.*리뷰어가 없' "CONS-3: single-shot N=0 validation error"
 }
 
 t_sec1(){
-  assert_grep S1 "$CMD" 'agy_included.*Stage 3\.5|Stage 3\.5.*agy_included|--no-agy.*Stage 3\.5.*(skip|건너)' "SEC-1: Stage 3.5 gated on agy_included"
-  assert_grep S2 "$CMD" '\-\-no-agy.*fingerprint.*(변경하지|미변경|not).*|fingerprint.*변경하지 않' "SEC-1: --no-agy does not mutate fingerprint"
+  assert_grep S1 "$REVEXEC" 'agy_included.*Stage 3\.5|Stage 3\.5.*agy_included|--no-agy.*Stage 3\.5.*(skip|건너)' "SEC-1: Stage 3.5 gated on agy_included"
+  assert_grep S2 "$REVEXEC" '\-\-no-agy.*fingerprint.*(변경하지|미변경|not).*|fingerprint.*변경하지 않' "SEC-1: --no-agy does not mutate fingerprint"
 }
 
 t_ultra_ref(){
@@ -67,14 +70,14 @@ t_ultra_ref(){
 }
 
 t_cmd_ultracode(){
-  assert_grep C1 "$CMD" 'ultracode-integration\.md' "command references ultracode SSOT"
-  assert_grep C2 "$CMD" 'codex/agy.*먼저.*spawn|먼저 codex/agy' "ARCH-1 ordering in command"
-  assert_grep C3 "$CMD" 'Claude\(ultracode\)|단일.*보이스|single.*voice' "single-voice collapse referenced"
-  assert_grep C4 "$CMD" 'disjoint quorum 밴드|K ≥ 쿼럼\(=3\)|샤드 성공 수 K' "CONS-10 opus_status disjoint quorum collapse (TQ-1)"
-  assert_grep C5 "$CMD" 'Claude=ultracode|ultracode\(5-lens' "Review Mode ultracode label"
-  assert_grep C6 "$CMD" 'agent-fanout fallback|UNVERIFIED fallback' "SC-4: fallback label present"
-  assert_absent C7 "$CMD" 'iff ≥1 샤드' "REG-10: opus_status success NOT tied to ≥1 (disjoint quorum)"
-  assert_grep C8 "$CMD" 'codex_included.*(NOT --no-codex|--no-codex 아님)|SEC-CODEX-1' "SEC-CODEX-1: --no-codex short-circuits mutation flow"
+  assert_grep C1 "$REVEXEC" 'ultracode-integration\.md' "command references ultracode SSOT"
+  assert_grep C2 "$REVEXEC" 'codex/agy.*먼저.*spawn|먼저 codex/agy' "ARCH-1 ordering in command"
+  assert_grep C3 "$REVEXEC" 'Claude\(ultracode\)|단일.*보이스|single.*voice' "single-voice collapse referenced"
+  assert_grep C4 "$REVEXEC" 'disjoint quorum 밴드|K ≥ 쿼럼\(=3\)|샤드 성공 수 K' "CONS-10 opus_status disjoint quorum collapse (TQ-1)"
+  assert_grep C5 "$REVEXEC" 'Claude=ultracode|ultracode\(5-lens' "Review Mode ultracode label"
+  assert_grep C6 "$REVEXEC" 'agent-fanout fallback|UNVERIFIED fallback' "SC-4: fallback label present"
+  assert_absent C7 "$REVEXEC" 'iff ≥1 샤드' "REG-10: opus_status success NOT tied to ≥1 (disjoint quorum)"
+  assert_grep C8 "$REVEXEC" 'codex_included.*(NOT --no-codex|--no-codex 아님)|SEC-CODEX-1' "SEC-CODEX-1: --no-codex short-circuits mutation flow"
 }
 
 t_reportfmt(){

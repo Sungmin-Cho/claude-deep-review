@@ -263,7 +263,7 @@ fi
 echo "  ✓ M-G: auth failure with --model is not retried (stays not_authenticated)"
 
 # Test M-O1/M-O2 (orchestrator invocation form regression — Codex round-2/3): the
-# command contract in commands/deep-review.md builds an `agy_model_args` array and
+# command contract in review-execution.md builds an `agy_model_args` array and
 # expands it as `${agy_model_args[@]+"${agy_model_args[@]}"}` (quotes INSIDE). The
 # wrong form `"${agy_model_args[@]+${agy_model_args[@]}}"` (quotes outside) passes a
 # stray empty argv element on the opt-out path → the bridge aborts with "Unknown arg:"

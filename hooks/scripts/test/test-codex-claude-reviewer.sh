@@ -78,7 +78,7 @@ SH
 fi
 
 for doc in \
-  "$REPO_ROOT/commands/deep-review.md" \
+  "$REPO_ROOT/skills/deep-review-workflow/references/review-execution.md" \
   "$REPO_ROOT/skills/deep-review-workflow/SKILL.md" \
   "$REPO_ROOT/skills/deep-review-workflow/references/codex-integration.md"
 do
