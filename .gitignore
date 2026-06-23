@@ -15,7 +15,7 @@
 #   tracked되던 시절에 내부 backlog가 실수로 공개된 적이 있어 결정된 정책입니다.
 #
 # 플러그인을 "사용"하는 프로젝트의 .gitignore 권고는 `/deep-review init`이
-# 대화형으로 제안합니다 (commands/deep-review.md 의 init 모드 Step 8 참고).
+# 대화형으로 제안합니다 (`/deep-review init`(init-setup.md Step 8) 참고).
 
 .deep-review/
 docs/

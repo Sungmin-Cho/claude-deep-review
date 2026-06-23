@@ -62,9 +62,9 @@ deep-review/
 ├── package.json                    # npm manifest (Node 20+, node:test runner)
 ├── agents/
 │   ├── code-reviewer.md           # Opus subagent (spawned by /deep-review, Stage 3)
-│   └── phase6-implementer.md      # Sonnet subagent (dispatched by /deep-review --respond Phase 6)
+│   └── phase6-implementer.md      # Sonnet subagent (dispatched by respond-execution.md Phase 6)
 ├── commands/
-│   └── deep-review.md             # main command — 4-stage review pipeline + Stage 5 respond
+│   └── deep-review.md             # main command — 4-stage review pipeline + Stage 5 respond (responds via respond-execution.md)
 ├── hooks/
 │   ├── hooks.json                 # empty (no active hooks since v1.3.1)
 │   └── scripts/
@@ -95,6 +95,7 @@ deep-review/
 │   │   └── SKILL.md
 │   └── receiving-review/          # Stage 5 response protocol
 │       └── references/
+│           ├── respond-execution.md       # --respond 전체 절차 SSOT (commands/deep-review.md에서 on-demand Read)
 │           ├── response-protocol.md       # 6-phase workflow + source-trust matrix
 │           ├── phase6-delegation-spec.md  # Subagent contract + Phase 6 group loop
 │           ├── phase6-prompt-contract.md  # Main → subagent Accepted-Items format
@@ -175,7 +176,7 @@ Seven categories: `error-handling`, `naming-convention`, `type-safety`, `test-co
 
 ### Phase 6 delegation
 
-**Main session** owns Phases 1–5 (READ → UNDERSTAND → VERIFY → EVALUATE → RESPOND) and decides accept / reject / defer. It builds an `implementation_guide` per accepted item.
+**Main session** owns Phases 1–5 (READ → UNDERSTAND → VERIFY → EVALUATE → RESPOND) and decides accept / reject / defer. It builds an `implementation_guide` per accepted item. Full execution procedure is in `skills/receiving-review/references/respond-execution.md` (SSOT; `commands/deep-review.md` `--respond` branch reads this on-demand).
 
 **`phase6-implementer` subagent** (model: sonnet) receives only **Accepted Items** in severity group order (critical → warning → info). Per-item shape:
 

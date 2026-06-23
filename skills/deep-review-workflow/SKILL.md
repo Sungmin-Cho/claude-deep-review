@@ -123,9 +123,9 @@ user-invocable: false
 
 ## Stage 5+ (커맨드 레벨 확장)
 
-Stage 5 이후는 본 스킬이 아니라 `commands/deep-review.md` 본문에서 정의된다 — 스킬은 판단·합성까지, 커맨드는 응답·후처리·옵션 모드를 담당한다:
+Stage 5 이후는 본 스킬이 아니라 커맨드/참조 레이어에서 정의된다 — 스킬은 판단·합성까지, 그 이후는 아래 소유권을 따른다:
 
-- **Stage 5 (응답)**: `--respond` 모드 — `../receiving-review/SKILL.md` 가 Phase 1~6 가이드 제공.
+- **Stage 5 (응답)**: `--respond` 모드 — `../receiving-review/SKILL.md` 가 Phase 1~6 가이드 제공. respond 실행 절차(자동 복원/tmp 회전 → 리포트 로딩 → Phase 1~6 dispatch → Response 저장)는 `../receiving-review/references/respond-execution.md` 가 SSOT.
 - **Stage 5.5 (Recurring Findings Export)**: 매 라운드 종료 시 `.deep-review/recurring-findings.json` 갱신 (`commands/deep-review.md` §5.5).
 - **Stage 6 (`--entropy` 스캔)**: 옵션 플래그 (`commands/deep-review.md` §6).
 - **Stage 7 (`--qa`)**: 향후 릴리스 예정 — 현재 `app_qa.*` config 필드는 예약 스키마.

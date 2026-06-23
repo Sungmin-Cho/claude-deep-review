@@ -17,7 +17,8 @@ user-invocable: false
 - `references/forbidden-patterns.md` — 금지 표현 + 합리화 차단 테이블
 - `references/response-format.md` — Response 리포트 형식
 - `references/phase6-prompt-contract.md` — **Phase 6 진입 시 반드시 참조**. Main이 `phase6-implementer` 서브에이전트에 전달할 입력 prompt 조립 + 반환 메시지 검증을 위한 정식 계약(입력/출력 예시, 필드 정의, edge case). Phase 5 완료 직후 `implementation_guide`를 작성할 때와 Phase 6 dispatch 로직 실행 시 이 파일을 Read.
-- `references/phase6-delegation-spec.md` — Phase 6 dispatch 설계 배경. 결정 사항, 아키텍처, 트레이드오프, edge cases. 디버깅·구조 변경 시 참조 (운영 흐름은 `phase6-prompt-contract.md` + `commands/deep-review.md` Step 2.5).
+- `references/phase6-delegation-spec.md` — Phase 6 dispatch 설계 배경. 결정 사항, 아키텍처, 트레이드오프, edge cases. 디버깅·구조 변경 시 참조 (운영 흐름은 `phase6-prompt-contract.md` + `references/respond-execution.md` Step 2.5).
+- `references/respond-execution.md` — `--respond` 전체 실행 절차 SSOT. `commands/deep-review.md` 의 `--respond` 분기에서 on-demand Read 되어 수행된다.
 
 ## 대응 원칙
 
