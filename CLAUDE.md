@@ -87,8 +87,8 @@ deep-review/
 │   ├── deep-review-workflow/      # Stage 3 review logic, Codex / agy integration references
 │   │   └── references/
 │   │       ├── review-execution.md    # review-mode execution SSOT — read on-demand by commands/deep-review.md router; holds SSOT:diff-exclusion-set + SSOT:claude-bridge-call anchors
-│   │       ├── recurring-findings-export.md  # Stage 5.5 M3 envelope emission logic (SSOT:recurring-findings-export)
-│   │       ├── entropy-scan.md        # --entropy mode execution body (SSOT:entropy-scan)
+│   │       ├── recurring-findings-export.md  # Stage 5.5 M3 envelope emission body — read on-demand by review-execution.md precheck (report count ≥2)
+│   │       ├── entropy-scan.md        # --entropy scan body — read on-demand by review-execution.md
 │   │       ├── review-criteria.md     # Correctness, Architecture, Entropy, Test coverage, Readability
 │   │       ├── contract-schema.md     # Sprint Contract YAML shape + auto/manual/mixed verification
 │   │       ├── report-format.md       # Findings output (🔴 Critical, 🟡 Warning, ℹ️ Info) + dissenter annotation

@@ -6,7 +6,7 @@
  * recurring-findings payload in the M3 cross-plugin envelope (cf.
  * claude-deep-suite/docs/envelope-migration.md §1).
  *
- * Designed to be called from commands/deep-review.md Stage 5.5 ("Recurring
+ * Designed to be called from review-execution.md Stage 5.5 precheck / recurring-findings-export.md ("Recurring
  * Findings Export") via the Bash tool. The agent synthesises the taxonomy
  * payload (jq aggregation over `.deep-review/reports/*.md`) into a temp file,
  * then invokes this helper to produce the final envelope-wrapped artifact at
