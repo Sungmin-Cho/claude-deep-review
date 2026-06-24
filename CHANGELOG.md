@@ -4,6 +4,12 @@
 
 All notable changes to deep-review are documented here. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.2] — 2026-06-23
+
+### Changed
+
+- **thin-dispatcher Phase B (internal refactor, behavior-preserving)** — extracted the review-mode body from `commands/deep-review.md` into on-demand reference files (`skills/deep-review-workflow/references/review-execution.md`, `skills/deep-review-workflow/references/recurring-findings-export.md` for Stage 5.5, and `skills/deep-review-workflow/references/entropy-scan.md` for `--entropy`). The command is now a route-first thin router (~53 lines): `init` / `--respond` / `--qa` paths no longer load the `deep-review-workflow` skill (reduced context load on non-review invocations). Line-number SSOT anchors (`:172` / `:505-508` / `:478-485`) converted to named `<!-- SSOT:name -->` HTML-comment anchors extracted and validated by shared `extract_anchor` / `assert_anchor_singleton` test helpers. SKILL split-brain resolved (execution SSOT = `review-execution.md`). **Behavior / flags / verdict unchanged.**
+
 ## [1.12.1] — 2026-06-23
 
 ### Changed

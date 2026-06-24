@@ -36,7 +36,7 @@ user-invocable: false
 4. **dirty working-tree 상태(staged/unstaged/mixed/untracked-only)에서 untracked > 0이면:**
    - `git ls-files --others --exclude-standard`로 추가 파일을 리뷰 대상에 포함 (primary state의 diff와 union).
    - **단, `clean` 은 union에서 제외** — clean 의 실효 대상은 커밋된 `review_base..HEAD` 이므로 leftover untracked 파일은 그 대상 집합에 없다(spec §4.1). `initial` 은 자체 `--cached --others` 열거를 쓴다.
-5. diff에서 제외 (**SSOT: `commands/deep-review.md:172` 의 "diff에서 제외" 목록 + `hooks/scripts/build-change-files.sh` 의 `EXCLUDE_SEGMENTS`/`EXCLUDE_BASENAME_GLOBS`**). 여기서 목록을 재기술하지 않는다 — 디렉토리 세그먼트(node_modules/dist/build/.next/target/.venv/__pycache__/.pytest_cache/vendor/.git)·파일명 글로브(*.min.js/*.generated.*/*.lock/.DS_Store)·바이너리의 **정확한 멤버십은 그 단일 출처를 따른다**. 이 목록은 diff 와 change_files manifest 의 대상 집합이 동일하도록(spec §4.1) 변경 시 SSOT 한 곳만 고치면 된다.
+5. diff에서 제외 (**SSOT: `review-execution.md` 의 `SSOT:diff-exclusion-set` 앵커 "diff에서 제외" 목록 + `hooks/scripts/build-change-files.sh` 의 `EXCLUDE_SEGMENTS`/`EXCLUDE_BASENAME_GLOBS`**). 여기서 목록을 재기술하지 않는다 — 디렉토리 세그먼트(node_modules/dist/build/.next/target/.venv/__pycache__/.pytest_cache/vendor/.git)·파일명 글로브(*.min.js/*.generated.*/*.lock/.DS_Store)·바이너리의 **정확한 멤버십은 그 단일 출처를 따른다**. 이 목록은 diff 와 change_files manifest 의 대상 집합이 동일하도록(spec §4.1) 변경 시 SSOT 한 곳만 고치면 된다.
 
 ### Stage 2: Contract Check (계약 검증)
 
@@ -91,7 +91,7 @@ user-invocable: false
 → 3-way 병렬 백그라운드 실행:
   1. Claude reviewer — Claude Code에서는 Agent(code-reviewer, model: opus, run_in_background: true), Codex/non-Claude에서는 `run-claude-reviewer.sh` CLI bridge
   2. Bash(_timeout 900 node "{codex_companion_path}" review {codex_target_flag}, run_in_background: true) — 코드 리뷰 (`_timeout`은 `references/codex-integration.md` preflight 섹션의 portable shim)
-  3. Bash (run_in_background: true) — adversarial-review를 **단일 Bash 호출 내에 inline**으로 실행한다. mktemp 생성 → here-doc으로 focus_text 주입 → `_timeout 900 node ... adversarial-review ... - < "$focus_file"` 호출 → 종료 후 `rm -f` 정리. 별도 Bash에 `$focus_file`을 넘기면 subshell 경계에서 unset되므로 **반드시 같은 Bash command 문자열 안에서 완결**. 상세 예제는 `commands/deep-review.md` Stage 3 참조. mktemp 경로는 `"${TMPDIR:-/tmp}/deep-review-focus.XXXXXX"` 형식 — 고정 경로 사용 금지.
+  3. Bash (run_in_background: true) — adversarial-review를 **단일 Bash 호출 내에 inline**으로 실행한다. mktemp 생성 → here-doc으로 focus_text 주입 → `_timeout 900 node ... adversarial-review ... - < "$focus_file"` 호출 → 종료 후 `rm -f` 정리. 별도 Bash에 `$focus_file`을 넘기면 subshell 경계에서 unset되므로 **반드시 같은 Bash command 문자열 안에서 완결**. 상세 예제는 `review-execution.md` Stage 3 참조. mktemp 경로는 `"${TMPDIR:-/tmp}/deep-review-focus.XXXXXX"` 형식 — 고정 경로 사용 금지.
 
 {codex_target_flag}: clean 또는 WIP 커밋 후 → `--base {review_base}`, dirty tree → `--scope working-tree` (companion 1.0.x 호환).
 **untracked-only**: `--scope working-tree` 가 `git ls-files --others --exclude-standard` 로 자동 수집 — 별도 fallback 불필요.
@@ -100,7 +100,7 @@ user-invocable: false
 
 *왜 필요한가*: Codex CLI 는 git-tracked 경로만 인식하므로, gitignored 세션 파일 (WIP, `.deep-review/`, `*.local.*` 등) 을 3-way 검증에 포함시키려면 임시 git-index mutation (intent-to-add) 이 필요하다. 검증 후 즉시 원상복구하여 사용자 워크트리에 흔적을 남기지 않는다.
 
-구현: `hooks/scripts/mutation-protocol.sh` 의 7개 함수 (`is_our_ita_entry`, `acquire_mutation_lock`, `release_mutation_lock`, `perform_mutation`, `restore_mutation`, `auto_recover`, `scan_sensitive_files`). Entry point: `commands/deep-review.md` Stage 0.1 (auto_recover), Stage 2.1 (session inference), Stage 3.0 (perform_mutation), Stage 5.0 (restore_mutation).
+구현: `hooks/scripts/mutation-protocol.sh` 의 7개 함수 (`is_our_ita_entry`, `acquire_mutation_lock`, `release_mutation_lock`, `perform_mutation`, `restore_mutation`, `auto_recover`, `scan_sensitive_files`). Entry point: `review-execution.md` Stage 0.1 (auto_recover), Stage 2.1 (session inference), Stage 3.0 (perform_mutation), Stage 5.0 (restore_mutation).
 
 **커밋되지 않은 상태에서:**
 - 사용자에게 WIP 커밋 제안
@@ -123,11 +123,11 @@ user-invocable: false
 
 ## Stage 5+ (커맨드 레벨 확장)
 
-Stage 5 이후는 본 스킬이 아니라 커맨드/참조 레이어에서 정의된다 — 스킬은 판단·합성까지, 그 이후는 아래 소유권을 따른다:
+실행 SSOT = 리뷰는 review-execution.md, 응답은 respond-execution.md; 본 스킬은 개념 맵 — 스킬은 판단·합성까지, 그 이후는 아래 소유권을 따른다:
 
 - **Stage 5 (응답)**: `--respond` 모드 — `../receiving-review/SKILL.md` 가 Phase 1~6 가이드 제공. respond 실행 절차(자동 복원/tmp 회전 → 리포트 로딩 → Phase 1~6 dispatch → Response 저장)는 `../receiving-review/references/respond-execution.md` 가 SSOT.
-- **Stage 5.5 (Recurring Findings Export)**: 매 라운드 종료 시 `.deep-review/recurring-findings.json` 갱신 (`commands/deep-review.md` §5.5).
-- **Stage 6 (`--entropy` 스캔)**: 옵션 플래그 (`commands/deep-review.md` §6).
+- **Stage 5.5 (Recurring Findings Export)**: 매 라운드 종료 시 `.deep-review/recurring-findings.json` 갱신 (`references/recurring-findings-export.md`).
+- **Stage 6 (`--entropy` 스캔)**: 옵션 플래그 (`references/entropy-scan.md`).
 - **Stage 7 (`--qa`)**: 향후 릴리스 예정 — 현재 `app_qa.*` config 필드는 예약 스키마.
 
 ## config.yaml 스키마

@@ -64,7 +64,7 @@ deep-review/
 │   ├── code-reviewer.md           # Opus subagent (spawned by /deep-review, Stage 3)
 │   └── phase6-implementer.md      # Sonnet subagent (dispatched by respond-execution.md Phase 6)
 ├── commands/
-│   └── deep-review.md             # main command — 4-stage review pipeline + Stage 5 respond (responds via respond-execution.md)
+│   └── deep-review.md             # thin router (route-first dispatch) — delegates review body to review-execution.md; --respond to respond-execution.md; init to init-setup.md
 ├── hooks/
 │   ├── hooks.json                 # empty (no active hooks since v1.3.1)
 │   └── scripts/
@@ -86,6 +86,9 @@ deep-review/
 ├── skills/
 │   ├── deep-review-workflow/      # Stage 3 review logic, Codex / agy integration references
 │   │   └── references/
+│   │       ├── review-execution.md    # review-mode execution SSOT — read on-demand by commands/deep-review.md router; holds SSOT:diff-exclusion-set + SSOT:claude-bridge-call anchors
+│   │       ├── recurring-findings-export.md  # Stage 5.5 M3 envelope emission body — read on-demand by review-execution.md precheck (report count ≥2)
+│   │       ├── entropy-scan.md        # --entropy scan body — read on-demand by review-execution.md
 │   │       ├── review-criteria.md     # Correctness, Architecture, Entropy, Test coverage, Readability
 │   │       ├── contract-schema.md     # Sprint Contract YAML shape + auto/manual/mixed verification
 │   │       ├── report-format.md       # Findings output (🔴 Critical, 🟡 Warning, ℹ️ Info) + dissenter annotation
