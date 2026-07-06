@@ -15,8 +15,11 @@ RPT="$REF/report-format.md"
 # (a) §5.1 실행 블록이 N=1 전용 분기(🟡 CONCERN / 🟢 APPROVE + 단일 리뷰어)를 인라인 보유
 assert_success "grep -qF 'N_actual == 1' '$REVEXEC'" "review-execution 이 N=1 전용 분기를 인라인 보유"
 assert_success "grep -qF '단일 리뷰어' '$REVEXEC'" "N=1 분기에 단일 리뷰어 표기 규칙 존재"
-# (b) solo(참고) 강등 줄에 N≥2 가드
-assert_success "grep -qF 'N_actual ≥ 2' '$REVEXEC'" "solo(참고) 강등이 N≥2 로 가드됨"
+# (b) solo(참고) 강등 줄이 N≥3 로 가드 (N=2 미포함 — 2-way 1/2 는 참고 아님 CONCERN) — R3 fix
+assert_success "grep -qF '단독 지적 (N_actual ≥ 3 일 때만) → 참고' '$REVEXEC'" "solo(참고) 강등이 N≥3 로 가드됨(N=2 미포함)"
+# (b2) N_actual == 2 명시 분기: 1/2 단독 → 🟡 CONCERN (에스컬레이션, codex-integration §N-way 표와 동일)
+assert_success "grep -qF 'N_actual == 2 분기' '$REVEXEC'" "review-execution N=2 명시 분기 존재"
+assert_success "grep -qF '1/2 단독 → 🟡 CONCERN' '$REVEXEC'" "N=2 1/2 단독이 CONCERN(에스컬레이션)"
 # (c) codex-integration N=1 행이 여전히 존재(값 drift 검출 — 두 파일 동일 결론)
 assert_success "grep -qF 'N=1' '$CODEX'" "codex-integration N=1 행 존재"
 assert_success "grep -qF 'APPROVE' '$CODEX'" "codex-integration N=1 0/1 APPROVE 존재"

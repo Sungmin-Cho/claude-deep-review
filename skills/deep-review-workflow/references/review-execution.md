@@ -852,7 +852,8 @@ AGY_EXCLUDE_FROM_SYNTHESIS=0
 1. 교차 검증 합성 (Codex 결과가 있을 때):
    - 전원 일치 지적 → 🔴 높은 확신
    - 2/3 지적 → 🟡 중간 확신
-   - 단독 지적 (N_actual ≥ 2 일 때만) → 참고   # N_actual == 1 은 아래 N=1 전용 분기 적용
+   - **N_actual == 2 분기**: 1/2 단독 → 🟡 CONCERN (에스컬레이션, `codex-integration.md` §N-way 표와 동일) / 0/2 → 🟢 APPROVE   # N=2 는 단독이라도 참고로 강등하지 않는다(코로보레이터가 1명뿐)
+   - 단독 지적 (N_actual ≥ 3 일 때만) → 참고   # N=3+ 의 1/N 단독만 참고로 강등. N_actual == 2 는 위 분기, N_actual == 1 은 아래 N=1 전용 분기 적용
    - 전원 통과 → 🟢
 
 **4-way verdict synthesis (when N_actual=4)**:
@@ -872,7 +873,7 @@ AGY_EXCLUDE_FROM_SYNTHESIS=0
 - 🟡만 (🔴 0건) → 🟡 CONCERN + Summary 에 "단일 리뷰어(single-reviewer)" 주의 표기
 - 0건 (전원 통과) → 🟢 APPROVE + "단일 리뷰어" 표기
 
-(🟡 단독 지적을 REQUEST_CHANGES 로 **승격하지 않는다** — unreplicated single-model 의 🟡 의견 과대평가 회피. 그러나 **🔴(critical/security) 은 severity 자체가 blocking** 이므로 단일 리뷰어라도 REQUEST_CHANGES 를 유지한다 — 이는 일반 "🔴 1건 이상 → REQUEST_CHANGES" 규칙 및 `review-criteria.md` severity 원칙과 정합이며, 1-way 리뷰에서 critical 을 non-blocking 으로 흘리지 않기 위함. `codex-integration.md` §N-way 합성 표(N=1 행)와 **동일 매핑**. 위 "단독 지적 → 참고" 는 **N_actual ≥ 2** 전용이므로 N=1 에서는 이 전용 분기가 지배한다. 기존 N=3/2 fallback 행은 `codex-integration.md` §N-way 합성 표를 SSOT 로 참조.)
+(🟡 단독 지적을 REQUEST_CHANGES 로 **승격하지 않는다** — unreplicated single-model 의 🟡 의견 과대평가 회피. 그러나 **🔴(critical/security) 은 severity 자체가 blocking** 이므로 단일 리뷰어라도 REQUEST_CHANGES 를 유지한다 — 이는 일반 "🔴 1건 이상 → REQUEST_CHANGES" 규칙 및 `review-criteria.md` severity 원칙과 정합이며, 1-way 리뷰에서 critical 을 non-blocking 으로 흘리지 않기 위함. `codex-integration.md` §N-way 합성 표(N=1 행)와 **동일 매핑**. 위 "단독 지적 → 참고" 는 **N_actual ≥ 3** 전용(N=2 는 1/2 → CONCERN 분기, N=1 은 이 전용 분기)이므로 N=1 에서는 이 전용 분기가 지배한다. 기존 N=3/2 fallback 행은 `codex-integration.md` §N-way 합성 표를 SSOT 로 참조.)
 
 2. Verdict 결정 (아래 규칙은 **N_actual ≥ 2** 전제 — N=1 은 위 N_actual == 1 전용 분기가 최종):
    - 🔴 1건 이상 → **REQUEST_CHANGES**
