@@ -77,3 +77,6 @@ jobs:
 
       - name: CI-enrollment guard unit test
         run: bash hooks/scripts/test/test-check-test-ci-enrollment.sh
+
+      - name: verdict-synthesis SSOT structural test
+        run: bash hooks/scripts/test/test-verdict-synthesis-ssot.sh

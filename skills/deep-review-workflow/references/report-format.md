@@ -61,7 +61,7 @@ This preserves cross-vendor-family signal even when the majority threshold (3/4)
 
 ### Degraded mode marker
 
-When `opus_status != success AND N_actual_external ≤ 1`, the Summary records:
+When `claude_reviewer != none AND opus_status != success AND N_actual_external ≤ 1`, the Summary records:
 
 ```
 Verdict: CONCERN

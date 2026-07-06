@@ -852,7 +852,7 @@ AGY_EXCLUDE_FROM_SYNTHESIS=0
 1. 교차 검증 합성 (Codex 결과가 있을 때):
    - 전원 일치 지적 → 🔴 높은 확신
    - 2/3 지적 → 🟡 중간 확신
-   - 단독 지적 → 참고
+   - 단독 지적 (N_actual ≥ 2 일 때만) → 참고   # N_actual == 1 은 아래 N=1 전용 분기 적용
    - 전원 통과 → 🟢
 
 **4-way verdict synthesis (when N_actual=4)**:
@@ -867,6 +867,12 @@ AGY_EXCLUDE_FROM_SYNTHESIS=0
 
 기존 N=3, 2, 1 fallback 행은 그대로 유지 (3-way 이하).
 
+**N_actual == 1 (1-way) 전용 분기** — 단독 리뷰어이므로 코로보레이션(다수 교차 확인) 개념 부재:
+- 1건 이상 지적 → 🟡 CONCERN + Summary 에 "단일 리뷰어(single-reviewer)" 주의 표기
+- 0건 (전원 통과) → 🟢 APPROVE + "단일 리뷰어" 표기
+
+(1/1 을 🔴 REQUEST_CHANGES 로 올리지 않는다 — unreplicated single-model 의견의 과대평가 회피, `codex-integration.md` §N-way 합성 표(N=1 행)와 정합. 위 "단독 지적 → 참고" 는 **N_actual ≥ 2** 전용이므로 N=1 에서는 이 전용 분기가 지배한다. 기존 N=3/2 fallback 행은 `codex-integration.md` §N-way 합성 표를 SSOT 로 참조.)
+
 2. Verdict 결정:
    - 🔴 1건 이상 → **REQUEST_CHANGES**
    - 🟡만, 전원 일치 → **REQUEST_CHANGES**
@@ -875,7 +881,7 @@ AGY_EXCLUDE_FROM_SYNTHESIS=0
 
 ### Stage 4.3.1: opus 실패 시 auto-degradation (no AskUserQuestion at synthesis)
 
-`opus_status != success AND N_actual_external ≤ 1` (= Opus 실패 + 외부 reviewer 1개 이하 성공) 시:
+`claude_reviewer != none AND opus_status != success AND N_actual_external ≤ 1` (= Opus 가 계획됐으나 실패 + 외부 reviewer 1개 이하 성공) 시:
 
 1. **합성과 리포트 저장은 항상 진행** (Verdict 강등하더라도 결과 보존).
 2. **Verdict 를 `CONCERN` 으로 강제** (APPROVE 또는 REQUEST_CHANGES 금지).
@@ -884,6 +890,8 @@ AGY_EXCLUDE_FROM_SYNTHESIS=0
 5. **사후 chat 메시지**: "⚠️ Verdict downgraded to CONCERN — Opus failed and only {N} external reviewer(s) responded. Treat findings as advisory."
 
 이는 deterministic — synthesis 단계에서 AskUserQuestion 없음. (R5 C-R5 / R7 §4.3.1 fix — async run_in_background 패러다임과 충돌 회피.)
+
+> **`opus_status` 도메인 (sentinel)**: single-opus = `success`|`failed`; ultracode-fanout = `success`|`partial`|`failed`(K-밴드, CONS-10); none(`--no-opus`/`--codex-only`) = `not_planned`(Opus 미계획 — 가드 비적용). 따라서 degraded 가드는 `claude_reviewer != none` 일 때만 평가한다 — codex-only(N=1)는 이 가드 대신 위 §N-way 합성의 **N_actual == 1 전용 분기**(APPROVE 가능)의 지배를 받는다.
 
 **N_actual == 0 런타임 가드 (SPEC-3 / SEC-CONS3-1):** `claude_reviewer == none`(`--no-opus`/`--codex-only`) 인데 실제로 완료된 외부 reviewer 가 0개(codex/agy 가 전부 미설치·인증실패·timeout·실패)면 — `N_planned` 는 flag/감지 기준이라 통과했더라도 — **빈 리포트로 APPROVE/CONCERN 을 내지 말고** CONS-3 식 운영 에러로 중단한다: "리뷰어가 0개 실행됨 — codex/agy 가 필요하지만 실행에 실패했습니다. 인증/설치를 확인하세요." (parse·열거 시점의 `N_planned` 가드(§4 CONS-3)와 달리, 본 가드는 preflight 이후 **실제 실행 결과**(`N_actual`) 기준이다.)
 
