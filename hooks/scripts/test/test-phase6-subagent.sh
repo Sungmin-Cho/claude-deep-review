@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test-phase6-subagent.sh — Phase 6 subagent delegation 구조 회귀 검증
-# exit 0 = 11개 체크 모두 PASS, exit 1 = 1건 이상 FAIL.
+# exit 0 = 12개 체크 모두 PASS, exit 1 = 1건 이상 FAIL.
 
 set -u
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -148,6 +148,18 @@ if grep -Eq 'Read\(\{[[:space:]]*file_path:[[:space:]]*"[^"]*respond-execution\.
   pass 11 "deep-review-loop uses Read(...respond-execution.md) and no longer inlines command --respond section"
 else
   fail 11 "deep-review-loop rewiring incomplete (missing Read() call or stale '## Steps (대응 모드' dependency)"
+fi
+
+# 12. phase6-protocol.yml paths 가 skills/deep-review-workflow/** 를 커버 (impl-fix R2)
+# — 이 워크플로우가 실행하는 test-phase6-subagent.sh 는 위 INITSETUP(init-setup.md,
+#   skills/deep-review-workflow/references/)을 읽으므로, 그 파일만 바꾼 PR 에서도 phase6
+#   테스트가 발화하려면 paths 에 해당 prefix 가 있어야 한다(구체 트리거-갭 봉합). 이는
+#   특정 워크플로우 한 곳의 회귀 핀일 뿐, 일반 트리거-커버리지 검증기는 아니다.
+PHASE6WF="$ROOT/.github/workflows/phase6-protocol.yml"
+if grep -qE "^[[:space:]]*-[[:space:]]*'skills/deep-review-workflow/\*\*'" "$PHASE6WF"; then
+  pass 12 "phase6-protocol.yml paths covers skills/deep-review-workflow/** (init-setup.md trigger)"
+else
+  fail 12 "phase6-protocol.yml paths missing skills/deep-review-workflow/** (init-setup.md edits won't trigger phase6 tests)"
 fi
 
 echo "---"

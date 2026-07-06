@@ -15,6 +15,13 @@
 #     제외한다(미호출 script 전용 언급의 false-pass 차단).
 # paths: 필터나 주석에 파일명만 언급된 것은 등록으로 인정하지 않는다(오판 차단).
 #
+# 스코프 한계(impl-fix R2): 본 가드는 **등록**(어느 워크플로우/npm script 가 그 테스트를
+# 실행하는가)만 검증한다. **트리거 경로 커버리지**(그 워크플로우의 `paths:` 필터가, 해당
+# 테스트가 읽는 소스 파일의 변경에 실제로 발화하는가)는 검증하지 않는다 — 후자는 비스코프
+# 이며, 일반 트리거-커버리지 검증기는 의도적으로 구현하지 않는다(스코프 절제). 구체 갭은
+# 각 워크플로우의 paths 설정으로 개별 봉합하고, 해당 워크플로우의 구조 테스트에서 핀한다
+# (예: phase6-protocol.yml paths ↔ test-phase6-subagent.sh check 12).
+#
 # 제외: test-helpers.sh(sourced helper, standalone main 없음).
 # ROOT 인자는 fixture 주입용(단위 테스트 test-check-test-ci-enrollment.sh).
 set -Eeuo pipefail

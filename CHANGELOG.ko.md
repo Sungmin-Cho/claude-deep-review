@@ -14,7 +14,7 @@ deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Ke
 
 ### 내부
 
-- **CI 테스트 열거 드리프트 가드 (#2)** — orphan 이던 `test-extract-anchor.sh` 를 `tests.yml` 에 등록하고, `hooks/scripts/test/test-*.sh` 중 어느 워크플로우 `run:` 스텝/`npm test` 에도 호출되지 않은 테스트를 실패시키는 CI 게이트 `scripts/check-test-ci-enrollment.sh`(+단위 테스트)를 추가. 가드가 다른 워크플로우 편집에서도 트리거되도록 `tests.yml` `pull_request.paths` 를 `.github/workflows/**` 로 확장. 열거 코퍼스는 이제 워크플로우 `run:` 스텝에서 실제 도달하는 package.json script(`npm test`→`scripts.test`, `npm run <name>`→`scripts.<name>`) 값만 인정 — 어느 run: 도 호출하지 않는 script(예: `test:all`/`test:local`)에만 언급된 테스트는 더 이상 false-pass 로 통과하지 못한다.
+- **CI 테스트 열거 드리프트 가드 (#2)** — orphan 이던 `test-extract-anchor.sh` 를 `tests.yml` 에 등록하고, `hooks/scripts/test/test-*.sh` 중 어느 워크플로우 `run:` 스텝/`npm test` 에도 호출되지 않은 테스트를 실패시키는 CI 게이트 `scripts/check-test-ci-enrollment.sh`(+단위 테스트)를 추가. 가드가 다른 워크플로우 편집에서도 트리거되도록 `tests.yml` `pull_request.paths` 를 `.github/workflows/**` 로 확장. 열거 코퍼스는 이제 워크플로우 `run:` 스텝에서 실제 도달하는 package.json script(`npm test`→`scripts.test`, `npm run <name>`→`scripts.<name>`) 값만 인정 — 어느 run: 도 호출하지 않는 script(예: `test:all`/`test:local`)에만 언급된 테스트는 더 이상 false-pass 로 통과하지 못한다. 별개로, `phase6-protocol.yml` 의 `paths` 필터에 `skills/deep-review-workflow/**` 를 추가해 `init-setup.md`(를 `test-phase6-subagent.sh` 가 읽음)만 바꾼 PR 도 phase6 스위트를 발화하게 했다 — 그 테스트의 신규 check 12 로 핀. 열거 가드 헤더에 스코프 한계를 명문화: 본 가드는 *등록*(어느 워크플로우가 테스트를 실행하는가)만 검증하며 *트리거 경로 커버리지*(테스트가 읽는 소스 변경에 그 워크플로우가 발화하는가)는 검증하지 않고, 일반 트리거-커버리지 검증기는 의도적으로 비스코프.
 - **`.gitignore` 강화** — `.claude/` 런타임 상태(hook 입출력 + 센서 캐시)를 제외해, dogfooding 중 `git add -A` 한 번으로 세션 전사가 공개 소스 저장소에 유출되지 않도록 함.
 
 ## [1.12.2] — 2026-06-23
