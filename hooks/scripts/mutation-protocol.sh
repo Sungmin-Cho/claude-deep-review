@@ -227,10 +227,21 @@ with open(".deep-review/.pending-mutation.json") as f:
     fi
   done
 
-  # Remove from index (NUL-separated paths)
+  # Remove from index (NUL-separated paths). Capture the pipeline status explicitly:
+  # `--ignore-unmatch` makes unmatched paths exit 0, but a genuine `git rm` error
+  # (corrupt index, permission, etc.) still returns non-zero. Under an errexit caller,
+  # a bare failing pipeline would abort restore_mutation BEFORE the residual check /
+  # lock release / return below, leaving the lock+state half-recovered. The `if !`
+  # condition disables errexit for the pipeline; on genuine failure we preserve state,
+  # release the lock, and return non-zero — joining the same escalation path as a
+  # surviving-residual failure below.
   if [ "${#restore_list[@]}" -gt 0 ]; then
-    printf '%s\0' "${restore_list[@]}" \
-      | xargs -0 git rm --cached --force --ignore-unmatch --
+    if ! printf '%s\0' "${restore_list[@]}" \
+         | xargs -0 git rm --cached --force --ignore-unmatch --; then
+      echo "⚠️ restore_mutation: git rm failed — preserving state, releasing lock, escalating." >&2
+      release_mutation_lock
+      return 1
+    fi
   fi
 
   # Post-condition (#1, A안): `git rm --ignore-unmatch` 는 항상 exit 0 이라 성공을

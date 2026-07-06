@@ -522,4 +522,47 @@ export PATH="$OLDPATH"; rm -rf "$shim"   # 명시 복원(실 git 로 정리)
 restore_mutation >/dev/null 2>&1 || true # 실 git 로 잔여 i-t-a/state 정리
 teardown_test_repo
 
+echo "=== #R4-2: git rm genuine failure under errexit — state preserved + lock released + non-zero ==="
+#
+# restore_mutation 의 `git rm` 파이프라인이 실 git 오류(≠ --ignore-unmatch, 즉 non-zero)
+# 로 실패할 때, errexit 호출자 아래서 함수가 잔존검사·lock 해제·return 전에 중단되면
+# lock/state 가 half-recovered 로 남는다. errexit 활성 호출을 서브셸(`( set -e; … )`)로
+# 재현한다 — 버그 버전은 pipeline 에서 abort → LOCK_DIR 잔존(lock held). fixed 는 실패를
+# 명시 캡처해 state 보존 + lock 해제 + non-zero 반환한다. (Test 29 의 exit-0 no-op shim
+# 과 달리 여기서는 `git rm` 만 non-zero(128) 로 실패시키고 나머지는 실 git 위임.)
+
+# Test 30 (#R4-2): errexit 하 git rm 실패 → half-recovery 금지
+repo=$(setup_test_repo); cd "$repo"; mkdir -p .deep-review
+echo "g2" > g2.md
+perform_mutation g2.md          # lock 소유(_MUTATION_LOCK_OWNED=1) + state + i-t-a
+REAL_GIT="$(command -v git)"
+shim="$(mktemp -d "${TMPDIR:-/tmp}/deep-review-gitshim.XXXXXX")"
+cat > "$shim/git" <<EOF
+#!/usr/bin/env bash
+# git rm 만 실 오류(exit 1)로 실패시킨다 — 1-125 범위라 xargs 가 123 으로 전파(파이프라인
+# non-zero). 128 등 범위 밖은 xargs 가 삼켜 no-op(→ 기존 residual 경로로 흡수)이 되므로
+# pipeline-failure 경로를 검증하려면 반드시 1-125 코드를 써야 한다.
+[ "\$1" = "rm" ] && exit 1
+exec "$REAL_GIT" "\$@"
+EOF
+chmod +x "$shim/git"
+OLDPATH="$PATH"; export PATH="$shim:$PATH"
+# errexit 활성 호출을 bare 서브셸로 재현한다. 주의: 서브셸을 `if`/`&&`/`||` 조건에 넣으면
+# bash 가 errexit-suppressed 컨텍스트를 서브셸로 전파해 내부 `set -e` 가 무효화된다 →
+# 버그가 재현되지 않는다. 따라서 부모 errexit 를 `set +e` 로 잠시 끄고(비영 서브셸이
+# 부모를 죽이지 않도록) bare 로 실행 후 rc 캡처, `set -e` 로 복원한다. 버그 버전은 git rm
+# 파이프라인(exit 1 → xargs 123)에서 abort → LOCK_DIR 잔존(lock held). fixed 는 실패를
+# 명시 캡처해 state 보존 + lock 해제 + non-zero 반환.
+set +e
+( set -e; restore_mutation ) >/dev/null 2>&1
+rc=$?
+set -e
+export PATH="$OLDPATH"; rm -rf "$shim"
+assert_success "[ $rc -ne 0 ]" "#R4-2: restore_mutation returns non-zero on git rm failure"
+assert_success "[ -f .deep-review/.pending-mutation.json ]" "#R4-2: state preserved on git rm failure"
+assert_success "[ ! -d .deep-review/.mutation.lock ]" "#R4-2: lock released (not half-recovered) on git rm failure"
+release_mutation_lock >/dev/null 2>&1 || true  # 방어적 잔여 정리
+restore_mutation >/dev/null 2>&1 || true       # 실 git 로 잔여 i-t-a/state 정리
+teardown_test_repo
+
 test_summary
