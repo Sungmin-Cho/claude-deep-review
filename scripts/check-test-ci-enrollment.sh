@@ -7,9 +7,12 @@
 # 조용히 빠진다(실례: test-extract-anchor.sh). glob 러너(npm run test:all) 전면
 # 전환은 phase6 PyYAML 이중 실행 얽힘으로 기각 → 경량 meta-check 로 재발을 원천 차단.
 #
-# 등록 판정(plan-R1 드리프트 강화): "실행 라인의 호출 패턴"만 인정한다.
+# 등록 판정(plan-R1 드리프트 강화 + impl-fix R1): "실행 라인의 호출 패턴"만 인정한다.
 #   - 워크플로우: run: 스텝 라인(`- run:` 결합형 포함)의 `(bash|sh) …<name>` 호출.
-#   - package.json: "scripts" 값 안의 `(bash|sh) …<name>` 호출(npm test 편입 케이스).
+#   - package.json: run: 스텝에서 실제 호출되는 npm script(`npm test`→scripts.test,
+#     `npm run <name>`→scripts.<name>) 값 안의 `(bash|sh) …<name>` 호출만. 어느 run:
+#     스텝도 호출하지 않는 script(예: test:all/test:local) 값은 도달 불가 → 코퍼스에서
+#     제외한다(미호출 script 전용 언급의 false-pass 차단).
 # paths: 필터나 주석에 파일명만 언급된 것은 등록으로 인정하지 않는다(오판 차단).
 #
 # 제외: test-helpers.sh(sourced helper, standalone main 없음).
@@ -21,18 +24,36 @@ TEST_DIR="$ROOT/hooks/scripts/test"
 WF_DIR="$ROOT/.github/workflows"
 PKG="$ROOT/package.json"
 
-# 실행 코퍼스 = 워크플로우 run: 스텝 라인 + package.json scripts 값.
-corpus="$(
+# 워크플로우 run: 스텝 라인 (실행 코퍼스의 1차 소스).
+wf_runs="$(grep -hE '^[[:space:]]*(-[[:space:]]+)?run:' "$WF_DIR"/*.yml 2>/dev/null || true)"
+
+# run: 스텝에서 실제 호출되는 npm script 이름만 해석 → 도달 가능한 scripts 값만 편입.
+#   `npm test`       → test        (npm 기본 alias)
+#   `npm run <name>` → <name>
+# 도달 불가한 script(어느 run: 도 호출 안 함) 값은 제외한다(bash 3.2 호환 grep/sed 파싱).
+reachable_names="$(
   {
-    grep -hE '^[[:space:]]*(-[[:space:]]+)?run:' "$WF_DIR"/*.yml 2>/dev/null || true
-    python3 -c 'import json, sys
-try:
-    for v in json.load(open(sys.argv[1])).get("scripts", {}).values():
-        print(v)
-except Exception:
-    pass' "$PKG" 2>/dev/null || true
-  }
+    printf '%s\n' "$wf_runs" | grep -Eq 'npm[[:space:]]+test([^[:alnum:]:._-]|$)' && printf 'test\n' || true
+    printf '%s\n' "$wf_runs" | grep -oE 'npm[[:space:]]+run[[:space:]]+[A-Za-z0-9:._/-]+' \
+      | sed -E 's/^npm[[:space:]]+run[[:space:]]+//' || true
+  } | sort -u
 )"
+
+# 도달 가능한 script 이름의 값만 출력(이름 목록을 stdin 으로 전달).
+reachable_values="$(
+  printf '%s\n' "$reachable_names" | python3 -c 'import json, sys
+names = {ln.strip() for ln in sys.stdin if ln.strip()}
+try:
+    scripts = json.load(open(sys.argv[1])).get("scripts", {})
+except Exception:
+    scripts = {}
+for name in names:
+    if name in scripts:
+        print(scripts[name])' "$PKG" 2>/dev/null || true
+)"
+
+# 실행 코퍼스 = 워크플로우 run: 스텝 라인 + run: 에서 도달 가능한 npm scripts 값.
+corpus="$(printf '%s\n%s\n' "$wf_runs" "$reachable_values")"
 
 missing=()
 for t in "$TEST_DIR"/test-*.sh; do

@@ -57,4 +57,24 @@ printf '{"scripts":{"test":"node --test && bash hooks/scripts/test/test-delta.sh
 assert_success "bash '$GUARD' '$fx'" "npm test(package.json scripts) 편입은 등록으로 인정"
 rm -rf "$fx"
 
+# fixture 6 (impl-fix R1): 미호출 script(test:local)에만 언급 → 등록 아님 → fail.
+#   워크플로우는 `npm test` 만 호출하고 `npm run test:local` 은 없다 → test:local 값은
+#   어느 run: 스텝에서도 도달 불가 → 코퍼스 제외(false-pass 차단).
+fx=$(mktemp -d "${TMPDIR:-/tmp}/ci-enroll.XXXXXX")
+mkdir -p "$fx/hooks/scripts/test" "$fx/.github/workflows"
+: > "$fx/hooks/scripts/test/test-epsilon.sh"
+printf '      - run: npm test\n' > "$fx/.github/workflows/tests.yml"
+printf '{"scripts":{"test":"node --test","test:local":"bash hooks/scripts/test/test-epsilon.sh"}}\n' > "$fx/package.json"
+assert_failure "bash '$GUARD' '$fx'" "미호출 script(test:local) 전용 언급은 등록 아님(도달 불가 제외)"
+rm -rf "$fx"
+
+# fixture 7 (impl-fix R1): run: 스텝이 `npm run test:local` 을 실제 호출 → 그 값은 도달 가능 → pass.
+fx=$(mktemp -d "${TMPDIR:-/tmp}/ci-enroll.XXXXXX")
+mkdir -p "$fx/hooks/scripts/test" "$fx/.github/workflows"
+: > "$fx/hooks/scripts/test/test-zeta.sh"
+printf '      - run: npm run test:local\n' > "$fx/.github/workflows/tests.yml"
+printf '{"scripts":{"test":"noop","test:local":"bash hooks/scripts/test/test-zeta.sh"}}\n' > "$fx/package.json"
+assert_success "bash '$GUARD' '$fx'" "run 스텝이 npm run test:local 호출 시 그 값은 도달 가능(등록 인정)"
+rm -rf "$fx"
+
 test_summary

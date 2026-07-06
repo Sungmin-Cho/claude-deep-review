@@ -14,7 +14,7 @@ All notable changes to deep-review are documented here. Follows [Keep a Changelo
 
 ### Internal
 
-- **CI test-enrollment drift guard (#2)** — enrolled the previously orphaned `test-extract-anchor.sh` in `tests.yml`, and added `scripts/check-test-ci-enrollment.sh` (+ unit test) as a CI gate that fails when any `hooks/scripts/test/test-*.sh` is not invoked by a workflow `run:` step or `npm test`. `tests.yml` `pull_request.paths` widened to `.github/workflows/**` so the guard also triggers on other workflow edits.
+- **CI test-enrollment drift guard (#2)** — enrolled the previously orphaned `test-extract-anchor.sh` in `tests.yml`, and added `scripts/check-test-ci-enrollment.sh` (+ unit test) as a CI gate that fails when any `hooks/scripts/test/test-*.sh` is not invoked by a workflow `run:` step or `npm test`. `tests.yml` `pull_request.paths` widened to `.github/workflows/**` so the guard also triggers on other workflow edits. The enrollment corpus now counts only package.json scripts actually reached from a workflow `run:` step (`npm test` → `scripts.test`, `npm run <name>` → `scripts.<name>`), so a test mentioned solely in an unreachable script (e.g. `test:all` / `test:local`) is no longer a false-pass.
 - **`.gitignore` hardening** — ignore `.claude/` runtime state (hook I/O + sensor cache) so a dogfooding `git add -A` cannot leak a session transcript into the public source repo.
 
 ## [1.12.2] — 2026-06-23

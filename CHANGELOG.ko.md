@@ -14,7 +14,7 @@ deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Ke
 
 ### 내부
 
-- **CI 테스트 열거 드리프트 가드 (#2)** — orphan 이던 `test-extract-anchor.sh` 를 `tests.yml` 에 등록하고, `hooks/scripts/test/test-*.sh` 중 어느 워크플로우 `run:` 스텝/`npm test` 에도 호출되지 않은 테스트를 실패시키는 CI 게이트 `scripts/check-test-ci-enrollment.sh`(+단위 테스트)를 추가. 가드가 다른 워크플로우 편집에서도 트리거되도록 `tests.yml` `pull_request.paths` 를 `.github/workflows/**` 로 확장.
+- **CI 테스트 열거 드리프트 가드 (#2)** — orphan 이던 `test-extract-anchor.sh` 를 `tests.yml` 에 등록하고, `hooks/scripts/test/test-*.sh` 중 어느 워크플로우 `run:` 스텝/`npm test` 에도 호출되지 않은 테스트를 실패시키는 CI 게이트 `scripts/check-test-ci-enrollment.sh`(+단위 테스트)를 추가. 가드가 다른 워크플로우 편집에서도 트리거되도록 `tests.yml` `pull_request.paths` 를 `.github/workflows/**` 로 확장. 열거 코퍼스는 이제 워크플로우 `run:` 스텝에서 실제 도달하는 package.json script(`npm test`→`scripts.test`, `npm run <name>`→`scripts.<name>`) 값만 인정 — 어느 run: 도 호출하지 않는 script(예: `test:all`/`test:local`)에만 언급된 테스트는 더 이상 false-pass 로 통과하지 못한다.
 - **`.gitignore` 강화** — `.claude/` 런타임 상태(hook 입출력 + 센서 캐시)를 제외해, dogfooding 중 `git add -A` 한 번으로 세션 전사가 공개 소스 저장소에 유출되지 않도록 함.
 
 ## [1.12.2] — 2026-06-23
