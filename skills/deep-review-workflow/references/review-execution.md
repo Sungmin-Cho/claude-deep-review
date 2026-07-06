@@ -873,11 +873,12 @@ AGY_EXCLUDE_FROM_SYNTHESIS=0
 
 (1/1 을 🔴 REQUEST_CHANGES 로 올리지 않는다 — unreplicated single-model 의견의 과대평가 회피, `codex-integration.md` §N-way 합성 표(N=1 행)와 정합. 위 "단독 지적 → 참고" 는 **N_actual ≥ 2** 전용이므로 N=1 에서는 이 전용 분기가 지배한다. 기존 N=3/2 fallback 행은 `codex-integration.md` §N-way 합성 표를 SSOT 로 참조.)
 
-2. Verdict 결정:
+2. Verdict 결정 (아래 규칙은 **N_actual ≥ 2** 전제 — N=1 은 위 N_actual == 1 전용 분기가 최종):
    - 🔴 1건 이상 → **REQUEST_CHANGES**
-   - 🟡만, 전원 일치 → **REQUEST_CHANGES**
+   - 🟡만, 전원 일치 (N_actual ≥ 2) → **REQUEST_CHANGES**
    - 🟡만, 의견 분리 → **CONCERN**
    - 🟢만 → **APPROVE**
+   - **N_actual == 1 예외**: 위 "🟡만, 전원 일치" 규칙 부적용 — N=1 이면 위 **N_actual == 1 전용 분기가 최종(final)**이다(단독 리뷰어에서 1건은 "전원 일치"가 자명하므로, N≥2 게이트 없이 적용하면 N=1 의 🟡 CONCERN 이 REQUEST_CHANGES 로 무력화된다). 🟡 → CONCERN, 🟢 → APPROVE 로 확정한다.
 
 ### Stage 4.3.1: opus 실패 시 auto-degradation (no AskUserQuestion at synthesis)
 

@@ -25,5 +25,12 @@ assert_success "grep -qF 'APPROVE' '$CODEX'" "codex-integration N=1 0/1 APPROVE 
 #     'claude_reviewer != none AND opus_status' 시퀀스로 실제 degraded 가드를 고정한다.
 assert_success "grep -qF 'claude_reviewer != none AND opus_status' '$REVEXEC'" "review-execution degraded 가드가 none 제외"
 assert_success "grep -qF 'claude_reviewer != none AND opus_status' '$RPT'" "report-format degraded 가드가 none 제외"
+# (e) verdict-decision 블록의 unanimous-yellow 규칙이 N≥2 게이트를 명시 —
+#     N=1(1건 = 전원 일치가 자명)에서 REQUEST_CHANGES 로 N=1 CONCERN 이 무력화되지 않게 고정.
+assert_success "grep -qF '전원 일치 (N_actual ≥ 2)' '$REVEXEC'" "review-execution unanimous-yellow 가 N≥2 게이트"
+assert_success "grep -qF '전원 일치 (N_actual ≥ 2)' '$RPT'" "report-format unanimous-yellow 가 N≥2 게이트"
+# (f) N=1 예외가 verdict-decision 레벨에 명시(N=1 전용 분기가 최종)
+assert_success "grep -qF 'N_actual == 1 예외' '$REVEXEC'" "review-execution 이 N=1 예외를 verdict 규칙에 명시"
+assert_success "grep -qF 'N_actual == 1 예외' '$RPT'" "report-format 이 N=1 예외를 명시"
 
 test_summary
