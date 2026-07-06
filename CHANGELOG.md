@@ -4,6 +4,19 @@
 
 All notable changes to deep-review are documented here. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.3] — 2026-07-07
+
+### Fixed
+
+- **N=1 verdict rule inlined into the Stage-4 synthesis SSOT (#3)** — the Stage-4 execution block in `review-execution.md` §5.1 now carries the `N_actual == 1` branch inline (`1건 이상 → 🟡 CONCERN + "단일 리뷰어" 표기 / 0건 → 🟢 APPROVE + 표기`) and gates the "단독 지적 → 참고" demotion to `N_actual ≥ 2` only. Previously a 1-way review (e.g. `--codex-only`) read literally could demote every finding to info and emit a hollow APPROVE, contradicting the correct N=1 row that already lived in `codex-integration.md`. `codex-integration.md` now carries an SSOT-alignment note so the two files stay in lockstep. N≥2 (2/3/4-way) mappings and the verdict-decision rule are unchanged.
+- **codex-only excluded from the opus-degraded guard (#3-derived)** — the Stage 4.3.1 degraded marker (`review-execution.md` §4.3.1 and `report-format.md`) now reads `claude_reviewer != none AND opus_status != success AND N_actual_external ≤ 1`, so a planned 1-way `--codex-only`/`--no-opus` run (where Opus is never spawned, `opus_status = not_planned`) is no longer force-degraded to CONCERN. Added an `opus_status` domain sentinel note documenting `not_planned`.
+- **`restore_attempts` 3-strikes escalation made reachable (#1)** — `restore_mutation` now re-checks each restored intent-to-add entry after `git rm --cached --ignore-unmatch` (which always exits 0) and, if a protocol-created entry survived, preserves the state file and returns non-zero (lock still released). This lets `auto_recover`'s `restore_attempts` counter accumulate across sessions so the advertised "escalates after 3 failures" path is actually reached instead of being write-only dead. Normal restore paths are unchanged.
+
+### Internal
+
+- **CI test-enrollment drift guard (#2)** — enrolled the previously orphaned `test-extract-anchor.sh` in `tests.yml`, and added `scripts/check-test-ci-enrollment.sh` (+ unit test) as a CI gate that fails when any `hooks/scripts/test/test-*.sh` is not invoked by a workflow `run:` step or `npm test`. `tests.yml` `pull_request.paths` widened to `.github/workflows/**` so the guard also triggers on other workflow edits.
+- **`.gitignore` hardening** — ignore `.claude/` runtime state (hook I/O + sensor cache) so a dogfooding `git add -A` cannot leak a session transcript into the public source repo.
+
 ## [1.12.2] — 2026-06-23
 
 ### Changed

@@ -4,6 +4,19 @@
 
 deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)와 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
+## [1.12.3] — 2026-07-07
+
+### 수정
+
+- **N=1 verdict 규칙을 Stage-4 합성 SSOT 에 인라인화 (#3)** — `review-execution.md` §5.1 실행 블록이 `N_actual == 1` 전용 분기(`1건 이상 → 🟡 CONCERN + "단일 리뷰어" 표기 / 0건 → 🟢 APPROVE + 표기`)를 인라인으로 담고, "단독 지적 → 참고" 강등을 `N_actual ≥ 2` 로 한정. 이전에는 1-way 리뷰(예: `--codex-only`)를 문자 그대로 수행하면 모든 finding 이 참고로 강등돼 공허 APPROVE 가 될 수 있어, `codex-integration.md` 에 이미 있던 올바른 N=1 행과 상충했다. `codex-integration.md` 에 SSOT 정합 주석을 추가해 두 파일이 동일 매핑을 유지. N≥2(2/3/4-way) 매핑과 verdict 결정 규칙은 불변.
+- **codex-only 을 opus-degraded 가드에서 제외 (#3-파생)** — Stage 4.3.1 degraded 마커(`review-execution.md` §4.3.1 및 `report-format.md`)를 `claude_reviewer != none AND opus_status != success AND N_actual_external ≤ 1` 로 정정. 계획된 1-way `--codex-only`/`--no-opus`(Opus 미spawn, `opus_status = not_planned`)가 더 이상 CONCERN 으로 강제 강등되지 않는다. `opus_status` 도메인 sentinel 주석(`not_planned`)을 추가.
+- **`restore_attempts` 3-strikes 에스컬레이션 도달 가능화 (#1)** — `restore_mutation` 이 `git rm --cached --ignore-unmatch`(항상 exit 0) 이후 각 복원 대상 intent-to-add 엔트리를 재검사하고, protocol 이 만든 엔트리가 잔존하면 state 파일을 보존하고 non-zero 를 반환한다(lock 은 해제). 이로써 `auto_recover` 의 `restore_attempts` 카운터가 세션 간 누적되어, 광고된 "3회 이상 실패 시 에스컬레이션" 경로가 write-only dead 가 아니라 실제로 도달 가능해진다. 정상 복원 경로는 불변.
+
+### 내부
+
+- **CI 테스트 열거 드리프트 가드 (#2)** — orphan 이던 `test-extract-anchor.sh` 를 `tests.yml` 에 등록하고, `hooks/scripts/test/test-*.sh` 중 어느 워크플로우 `run:` 스텝/`npm test` 에도 호출되지 않은 테스트를 실패시키는 CI 게이트 `scripts/check-test-ci-enrollment.sh`(+단위 테스트)를 추가. 가드가 다른 워크플로우 편집에서도 트리거되도록 `tests.yml` `pull_request.paths` 를 `.github/workflows/**` 로 확장.
+- **`.gitignore` 강화** — `.claude/` 런타임 상태(hook 입출력 + 센서 캐시)를 제외해, dogfooding 중 `git add -A` 한 번으로 세션 전사가 공개 소스 저장소에 유출되지 않도록 함.
+
 ## [1.12.2] — 2026-06-23
 
 ### 변경
