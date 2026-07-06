@@ -68,3 +68,6 @@ jobs:
 
       - name: payload-ordering
         run: bash hooks/scripts/test/test-payload-ordering.sh
+
+      - name: extract-anchor contract test
+        run: bash hooks/scripts/test/test-extract-anchor.sh
