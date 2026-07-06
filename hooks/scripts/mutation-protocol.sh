@@ -233,6 +233,25 @@ with open(".deep-review/.pending-mutation.json") as f:
       | xargs -0 git rm --cached --force --ignore-unmatch --
   fi
 
+  # Post-condition (#1, A안): `git rm --ignore-unmatch` 는 항상 exit 0 이라 성공을
+  # 반환코드로 알 수 없다. restore_list 의 각 엔트리가 정말 제거됐는지 재검사한다.
+  # 우리 i-t-a 엔트리가 살아남았으면 genuine failure — state 를 보존하고 non-zero 를
+  # 반환한다. auto_recover 는 increment 를 restore 앞에 두므로(:302-315), state 가
+  # 보존되면 다음 호출이 증가된 카운터를 읽어 3-strikes 에스컬레이션(:294)에 비로소
+  # 도달 가능해진다(주석 :245 "escalates after 3 failures" 의 의도가 참이 됨).
+  # lock 은 해제(다음 세션이 막히지 않도록) — state 만 보존한다.
+  local residual=() rf
+  if [ "${#restore_list[@]}" -gt 0 ]; then
+    for rf in "${restore_list[@]}"; do
+      is_our_ita_entry "$rf" && residual+=("$rf")
+    done
+  fi
+  if [ "${#residual[@]}" -gt 0 ]; then
+    echo "⚠️ restore_mutation: ${#residual[@]} intent-to-add entr(y/ies) survived git rm — preserving state for retry/escalation." >&2
+    release_mutation_lock
+    return 1
+  fi
+
   rm -f "$STATE_FILE"
   # CR1: explicit lock release on successful restore
   release_mutation_lock

@@ -473,4 +473,53 @@ done
 assert_failure "git ls-files --error-unmatch --cached ours.md" "M5.5 #5-C: our i-t-a still removed"
 teardown_test_repo
 
+echo ""
+echo "=== #1: genuine restore failure accumulates restore_attempts to 3-strikes ==="
+#
+# restore_mutation 이 실제 복원 실패(우리 i-t-a 가 git rm 후에도 잔존)를 감지하면
+# state 를 보존하고 non-zero 를 반환해야 한다. auto_recover 는 increment 를 restore
+# 앞에 두므로(:302-312 → :315), 실패로 state 가 보존되면 다음 호출이 증가된 카운터를
+# 읽어 3-strikes 에스컬레이션(:294)에 비로소 도달 가능해진다("escalates after 3
+# failures" 주석 :245 / review-execution.md:37 의 의도가 참이 됨).
+# genuine 실패는 PATH git-shim(`git rm` 만 no-op, 나머지는 실 git 위임)으로 재현한다
+# — 기존 Test 10/11/12/14/22/26 의 정상·부분·stale 복원 경로는 불변.
+
+# Test 29 (#1): genuine restore 실패 → state 보존 + restore_attempts 실 흐름 누적
+repo=$(setup_test_repo); cd "$repo"; mkdir -p .deep-review
+echo "g1" > g1.md
+perform_mutation g1.md        # state(status=committed) + i-t-a + lock 생성
+release_mutation_lock         # Test 12 처럼 lock 해제 → auto_recover 가 진행
+# PATH git-shim: `git rm ...` 를 no-op 으로(genuine 복원 실패 시뮬레이션)
+REAL_GIT="$(command -v git)"
+shim="$(mktemp -d "${TMPDIR:-/tmp}/deep-review-gitshim.XXXXXX")"
+cat > "$shim/git" <<EOF
+#!/usr/bin/env bash
+[ "\$1" = "rm" ] && exit 0
+exec "$REAL_GIT" "\$@"
+EOF
+chmod +x "$shim/git"
+OLDPATH="$PATH"; export PATH="$shim:$PATH"
+# 하니스는 set -euo pipefail — 기대-비영 반환을 직접 호출하면 assert 전에 abort.
+# errexit-safe 캡처(if/else) + || true 로 무해화. python 읽기는 || echo MISSING 으로
+# state 부재(현행 코드 RED) 시에도 깨끗한 assertion 실패가 되도록 방어.
+if auto_recover; then rc1=0; else rc1=$?; fi   # attempt1: attempts 0→1, restore 실패, state 보존
+assert_equal "1" "$rc1" "#1: auto_recover non-zero on genuine restore failure"
+assert_success "[ -f .deep-review/.pending-mutation.json ]" "#1: state preserved after genuine failure"
+a=$(python3 -c 'import json;print(json.load(open(".deep-review/.pending-mutation.json"))["restore_attempts"])' 2>/dev/null || echo MISSING)
+assert_equal "1" "$a" "#1: restore_attempts=1 after 1st failure"
+auto_recover >/dev/null 2>&1 || true  # attempt2: →2 (기대-비영, errexit 무해화)
+auto_recover >/dev/null 2>&1 || true  # attempt3: →3
+a=$(python3 -c 'import json;print(json.load(open(".deep-review/.pending-mutation.json"))["restore_attempts"])' 2>/dev/null || echo MISSING)
+assert_equal "3" "$a" "#1: restore_attempts accumulated to 3 via real flow"
+out="$(auto_recover 2>&1 || true)"    # attempt4: attempts>=3 → escalate
+TEST_COUNT=$((TEST_COUNT+1))
+if echo "$out" | grep -q "수동 처리를 권장"; then
+  echo "  ✅ #1: 3-strikes escalation reachable via real flow"
+else
+  echo "  ❌ #1: escalation not reached via real flow"; TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+export PATH="$OLDPATH"; rm -rf "$shim"   # 명시 복원(실 git 로 정리)
+restore_mutation >/dev/null 2>&1 || true # 실 git 로 잔여 i-t-a/state 정리
+teardown_test_repo
+
 test_summary
