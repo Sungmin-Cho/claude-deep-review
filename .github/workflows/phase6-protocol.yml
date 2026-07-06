@@ -8,6 +8,7 @@ on:
       - 'agents/phase6-implementer.md'
       - 'commands/deep-review.md'
       - 'skills/receiving-review/**'
+      - 'skills/deep-review-workflow/**'
       - 'hooks/scripts/test/test-phase6-*.sh'
       - '.github/workflows/phase6-protocol.yml'
 

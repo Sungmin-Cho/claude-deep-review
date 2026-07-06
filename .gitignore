@@ -20,5 +20,11 @@
 .deep-review/
 docs/
 
+# Claude Code 런타임 상태(hook 입출력·센서 캐시). dogfooding 중 hook 이
+# `.claude/.hook-tool-input.<pid>`(session_id·transcript_path·permission_mode 등
+# 개인 경로 포함 가능)·`.claude/.sensor-detection-cache.json` 를 생성하므로,
+# `git add -A` 한 번으로 세션 전사가 공개 저장소에 유출되지 않도록 전체를 제외합니다.
+.claude/
+
 # 운영체제
 .DS_Store

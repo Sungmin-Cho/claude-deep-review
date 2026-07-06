@@ -227,10 +227,40 @@ with open(".deep-review/.pending-mutation.json") as f:
     fi
   done
 
-  # Remove from index (NUL-separated paths)
+  # Remove from index (NUL-separated paths). Capture the pipeline status explicitly:
+  # `--ignore-unmatch` makes unmatched paths exit 0, but a genuine `git rm` error
+  # (corrupt index, permission, etc.) still returns non-zero. Under an errexit caller,
+  # a bare failing pipeline would abort restore_mutation BEFORE the residual check /
+  # lock release / return below, leaving the lock+state half-recovered. The `if !`
+  # condition disables errexit for the pipeline; on genuine failure we preserve state,
+  # release the lock, and return non-zero — joining the same escalation path as a
+  # surviving-residual failure below.
   if [ "${#restore_list[@]}" -gt 0 ]; then
-    printf '%s\0' "${restore_list[@]}" \
-      | xargs -0 git rm --cached --force --ignore-unmatch --
+    if ! printf '%s\0' "${restore_list[@]}" \
+         | xargs -0 git rm --cached --force --ignore-unmatch --; then
+      echo "⚠️ restore_mutation: git rm failed — preserving state, releasing lock, escalating." >&2
+      release_mutation_lock
+      return 1
+    fi
+  fi
+
+  # Post-condition (#1, A안): `git rm --ignore-unmatch` 는 항상 exit 0 이라 성공을
+  # 반환코드로 알 수 없다. restore_list 의 각 엔트리가 정말 제거됐는지 재검사한다.
+  # 우리 i-t-a 엔트리가 살아남았으면 genuine failure — state 를 보존하고 non-zero 를
+  # 반환한다. auto_recover 는 increment 를 restore 앞에 두므로(:302-315), state 가
+  # 보존되면 다음 호출이 증가된 카운터를 읽어 3-strikes 에스컬레이션(:294)에 비로소
+  # 도달 가능해진다(주석 :245 "escalates after 3 failures" 의 의도가 참이 됨).
+  # lock 은 해제(다음 세션이 막히지 않도록) — state 만 보존한다.
+  local residual=() rf
+  if [ "${#restore_list[@]}" -gt 0 ]; then
+    for rf in "${restore_list[@]}"; do
+      is_our_ita_entry "$rf" && residual+=("$rf")
+    done
+  fi
+  if [ "${#residual[@]}" -gt 0 ]; then
+    echo "⚠️ restore_mutation: ${#residual[@]} intent-to-add entr(y/ies) survived git rm — preserving state for retry/escalation." >&2
+    release_mutation_lock
+    return 1
   fi
 
   rm -f "$STATE_FILE"

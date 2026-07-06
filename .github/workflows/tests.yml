@@ -15,7 +15,7 @@ on:
       - 'tests/**'
       - 'scripts/**'
       - 'package.json'
-      - '.github/workflows/tests.yml'
+      - '.github/workflows/**'
 
 permissions:
   contents: read
@@ -68,3 +68,15 @@ jobs:
 
       - name: payload-ordering
         run: bash hooks/scripts/test/test-payload-ordering.sh
+
+      - name: extract-anchor contract test
+        run: bash hooks/scripts/test/test-extract-anchor.sh
+
+      - name: test CI-enrollment drift guard
+        run: bash scripts/check-test-ci-enrollment.sh
+
+      - name: CI-enrollment guard unit test
+        run: bash hooks/scripts/test/test-check-test-ci-enrollment.sh
+
+      - name: verdict-synthesis SSOT structural test
+        run: bash hooks/scripts/test/test-verdict-synthesis-ssot.sh
