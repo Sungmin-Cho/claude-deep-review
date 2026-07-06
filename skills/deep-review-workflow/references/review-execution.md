@@ -867,18 +867,19 @@ AGY_EXCLUDE_FROM_SYNTHESIS=0
 
 기존 N=3, 2, 1 fallback 행은 그대로 유지 (3-way 이하).
 
-**N_actual == 1 (1-way) 전용 분기** — 단독 리뷰어이므로 코로보레이션(다수 교차 확인) 개념 부재:
-- 1건 이상 지적 → 🟡 CONCERN + Summary 에 "단일 리뷰어(single-reviewer)" 주의 표기
+**N_actual == 1 (1-way) 전용 분기** — 단독 리뷰어이므로 코로보레이션(다수 교차 확인) 개념 부재. 단, finding 의 severity 자체는 단일 리뷰어라도 유효하다:
+- 🔴 1건 이상 → **REQUEST_CHANGES** + Summary 에 "단일 리뷰어(single-reviewer)" 주의 표기 (critical/security 는 단독이라도 blocking)
+- 🟡만 (🔴 0건) → 🟡 CONCERN + Summary 에 "단일 리뷰어(single-reviewer)" 주의 표기
 - 0건 (전원 통과) → 🟢 APPROVE + "단일 리뷰어" 표기
 
-(1/1 을 🔴 REQUEST_CHANGES 로 올리지 않는다 — unreplicated single-model 의견의 과대평가 회피, `codex-integration.md` §N-way 합성 표(N=1 행)와 정합. 위 "단독 지적 → 참고" 는 **N_actual ≥ 2** 전용이므로 N=1 에서는 이 전용 분기가 지배한다. 기존 N=3/2 fallback 행은 `codex-integration.md` §N-way 합성 표를 SSOT 로 참조.)
+(🟡 단독 지적을 REQUEST_CHANGES 로 **승격하지 않는다** — unreplicated single-model 의 🟡 의견 과대평가 회피. 그러나 **🔴(critical/security) 은 severity 자체가 blocking** 이므로 단일 리뷰어라도 REQUEST_CHANGES 를 유지한다 — 이는 일반 "🔴 1건 이상 → REQUEST_CHANGES" 규칙 및 `review-criteria.md` severity 원칙과 정합이며, 1-way 리뷰에서 critical 을 non-blocking 으로 흘리지 않기 위함. `codex-integration.md` §N-way 합성 표(N=1 행)와 **동일 매핑**. 위 "단독 지적 → 참고" 는 **N_actual ≥ 2** 전용이므로 N=1 에서는 이 전용 분기가 지배한다. 기존 N=3/2 fallback 행은 `codex-integration.md` §N-way 합성 표를 SSOT 로 참조.)
 
 2. Verdict 결정 (아래 규칙은 **N_actual ≥ 2** 전제 — N=1 은 위 N_actual == 1 전용 분기가 최종):
    - 🔴 1건 이상 → **REQUEST_CHANGES**
    - 🟡만, 전원 일치 (N_actual ≥ 2) → **REQUEST_CHANGES**
    - 🟡만, 의견 분리 → **CONCERN**
    - 🟢만 → **APPROVE**
-   - **N_actual == 1 예외**: 위 "🟡만, 전원 일치" 규칙 부적용 — N=1 이면 위 **N_actual == 1 전용 분기가 최종(final)**이다(단독 리뷰어에서 1건은 "전원 일치"가 자명하므로, N≥2 게이트 없이 적용하면 N=1 의 🟡 CONCERN 이 REQUEST_CHANGES 로 무력화된다). 🟡 → CONCERN, 🟢 → APPROVE 로 확정한다.
+   - **N_actual == 1 예외**: 위 "🟡만, 전원 일치" 규칙 부적용 — N=1 이면 위 **N_actual == 1 전용 분기가 최종(final)**이다(단독 리뷰어에서 🟡 1건은 "전원 일치"가 자명하므로, N≥2 게이트 없이 적용하면 N=1 의 🟡 CONCERN 이 REQUEST_CHANGES 로 무력화된다). 🔴 1건 이상 → REQUEST_CHANGES(critical/security 는 단독이라도 blocking), 🟡만 → CONCERN, 🟢 → APPROVE 로 확정한다.
 
 ### Stage 4.3.1: opus 실패 시 auto-degradation (no AskUserQuestion at synthesis)
 

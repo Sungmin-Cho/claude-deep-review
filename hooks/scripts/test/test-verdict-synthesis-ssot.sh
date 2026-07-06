@@ -32,5 +32,10 @@ assert_success "grep -qF '전원 일치 (N_actual ≥ 2)' '$RPT'" "report-format
 # (f) N=1 예외가 verdict-decision 레벨에 명시(N=1 전용 분기가 최종)
 assert_success "grep -qF 'N_actual == 1 예외' '$REVEXEC'" "review-execution 이 N=1 예외를 verdict 규칙에 명시"
 assert_success "grep -qF 'N_actual == 1 예외' '$RPT'" "report-format 이 N=1 예외를 명시"
+# (g) N=1 전용 분기가 🔴(critical/security)은 단독이라도 REQUEST_CHANGES 로 유지(non-blocking 회피) — R2 fix.
+#     세 문서(review-execution / report-format / codex-integration SSOT)가 동일 결론.
+assert_success "grep -qF 'critical/security 는 단독이라도 blocking' '$REVEXEC'" "review-execution N=1 critical 이 blocking 유지"
+assert_success "grep -qF 'critical/security 단독 blocking' '$RPT'" "report-format N=1 critical 이 blocking 유지"
+assert_success "grep -qF '1/1 지적 (🔴 critical/security)' '$CODEX'" "codex-integration N=1 표에 🔴 REQUEST_CHANGES 행"
 
 test_summary

@@ -49,7 +49,7 @@
 - 🟡만 있고 전원 일치 (N_actual ≥ 2) → REQUEST_CHANGES
 - 🟡만 있고 의견 분리 → CONCERN (사람에게 에스컬레이션)
 - 🟢만 → APPROVE
-- **N_actual == 1 예외**: "🟡만 있고 전원 일치" 규칙 부적용 — N=1 이면 단독 리뷰어 전용 분기(🟡 → CONCERN / 🟢 → APPROVE)가 최종(final)이다(1건 = 전원 일치가 자명하므로 게이트 없이 두면 REQUEST_CHANGES 로 무력화). 전용 분기 정의의 SSOT 는 [`review-execution.md`](./review-execution.md) §5.1 N_actual == 1 전용 분기.
+- **N_actual == 1 예외**: "🟡만 있고 전원 일치" 규칙 부적용 — N=1 이면 단독 리뷰어 전용 분기(🔴 1건 이상 → REQUEST_CHANGES(critical/security 단독 blocking) / 🟡만 → CONCERN / 🟢 → APPROVE)가 최종(final)이다(🟡 1건 = 전원 일치가 자명하므로 게이트 없이 두면 REQUEST_CHANGES 로 무력화되고, 🔴 은 severity 자체가 blocking 이라 단독이라도 REQUEST_CHANGES 유지). 전용 분기 정의의 SSOT 는 [`review-execution.md`](./review-execution.md) §5.1 N_actual == 1 전용 분기.
 - 🔴/🟡 판정은 `review-criteria.md`의 "severity 부여 원칙"(영향×도달 가능성, 보수적 기본값)을 따른다.
 
 ### Per-finding annotations (4-way mode)
