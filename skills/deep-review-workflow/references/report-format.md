@@ -62,10 +62,13 @@ This preserves cross-vendor-family signal even when the majority threshold (3/4)
 
 ### Degraded mode marker
 
-When `claude_reviewer != none AND opus_status != success AND N_actual_external ≤ 1`, the Summary records:
+When `claude_reviewer != none AND opus_status != success AND N_actual_external ≤ 1`, the guard applies a **confidence floor** — it never overwrites a blocking verdict:
+
+- 🔴/critical finding present → **REQUEST_CHANGES preserved** (degraded marker attached, not downgraded — a low-confidence run does not fail-open a blocking finding).
+- APPROVE → **raised to CONCERN** (low-confidence approval prevented).
+- already CONCERN → unchanged.
 
 ```
-Verdict: CONCERN
 Summary.degraded: opus_failed_low_confidence
 ```
 

@@ -886,11 +886,14 @@ AGY_EXCLUDE_FROM_SYNTHESIS=0
 
 `claude_reviewer != none AND opus_status != success AND N_actual_external ≤ 1` (= Opus 가 계획됐으나 실패 + 외부 reviewer 1개 이하 성공) 시:
 
-1. **합성과 리포트 저장은 항상 진행** (Verdict 강등하더라도 결과 보존).
-2. **Verdict 를 `CONCERN` 으로 강제** (APPROVE 또는 REQUEST_CHANGES 금지).
+1. **합성과 리포트 저장은 항상 진행** (Verdict 조정하더라도 결과 보존).
+2. **Verdict floor 적용 (덮어쓰기 아님)** — degraded 는 **신뢰도 floor 마커**이며 **blocking verdict 를 덮지 않는다**:
+   - 🔴/critical finding 이 1건 이상 → **REQUEST_CHANGES 보존** (degraded 마커만 병기, 강등 금지). Opus 타임아웃이라도 Codex/agy 가 찾은 critical 은 blocking — 저신뢰라고 fail-open 하지 않는다.
+   - APPROVE → **CONCERN 으로 상향만** 수행 (저신뢰 승인 방지).
+   - 이미 CONCERN → 유지.
 3. **Summary 어노테이션**: `degraded: opus_failed_low_confidence` + 실행된 reviewer 목록.
 4. **`last_review` 평소처럼 update**.
-5. **사후 chat 메시지**: "⚠️ Verdict downgraded to CONCERN — Opus failed and only {N} external reviewer(s) responded. Treat findings as advisory."
+5. **사후 chat 메시지**: REQUEST_CHANGES 보존 시 "⚠️ Low-confidence run (Opus failed, ≤1 external reviewer) — verdict kept at REQUEST_CHANGES on blocking findings; treat as advisory." / APPROVE→CONCERN 상향 시 "⚠️ Verdict raised APPROVE→CONCERN — Opus failed and only {N} external reviewer(s) responded. Treat findings as advisory."
 
 이는 deterministic — synthesis 단계에서 AskUserQuestion 없음. (R5 C-R5 / R7 §4.3.1 fix — async run_in_background 패러다임과 충돌 회피.)
 

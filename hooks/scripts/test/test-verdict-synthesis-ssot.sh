@@ -40,5 +40,10 @@ assert_success "grep -qF 'N_actual == 1 예외' '$RPT'" "report-format 이 N=1 �
 assert_success "grep -qF 'critical/security 는 단독이라도 blocking' '$REVEXEC'" "review-execution N=1 critical 이 blocking 유지"
 assert_success "grep -qF 'critical/security 단독 blocking' '$RPT'" "report-format N=1 critical 이 blocking 유지"
 assert_success "grep -qF '1/1 지적 (🔴 critical/security)' '$CODEX'" "codex-integration N=1 표에 🔴 REQUEST_CHANGES 행"
+# (h) degraded 가드가 blocking verdict(RC)를 덮지 않고 신뢰도 floor 로만 동작 — R4 fix.
+#     🔴/critical 존재 시 REQUEST_CHANGES 보존, APPROVE→CONCERN 상향만(fail-open 회피).
+assert_success "grep -qF 'blocking verdict 를 덮지 않는다' '$REVEXEC'" "review-execution degraded 가 RC 를 덮지 않음(floor)"
+assert_success "grep -qF 'REQUEST_CHANGES 보존' '$REVEXEC'" "review-execution degraded 가 critical 시 RC 보존"
+assert_success "grep -qF 'REQUEST_CHANGES preserved' '$RPT'" "report-format degraded 가 critical 시 RC 보존"
 
 test_summary
