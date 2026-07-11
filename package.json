@@ -7,6 +7,9 @@
   },
   "license": "MIT",
   "category": "Productivity",
+  "engines": {
+    "node": ">=22"
+  },
   "keywords": [
     "code-review",
     "evaluator",
@@ -14,7 +17,7 @@
     "quality"
   ],
   "scripts": {
-    "test": "node --test tests/envelope-emit.test.js tests/envelope-chain.test.js && bash hooks/scripts/test/test-codex-claude-reviewer.sh",
-    "test:all": "bash scripts/run-all-tests.sh"
+    "test": "node --test",
+    "test:legacy": "bash scripts/run-all-tests.sh"
   }
 }

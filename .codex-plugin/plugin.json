@@ -14,7 +14,6 @@
     "quality"
   ],
   "skills": "./skills/",
-  "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "Deep Review",
     "shortDescription": "Independent code review workflow",
