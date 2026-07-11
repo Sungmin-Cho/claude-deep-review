@@ -189,6 +189,35 @@ test('process runner preserves one Unicode argument and classifies timeout as 12
   assert.equal(timed.code, 124);
 });
 
+test('process runner returns a result when a child closes stdin during a large write', async () => {
+  const { runProcess } = await import(processUrl);
+  const target = [
+    'process.stdin.destroy();',
+    "process.stdout.write('stdin-closed');",
+  ].join('');
+  const caller = [
+    `import { runProcess } from ${JSON.stringify(processUrl)};`,
+    `const result = await runProcess(process.execPath, ['-e', ${JSON.stringify(target)}], {`,
+    '  input: Buffer.alloc(32 * 1024 * 1024),',
+    '});',
+    'process.stdout.write(JSON.stringify({',
+    '  code: result.code,',
+    '  stdout: result.stdout.toString(),',
+    '}));',
+  ].join('\n');
+
+  const outer = await runProcess(
+    process.execPath,
+    ['--input-type=module', '-e', caller],
+  );
+
+  assert.equal(outer.code, 0, outer.stderr.toString());
+  assert.deepEqual(JSON.parse(outer.stdout.toString()), {
+    code: 0,
+    stdout: 'stdin-closed',
+  });
+});
+
 test('POSIX timeout escalates a SIGTERM-ignoring process group within a bound', {
   skip: process.platform === 'win32',
 }, async () => {

@@ -188,6 +188,7 @@ export function runProcess(command, args = [], options = {}) {
     const stderr = [];
     let timedOut = false;
     let spawnError;
+    let stdinError;
     let settled = false;
     let closeCode;
     let closeSignal;
@@ -207,6 +208,11 @@ export function runProcess(command, args = [], options = {}) {
     child.once('error', (error) => {
       spawnError = error;
     });
+    child.stdin.on('error', (error) => {
+      if (error?.code !== 'EPIPE' && error?.code !== 'ERR_STREAM_DESTROYED') {
+        stdinError ??= error;
+      }
+    });
 
     let timeout;
     let escalation;
@@ -218,6 +224,7 @@ export function runProcess(command, args = [], options = {}) {
       if (escalation) clearTimeout(escalation);
       if (groupExitWait) clearTimeout(groupExitWait);
       if (spawnError) stderr.push(Buffer.from(`${spawnError.message}\n`));
+      if (stdinError) stderr.push(Buffer.from(`stdin error: ${stdinError.code || 'UNKNOWN'}\n`));
       resolveResult({
         code: timedOut ? 124 : (code ?? 127),
         signal,
