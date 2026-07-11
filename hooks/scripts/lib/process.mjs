@@ -13,7 +13,10 @@ import {
 } from 'node:path';
 
 const IS_WINDOWS = process.platform === 'win32';
-const CMD_META_CHARACTERS = /([()\][%!^"`<>&|;, *?])/g;
+const CMD_META_CHARACTERS = /([()\][!^"`<>&|;, *?])/g;
+const CMD_LITERAL_PERCENT_ENV = 'DEEP_REVIEW_CMD_LITERAL_PERCENT_4BFE8C1A';
+const POSIX_TERMINATION_GRACE_MS = 100;
+const POSIX_CLOSE_GRACE_MS = 100;
 
 function environmentValue(env, name) {
   if (!IS_WINDOWS) return env[name];
@@ -70,8 +73,17 @@ export function resolveExecutable(name, env = process.env) {
   return null;
 }
 
+function escapeCmdMetacharacters(value) {
+  return String(value)
+    .replace(CMD_META_CHARACTERS, '^$1')
+    // cmd expands percent variables once. Expanding this reserved variable to
+    // a percent after tokenization preserves literal `%NAME%` without a
+    // recursive environment-variable expansion pass.
+    .replaceAll('%', `%${CMD_LITERAL_PERCENT_ENV}%`);
+}
+
 function escapeCmdCommand(value) {
-  return String(value).replace(CMD_META_CHARACTERS, '^$1');
+  return escapeCmdMetacharacters(value);
 }
 
 function escapeCmdArgument(value) {
@@ -79,7 +91,17 @@ function escapeCmdArgument(value) {
   escaped = escaped.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
   escaped = escaped.replace(/(?=(\\+?)?)\1$/g, '$1$1');
   escaped = `"${escaped}"`;
-  return escaped.replace(CMD_META_CHARACTERS, '^$1');
+  return escapeCmdMetacharacters(escaped);
+}
+
+function cmdTransportEnvironment(env) {
+  const transported = {};
+  const reserved = CMD_LITERAL_PERCENT_ENV.toLowerCase();
+  for (const [key, value] of Object.entries(env)) {
+    if (key.toLowerCase() !== reserved) transported[key] = value;
+  }
+  transported[CMD_LITERAL_PERCENT_ENV] = '%';
+  return transported;
 }
 
 function prepareSpawn(command, args, env) {
@@ -102,12 +124,13 @@ function prepareSpawn(command, args, env) {
   return {
     command: comSpec,
     args: ['/d', '/v:off', '/s', '/c', `"${shellCommand}"`],
+    env: cmdTransportEnvironment(env),
     windowsVerbatimArguments: true,
   };
 }
 
-function terminateProcessTree(child, env) {
-  if (IS_WINDOWS && child.pid) {
+function terminateWindowsProcessTree(child, env) {
+  if (child.pid) {
     const taskkill = resolveExecutable('taskkill.exe', env) || 'taskkill.exe';
     const killer = spawn(taskkill, ['/pid', String(child.pid), '/t', '/f'], {
       env,
@@ -118,7 +141,21 @@ function terminateProcessTree(child, env) {
     killer.once('error', () => child.kill());
     return;
   }
-  child.kill('SIGTERM');
+  child.kill();
+}
+
+function signalPosixProcessGroup(child, signal) {
+  if (!child.pid) return;
+  try {
+    process.kill(-child.pid, signal);
+  } catch (error) {
+    if (error.code === 'ESRCH') return;
+    try {
+      child.kill(signal);
+    } catch {
+      // The process exited between the group signal and direct fallback.
+    }
+  }
 }
 
 export function runProcess(command, args = [], options = {}) {
@@ -137,14 +174,19 @@ export function runProcess(command, args = [], options = {}) {
     let timedOut = false;
     let spawnError;
     let settled = false;
+    let closeSeen = false;
+    let closeCode;
+    let closeSignal;
+    let hardKillSent = false;
 
     const child = spawn(prepared.command, prepared.args, {
       cwd: options.cwd,
-      env,
+      env: prepared.env || env,
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
       windowsVerbatimArguments: prepared.windowsVerbatimArguments,
+      detached: !IS_WINDOWS,
     });
 
     child.stdout.on('data', (chunk) => stdout.push(Buffer.from(chunk)));
@@ -154,18 +196,14 @@ export function runProcess(command, args = [], options = {}) {
     });
 
     let timeout;
-    if (Number.isFinite(options.timeoutMs) && options.timeoutMs > 0) {
-      timeout = setTimeout(() => {
-        timedOut = true;
-        terminateProcessTree(child, env);
-      }, options.timeoutMs);
-      timeout.unref();
-    }
-
-    child.once('close', (code, signal) => {
+    let escalation;
+    let closeFallback;
+    const finish = (code, signal) => {
       if (settled) return;
       settled = true;
       if (timeout) clearTimeout(timeout);
+      if (escalation) clearTimeout(escalation);
+      if (closeFallback) clearTimeout(closeFallback);
       if (spawnError) stderr.push(Buffer.from(`${spawnError.message}\n`));
       resolveResult({
         code: timedOut ? 124 : (code ?? 127),
@@ -174,6 +212,40 @@ export function runProcess(command, args = [], options = {}) {
         stdout: Buffer.concat(stdout),
         stderr: Buffer.concat(stderr),
       });
+    };
+
+    if (Number.isFinite(options.timeoutMs) && options.timeoutMs > 0) {
+      timeout = setTimeout(() => {
+        timedOut = true;
+        if (IS_WINDOWS) {
+          terminateWindowsProcessTree(child, env);
+          return;
+        }
+
+        signalPosixProcessGroup(child, 'SIGTERM');
+        escalation = setTimeout(() => {
+          hardKillSent = true;
+          signalPosixProcessGroup(child, 'SIGKILL');
+          if (closeSeen) {
+            finish(closeCode, closeSignal);
+            return;
+          }
+          closeFallback = setTimeout(
+            () => finish(closeCode, closeSignal),
+            POSIX_CLOSE_GRACE_MS,
+          );
+          closeFallback.unref();
+        }, POSIX_TERMINATION_GRACE_MS);
+        escalation.unref();
+      }, options.timeoutMs);
+      timeout.unref();
+    }
+
+    child.once('close', (code, signal) => {
+      closeSeen = true;
+      closeCode = code;
+      closeSignal = signal;
+      if (!timedOut || IS_WINDOWS || hardKillSent) finish(code, signal);
     });
 
     if (options.input === undefined) child.stdin.end();

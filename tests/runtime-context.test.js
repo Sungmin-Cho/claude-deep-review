@@ -84,14 +84,43 @@ test('secure temp paths are unique, private, and suffix-preserving', async () =>
   const { makeSecureTempPath } = await import(runtimeContextUrl);
   const first = makeSecureTempPath('deep review', '.json');
   const second = makeSecureTempPath('deep review', '.json');
+  const unicode = makeSecureTempPath('deep review', '-결과 Ω.md');
 
   assert.notEqual(first, second);
   assert.equal(first.endsWith('.json'), true);
+  assert.equal(unicode.endsWith('-결과 Ω.md'), true);
   assert.equal(existsSync(first), false);
   assert.equal(existsSync(dirname(first)), true);
   if (process.platform !== 'win32') {
     assert.equal(statSync(dirname(first)).mode & 0o777, 0o700);
   }
+});
+
+test('secure temp suffix rejects every path-like spelling before allocation', async () => {
+  const { makeSecureTempPath } = await import(runtimeContextUrl);
+  const prefix = `deep-review-unsafe-suffix-${process.pid}`;
+  const before = readdirSync(tmpdir()).filter((entry) => entry.startsWith(`${prefix}-`));
+  const unsafeSuffixes = [
+    '../target',
+    '/../../../target',
+    'nested/file',
+    '..\\target',
+    '\\absolute-looking',
+    'C:drive-relative',
+    'C:\\temp\\target',
+    '\\\\server\\share\\target',
+    '\0.json',
+  ];
+
+  for (const suffix of unsafeSuffixes) {
+    assert.throws(
+      () => makeSecureTempPath(prefix, suffix),
+      TypeError,
+      JSON.stringify(suffix),
+    );
+  }
+  const after = readdirSync(tmpdir()).filter((entry) => entry.startsWith(`${prefix}-`));
+  assert.deepEqual(after, before, 'validation must run before mkdtempSync');
 });
 
 test('process runner preserves one Unicode argument and classifies timeout as 124', async () => {
@@ -113,12 +142,60 @@ test('process runner preserves one Unicode argument and classifies timeout as 12
   assert.equal(timed.code, 124);
 });
 
+test('POSIX timeout escalates a SIGTERM-ignoring process group within a bound', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const { runProcess } = await import(processUrl);
+  const root = mkdtempSync(join(tmpdir(), 'deep-review-timeout-'));
+  const pidFile = join(root, 'child.pid');
+  const resultPromise = runProcess(process.execPath, [
+    '-e',
+    [
+      "require('node:fs').writeFileSync(process.argv[1], String(process.pid));",
+      "process.on('SIGTERM', () => {});",
+      'setInterval(() => {}, 1000);',
+    ].join(''),
+    pidFile,
+  ], { timeoutMs: 250 });
+
+  let deadline;
+  let result;
+  try {
+    result = await Promise.race([
+      resultPromise,
+      new Promise((_, reject) => {
+        deadline = setTimeout(() => reject(new Error('timeout escalation exceeded 1500ms')), 1500);
+      }),
+    ]);
+  } finally {
+    clearTimeout(deadline);
+    if (result === undefined && existsSync(pidFile)) {
+      const pid = Number(readFileSync(pidFile, 'utf8'));
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch (error) {
+        if (error.code !== 'ESRCH') throw error;
+      }
+      await resultPromise;
+    }
+  }
+
+  assert.equal(result.timedOut, true);
+  assert.equal(result.code, 124);
+  const pid = Number(readFileSync(pidFile, 'utf8'));
+  assert.throws(
+    () => process.kill(-pid, 0),
+    (error) => error.code === 'ESRCH',
+    'the dedicated POSIX process group must be gone before runProcess resolves',
+  );
+});
+
 test('executable resolution and argv transport remain shell-free', async () => {
   const { resolveExecutable, runProcess } = await import(processUrl);
   const root = mkdtempSync(join(tmpdir(), 'deep-review-path-'));
   const binDir = join(root, 'Path with spaces');
   const marker = join(root, 'unexpected-marker');
-  const dangerous = '공백 Ω %!^&|<>';
+  const dangerous = `공백 Ω %DEEP_REVIEW_INJECT% %PATH% !^&|<> " > "${marker}"`;
   mkdirSync(binDir);
 
   if (process.platform === 'win32') {
@@ -149,6 +226,7 @@ test('executable resolution and argv transport remain shell-free', async () => {
         ...variant,
         NODE_EXE: process.execPath,
         PROBE_MARKER_FILE: marker,
+        DEEP_REVIEW_INJECT: `EXPANDED & type nul > "${marker}" & rem`,
       };
       assert.equal(resolveExecutable('probe', env)?.toLowerCase(), probe.toLowerCase());
       const result = await runProcess('probe', [dangerous], { env });
@@ -176,4 +254,40 @@ test('executable resolution and argv transport remain shell-free', async () => {
     assert.deepEqual(JSON.parse(result.stdout.toString()), [dangerous]);
     assert.equal(existsSync(marker), false);
   }
+});
+
+test('Windows batch preparation defers literal percent through one expansion pass', async () => {
+  const source = readFileSync(new URL(processUrl), 'utf8');
+  const forcedWindowsSource = source.replace(
+    "const IS_WINDOWS = process.platform === 'win32';",
+    'const IS_WINDOWS = true;',
+  );
+  assert.notEqual(forcedWindowsSource, source, 'the platform seam must remain testable');
+  const instrumented = `${forcedWindowsSource}\nexport { prepareSpawn as __prepareSpawnForTest };\n`;
+  const module = await import(`data:text/javascript;base64,${Buffer.from(instrumented).toString('base64')}`);
+  const root = mkdtempSync(join(tmpdir(), 'deep-review-cmd-transport-'));
+  const command = join(root, 'probe.cmd');
+  writeFileSync(command, '@echo off\r\n');
+  const env = {
+    ...process.env,
+    ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+    'DEEP_REVIEW_INJECT^': 'EXPANDED-INJECTION',
+    'PATH^': 'EXPANDED-PATH',
+  };
+  const prepared = module.__prepareSpawnForTest(
+    command,
+    ['%DEEP_REVIEW_INJECT% %PATH%'],
+    env,
+  );
+
+  const transportEnv = prepared.env || env;
+  const expandedOnce = prepared.args.at(-1).replace(/%([^%]+)%/g, (match, name) => {
+    const entry = Object.entries(transportEnv)
+      .find(([key]) => key.toLowerCase() === name.toLowerCase());
+    return entry ? String(entry[1]) : match;
+  });
+  assert.equal(expandedOnce.includes('%DEEP_REVIEW_INJECT%'), true);
+  assert.equal(expandedOnce.includes('%PATH%'), true);
+  assert.equal(expandedOnce.includes('EXPANDED-INJECTION'), false);
+  assert.equal(expandedOnce.includes('EXPANDED-PATH'), false);
 });

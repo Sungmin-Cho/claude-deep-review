@@ -64,6 +64,16 @@ export function makeSecureTempPath(prefix, suffix = '') {
   if (typeof suffix !== 'string') {
     throw new TypeError('suffix must be a string');
   }
+  if (
+    suffix.includes('\0')
+    || suffix.includes('/')
+    || suffix.includes('\\')
+    || /^[A-Za-z]:/.test(suffix)
+    || suffix === '.'
+    || suffix === '..'
+  ) {
+    throw new TypeError('suffix must be a filename suffix without path syntax');
+  }
 
   const safePrefix = basename(prefix).replace(/[^A-Za-z0-9._-]+/g, '-') || 'deep-review';
   const directory = mkdtempSync(join(tmpdir(), `${safePrefix}-`));
