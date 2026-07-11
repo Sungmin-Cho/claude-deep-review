@@ -1,0 +1,20 @@
+slice: SLICE-042
+title: "Cross-runtime contract: Windows #1"
+source_plan: "plans/review.md#slice-042"
+created_at: "2026-07-10T12:34:56Z"
+status: active
+criteria:
+  - id: C1
+    description: "Preserve quoted colons: and # characters"
+    verification: mixed
+    prerequisites:
+      - "authenticated user: admin #1"
+      - feature-flag-review
+    status: PARTIAL
+    evidence: "Windows and POSIX receipts"
+  - id: C2
+    description: "Run without shell helpers"
+    verification: auto
+    prerequisites: []
+    status: null
+    evidence: null
