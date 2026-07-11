@@ -16,7 +16,12 @@ const IS_WINDOWS = process.platform === 'win32';
 const CMD_META_CHARACTERS = /([()\][!^"`<>&|;, *?])/g;
 const CMD_LITERAL_PERCENT_ENV = 'DEEP_REVIEW_CMD_LITERAL_PERCENT_4BFE8C1A';
 const POSIX_TERMINATION_GRACE_MS = 100;
-const POSIX_CLOSE_GRACE_MS = 100;
+const POSIX_GROUP_EXIT_POLL_MS = 10;
+// A stuck process group must not keep a caller alive forever. This limit starts
+// after SIGKILL; timing out reports that cleanup could not be confirmed.
+const POSIX_GROUP_EXIT_HARD_DEADLINE_MS = 1000;
+const POSIX_GROUP_EXIT_UNCONFIRMED_DIAGNOSTIC =
+  'POSIX process group remained after SIGKILL; cleanup could not be confirmed before the hard deadline\n';
 
 function environmentValue(env, name) {
   if (!IS_WINDOWS) return env[name];
@@ -158,6 +163,16 @@ function signalPosixProcessGroup(child, signal) {
   }
 }
 
+function isPosixProcessGroupGone(processGroupId) {
+  if (!processGroupId) return false;
+  try {
+    process.kill(-processGroupId, 0);
+    return false;
+  } catch (error) {
+    return error.code === 'ESRCH';
+  }
+}
+
 export function runProcess(command, args = [], options = {}) {
   if (typeof command !== 'string' || command.length === 0) {
     return Promise.reject(new TypeError('command must be a non-empty string'));
@@ -174,10 +189,8 @@ export function runProcess(command, args = [], options = {}) {
     let timedOut = false;
     let spawnError;
     let settled = false;
-    let closeSeen = false;
     let closeCode;
     let closeSignal;
-    let hardKillSent = false;
 
     const child = spawn(prepared.command, prepared.args, {
       cwd: options.cwd,
@@ -197,13 +210,13 @@ export function runProcess(command, args = [], options = {}) {
 
     let timeout;
     let escalation;
-    let closeFallback;
+    let groupExitWait;
     const finish = (code, signal) => {
       if (settled) return;
       settled = true;
       if (timeout) clearTimeout(timeout);
       if (escalation) clearTimeout(escalation);
-      if (closeFallback) clearTimeout(closeFallback);
+      if (groupExitWait) clearTimeout(groupExitWait);
       if (spawnError) stderr.push(Buffer.from(`${spawnError.message}\n`));
       resolveResult({
         code: timedOut ? 124 : (code ?? 127),
@@ -212,6 +225,37 @@ export function runProcess(command, args = [], options = {}) {
         stdout: Buffer.concat(stdout),
         stderr: Buffer.concat(stderr),
       });
+    };
+
+    const waitForPosixProcessGroupExit = () => {
+      const processGroupId = child.pid;
+      if (!processGroupId) {
+        stderr.push(Buffer.from(POSIX_GROUP_EXIT_UNCONFIRMED_DIAGNOSTIC));
+        finish(closeCode, closeSignal);
+        return;
+      }
+
+      const deadline = Date.now() + POSIX_GROUP_EXIT_HARD_DEADLINE_MS;
+      const pollForExit = () => {
+        if (isPosixProcessGroupGone(processGroupId)) {
+          finish(closeCode, closeSignal);
+          return;
+        }
+
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) {
+          stderr.push(Buffer.from(POSIX_GROUP_EXIT_UNCONFIRMED_DIAGNOSTIC));
+          finish(closeCode, closeSignal);
+          return;
+        }
+        // Keep this timer referenced: resolving before ESRCH would let an
+        // awaited caller exit while a detached descendant still survives.
+        groupExitWait = setTimeout(
+          pollForExit,
+          Math.min(POSIX_GROUP_EXIT_POLL_MS, remainingMs),
+        );
+      };
+      pollForExit();
     };
 
     if (Number.isFinite(options.timeoutMs) && options.timeoutMs > 0) {
@@ -224,28 +268,17 @@ export function runProcess(command, args = [], options = {}) {
 
         signalPosixProcessGroup(child, 'SIGTERM');
         escalation = setTimeout(() => {
-          hardKillSent = true;
           signalPosixProcessGroup(child, 'SIGKILL');
-          if (closeSeen) {
-            finish(closeCode, closeSignal);
-            return;
-          }
-          closeFallback = setTimeout(
-            () => finish(closeCode, closeSignal),
-            POSIX_CLOSE_GRACE_MS,
-          );
-          closeFallback.unref();
+          waitForPosixProcessGroupExit();
         }, POSIX_TERMINATION_GRACE_MS);
-        escalation.unref();
       }, options.timeoutMs);
       timeout.unref();
     }
 
     child.once('close', (code, signal) => {
-      closeSeen = true;
       closeCode = code;
       closeSignal = signal;
-      if (!timedOut || IS_WINDOWS || hardKillSent) finish(code, signal);
+      if (!timedOut || IS_WINDOWS) finish(code, signal);
     });
 
     if (options.input === undefined) child.stdin.end();

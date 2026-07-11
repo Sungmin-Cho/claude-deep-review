@@ -33,6 +33,53 @@ const processUrl = pathToFileURL(join(
   'process.mjs',
 )).href;
 
+function readPidIfPresent(filePath) {
+  if (!existsSync(filePath)) return undefined;
+  const pid = Number(readFileSync(filePath, 'utf8'));
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
+}
+
+function isProcessGroupGone(pid) {
+  try {
+    process.kill(-pid, 0);
+    return false;
+  } catch (error) {
+    if (error.code === 'ESRCH') return true;
+    // An orphaned process can be between SIGKILL delivery and reaping. It is
+    // not a successful cleanup signal, so keep the bounded test cleanup alive.
+    if (error.code === 'EPERM') return false;
+    throw error;
+  }
+}
+
+function killIfPresent(pid) {
+  if (!pid) return;
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch (error) {
+    if (error.code !== 'ESRCH') throw error;
+  }
+}
+
+function killProcessGroupIfPresent(pid) {
+  if (!pid) return;
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch (error) {
+    if (error.code !== 'ESRCH') throw error;
+  }
+}
+
+async function waitForProcessGroupToExit(pid, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!isProcessGroupGone(pid)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`process group ${pid} survived test cleanup`);
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+  }
+}
+
 test('Codex markers win over compatibility Claude markers', async () => {
   const { detectRuntimeHost } = await import(runtimeContextUrl);
   assert.equal(detectRuntimeHost({
@@ -188,6 +235,88 @@ test('POSIX timeout escalates a SIGTERM-ignoring process group within a bound', 
     (error) => error.code === 'ESRCH',
     'the dedicated POSIX process group must be gone before runProcess resolves',
   );
+});
+
+test('POSIX timeout keeps an outer await alive until a SIGTERM-exiting parent group is gone', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const { runProcess } = await import(processUrl);
+  const root = mkdtempSync(join(tmpdir(), 'deep-review-timeout-outer-'));
+  const parentPidFile = join(root, 'parent.pid');
+  const descendantPidFile = join(root, 'descendant.pid');
+  const descendant = [
+    "require('node:fs').writeFileSync(process.argv[1], String(process.pid));",
+    "process.on('SIGTERM', () => {});",
+    'setInterval(() => {}, 1000);',
+  ].join('');
+  const parent = [
+    "const { spawn } = require('node:child_process');",
+    `require('node:fs').writeFileSync(${JSON.stringify(parentPidFile)}, String(process.pid));`,
+    `spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}, ${JSON.stringify(descendantPidFile)}], { stdio: 'ignore' });`,
+    "process.on('SIGTERM', () => process.exit(0));",
+    'setInterval(() => {}, 1000);',
+  ].join('');
+  const outer = [
+    "import { readFileSync } from 'node:fs';",
+    `import { runProcess } from ${JSON.stringify(processUrl)};`,
+    `const result = await runProcess(process.execPath, ['-e', ${JSON.stringify(parent)}], { timeoutMs: 250 });`,
+    `const processGroupId = Number(readFileSync(${JSON.stringify(parentPidFile)}, 'utf8'));`,
+    'let processGroupGone = false;',
+    'try { process.kill(-processGroupId, 0); } catch (error) {',
+    "  if (error.code === 'ESRCH') processGroupGone = true; else throw error;",
+    '}',
+    'process.stdout.write(JSON.stringify({',
+    '  code: result.code,',
+    '  timedOut: result.timedOut,',
+    '  processGroupGone,',
+    '}));',
+  ].join('\n');
+
+  let deadline;
+  let outerResult;
+  const outerResultPromise = runProcess(
+    process.execPath,
+    ['--input-type=module', '-e', outer],
+    { timeoutMs: 2500 },
+  );
+  try {
+    outerResult = await Promise.race([
+      outerResultPromise,
+      new Promise((_, reject) => {
+        deadline = setTimeout(() => reject(new Error('outer timeout fixture exceeded 3000ms')), 3000);
+      }),
+    ]);
+
+    const parentPid = readPidIfPresent(parentPidFile);
+    assert.ok(parentPid, 'the direct parent must record its process-group id');
+    if (outerResult.stdout.length === 0) {
+      assert.equal(
+        isProcessGroupGone(parentPid),
+        false,
+        'an outputless outer process must leave the SIGTERM-ignoring descendant group behind',
+      );
+    }
+    assert.notEqual(
+      outerResult.stdout.length,
+      0,
+      'the old unreferenced escalation exits the outer process without JSON and leaks its descendant',
+    );
+    assert.equal(outerResult.timedOut, false, outerResult.stderr.toString());
+    assert.equal(outerResult.code, 0, outerResult.stderr.toString());
+    const result = JSON.parse(outerResult.stdout.toString());
+    assert.equal(result.timedOut, true);
+    assert.equal(result.code, 124);
+    assert.equal(result.processGroupGone, true);
+
+    assert.equal(isProcessGroupGone(parentPid), true);
+  } finally {
+    clearTimeout(deadline);
+    const parentPid = readPidIfPresent(parentPidFile);
+    const descendantPid = readPidIfPresent(descendantPidFile);
+    killProcessGroupIfPresent(parentPid);
+    killIfPresent(descendantPid);
+    if (parentPid) await waitForProcessGroupToExit(parentPid);
+  }
 });
 
 test('executable resolution and argv transport remain shell-free', async () => {
