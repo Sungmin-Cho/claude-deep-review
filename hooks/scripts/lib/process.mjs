@@ -22,6 +22,8 @@ const POSIX_GROUP_EXIT_POLL_MS = 10;
 const POSIX_GROUP_EXIT_HARD_DEADLINE_MS = 1000;
 const POSIX_GROUP_EXIT_UNCONFIRMED_DIAGNOSTIC =
   'POSIX process group remained after SIGKILL; cleanup could not be confirmed before the hard deadline\n';
+const WINDOWS_TASKKILL_FALLBACK_DIAGNOSTIC =
+  'Windows taskkill failed; sent direct SIGKILL fallback\n';
 
 function environmentValue(env, name) {
   if (!IS_WINDOWS) return env[name];
@@ -134,16 +136,36 @@ function prepareSpawn(command, args, env) {
   };
 }
 
-function terminateWindowsProcessTree(child, env) {
+function terminateWindowsProcessTree(child, env, stderr) {
   if (child.pid) {
     const taskkill = resolveExecutable('taskkill.exe', env) || 'taskkill.exe';
-    const killer = spawn(taskkill, ['/pid', String(child.pid), '/t', '/f'], {
-      env,
-      shell: false,
-      stdio: 'ignore',
-      windowsHide: true,
+    let fallbackIssued = false;
+    const fallback = () => {
+      if (fallbackIssued) return;
+      fallbackIssued = true;
+      stderr.push(Buffer.from(WINDOWS_TASKKILL_FALLBACK_DIAGNOSTIC));
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        // The process exited between taskkill failing and direct fallback.
+      }
+    };
+    let killer;
+    try {
+      killer = spawn(taskkill, ['/pid', String(child.pid), '/t', '/f'], {
+        env,
+        shell: false,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    } catch {
+      fallback();
+      return;
+    }
+    killer.once('error', fallback);
+    killer.once('close', (code) => {
+      if (code !== 0) fallback();
     });
-    killer.once('error', () => child.kill());
     return;
   }
   child.kill();
@@ -207,6 +229,8 @@ export function runProcess(command, args = [], options = {}) {
     child.stderr.on('data', (chunk) => stderr.push(Buffer.from(chunk)));
     child.once('error', (error) => {
       spawnError = error;
+      timedOut = false;
+      finish(127, undefined);
     });
     child.stdin.on('error', (error) => {
       if (error?.code !== 'EPIPE' && error?.code !== 'ERR_STREAM_DESTROYED') {
@@ -226,7 +250,7 @@ export function runProcess(command, args = [], options = {}) {
       if (spawnError) stderr.push(Buffer.from(`${spawnError.message}\n`));
       if (stdinError) stderr.push(Buffer.from(`stdin error: ${stdinError.code || 'UNKNOWN'}\n`));
       resolveResult({
-        code: timedOut ? 124 : (code ?? 127),
+        code: spawnError ? 127 : (timedOut ? 124 : (code ?? 127)),
         signal,
         timedOut,
         stdout: Buffer.concat(stdout),
@@ -269,7 +293,7 @@ export function runProcess(command, args = [], options = {}) {
       timeout = setTimeout(() => {
         timedOut = true;
         if (IS_WINDOWS) {
-          terminateWindowsProcessTree(child, env);
+          terminateWindowsProcessTree(child, env, stderr);
           return;
         }
 

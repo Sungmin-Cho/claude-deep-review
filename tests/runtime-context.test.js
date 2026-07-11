@@ -2,6 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { spawn: spawnChild } = require('node:child_process');
+const { EventEmitter } = require('node:events');
 const {
   chmodSync,
   existsSync,
@@ -77,6 +79,101 @@ async function waitForProcessGroupToExit(pid, timeoutMs = 1000) {
       throw new Error(`process group ${pid} survived test cleanup`);
     }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+  }
+}
+
+async function importWindowsProcessFixture(spawnForTest) {
+  const source = readFileSync(new URL(processUrl), 'utf8');
+  const forcedWindowsSource = source
+    .replace(
+      "import { spawn } from 'node:child_process';",
+      "import { spawn as realSpawn } from 'node:child_process';\nconst spawn = globalThis.__deepReviewSpawnForTest || realSpawn;",
+    )
+    .replace(
+      "const IS_WINDOWS = process.platform === 'win32';",
+      'const IS_WINDOWS = true;',
+    );
+  assert.notEqual(forcedWindowsSource, source, 'the platform seam must remain testable');
+
+  globalThis.__deepReviewSpawnForTest = spawnForTest;
+  try {
+    const uniqueSource = `${forcedWindowsSource}\n// fixture ${Date.now()}-${Math.random()}\n`;
+    return await import(`data:text/javascript;base64,${Buffer.from(uniqueSource).toString('base64')}`);
+  } finally {
+    delete globalThis.__deepReviewSpawnForTest;
+  }
+}
+
+function createWindowsTaskkillFixture(outcome) {
+  let child;
+  let directFallbackCalls = 0;
+  const directFallbackSignals = [];
+  let taskkillCalls = 0;
+
+  return {
+    spawn(command, args, options) {
+      if (String(command).toLowerCase() === 'taskkill.exe') {
+        taskkillCalls += 1;
+        assert.deepEqual(args, ['/pid', String(child.pid), '/t', '/f']);
+        assert.equal(options.shell, false);
+
+        const killer = new EventEmitter();
+        queueMicrotask(() => {
+          if (outcome === 'success') {
+            child.__fixtureKill('SIGKILL');
+            killer.emit('close', 0, null);
+          } else if (outcome === 'error') {
+            killer.emit('error', new Error('fake taskkill spawn failure'));
+            killer.emit('close', -2, null);
+          } else {
+            killer.emit('close', 1, null);
+          }
+        });
+        return killer;
+      }
+
+      child = spawnChild(command, args, options);
+      const kill = child.kill.bind(child);
+      child.__fixtureKill = kill;
+      child.kill = (signal) => {
+        directFallbackCalls += 1;
+        directFallbackSignals.push(signal);
+        return kill(signal);
+      };
+      return child;
+    },
+    stop() {
+      child?.__fixtureKill('SIGKILL');
+    },
+    result() {
+      return { directFallbackCalls, directFallbackSignals, taskkillCalls };
+    },
+  };
+}
+
+async function runWindowsTimeoutFixture(fixture) {
+  const { runProcess } = await importWindowsProcessFixture(fixture.spawn);
+  const resultPromise = runProcess(
+    process.execPath,
+    ['-e', 'setInterval(() => {}, 1000)'],
+    { timeoutMs: 30 },
+  );
+  let deadline;
+  let result;
+  try {
+    result = await Promise.race([
+      resultPromise,
+      new Promise((_, reject) => {
+        deadline = setTimeout(() => reject(new Error('Windows timeout fixture exceeded 1000ms')), 1000);
+      }),
+    ]);
+    return result;
+  } finally {
+    clearTimeout(deadline);
+    if (result === undefined) {
+      fixture.stop();
+      await resultPromise;
+    }
   }
 }
 
@@ -187,6 +284,65 @@ test('process runner preserves one Unicode argument and classifies timeout as 12
   );
   assert.equal(timed.timedOut, true);
   assert.equal(timed.code, 124);
+});
+
+test('process runner normalizes every ENOENT spawn result to code 127', async () => {
+  const { runProcess } = await import(processUrl);
+  const missing = join(mkdtempSync(join(tmpdir(), 'deep-review-missing-')), 'not-an-executable');
+
+  const result = await runProcess(missing, [], { timeoutMs: 30 });
+
+  assert.equal(result.code, 127);
+  assert.equal(result.timedOut, false);
+  assert.match(result.stderr.toString(), /ENOENT/);
+});
+
+test('Windows timeout falls back once when taskkill exits nonzero', async () => {
+  const fixture = createWindowsTaskkillFixture('nonzero');
+  const result = await runWindowsTimeoutFixture(fixture);
+
+  assert.equal(result.timedOut, true);
+  assert.equal(result.code, 124);
+  assert.match(
+    result.stderr.toString(),
+    /Windows taskkill failed; sent direct SIGKILL fallback\n/,
+  );
+  assert.deepEqual(fixture.result(), {
+    directFallbackCalls: 1,
+    directFallbackSignals: ['SIGKILL'],
+    taskkillCalls: 1,
+  });
+});
+
+test('Windows timeout falls back once when taskkill emits an error then closes', async () => {
+  const fixture = createWindowsTaskkillFixture('error');
+  const result = await runWindowsTimeoutFixture(fixture);
+
+  assert.equal(result.timedOut, true);
+  assert.equal(result.code, 124);
+  assert.match(
+    result.stderr.toString(),
+    /Windows taskkill failed; sent direct SIGKILL fallback\n/,
+  );
+  assert.deepEqual(fixture.result(), {
+    directFallbackCalls: 1,
+    directFallbackSignals: ['SIGKILL'],
+    taskkillCalls: 1,
+  });
+});
+
+test('Windows timeout preserves successful taskkill tree termination without direct fallback', async () => {
+  const fixture = createWindowsTaskkillFixture('success');
+  const result = await runWindowsTimeoutFixture(fixture);
+
+  assert.equal(result.timedOut, true);
+  assert.equal(result.code, 124);
+  assert.doesNotMatch(result.stderr.toString(), /Windows taskkill failed/);
+  assert.deepEqual(fixture.result(), {
+    directFallbackCalls: 0,
+    directFallbackSignals: [],
+    taskkillCalls: 1,
+  });
 });
 
 test('process runner returns a result when a child closes stdin during a large write', async () => {
