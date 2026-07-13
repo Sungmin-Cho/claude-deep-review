@@ -112,7 +112,7 @@ function createWindowsTaskkillFixture(outcome) {
 
   return {
     spawn(command, args, options) {
-      if (String(command).toLowerCase() === 'taskkill.exe') {
+      if (basename(String(command)).toLowerCase() === 'taskkill.exe') {
         taskkillCalls += 1;
         assert.deepEqual(args, ['/pid', String(child.pid), '/t', '/f']);
         assert.equal(options.shell, false);
@@ -151,12 +151,18 @@ function createWindowsTaskkillFixture(outcome) {
   };
 }
 
-async function runWindowsTimeoutFixture(fixture) {
+function windowsTaskkillEnvironment() {
+  const directory = mkdtempSync(join(tmpdir(), 'deep-review-taskkill-path-'));
+  writeFileSync(join(directory, 'taskkill.exe'), 'fixture');
+  return { ...process.env, PATH: directory, PATHEXT: '.EXE' };
+}
+
+async function runWindowsTimeoutFixture(fixture, env) {
   const { runProcess } = await importWindowsProcessFixture(fixture.spawn);
   const resultPromise = runProcess(
     process.execPath,
     ['-e', 'setInterval(() => {}, 1000)'],
-    { timeoutMs: 30 },
+    { timeoutMs: 30, env },
   );
   let deadline;
   let result;
@@ -299,7 +305,7 @@ test('process runner normalizes every ENOENT spawn result to code 127', async ()
 
 test('Windows timeout falls back once when taskkill exits nonzero', async () => {
   const fixture = createWindowsTaskkillFixture('nonzero');
-  const result = await runWindowsTimeoutFixture(fixture);
+  const result = await runWindowsTimeoutFixture(fixture, windowsTaskkillEnvironment());
 
   assert.equal(result.timedOut, true);
   assert.equal(result.code, 124);
@@ -316,7 +322,7 @@ test('Windows timeout falls back once when taskkill exits nonzero', async () => 
 
 test('Windows timeout falls back once when taskkill emits an error then closes', async () => {
   const fixture = createWindowsTaskkillFixture('error');
-  const result = await runWindowsTimeoutFixture(fixture);
+  const result = await runWindowsTimeoutFixture(fixture, windowsTaskkillEnvironment());
 
   assert.equal(result.timedOut, true);
   assert.equal(result.code, 124);
@@ -333,7 +339,7 @@ test('Windows timeout falls back once when taskkill emits an error then closes',
 
 test('Windows timeout preserves successful taskkill tree termination without direct fallback', async () => {
   const fixture = createWindowsTaskkillFixture('success');
-  const result = await runWindowsTimeoutFixture(fixture);
+  const result = await runWindowsTimeoutFixture(fixture, windowsTaskkillEnvironment());
 
   assert.equal(result.timedOut, true);
   assert.equal(result.code, 124);
