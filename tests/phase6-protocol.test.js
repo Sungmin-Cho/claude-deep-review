@@ -467,7 +467,11 @@ test('snapshot records exact worktree, index, pre-staged, HEAD, and pre-dirty ou
   assert.ok(Object.hasOwn(parsed.pre_dirty, base64(Buffer.from('outside-untracked.txt'))));
   assert.ok(parsed.pre_modified.includes(base64(Buffer.from('outside.txt'))));
   assert.ok(parsed.pre_untracked.includes(base64(Buffer.from('outside-untracked.txt'))));
-  assert.equal(lstatSync(join(repo, parsed.paths[key].worktree.backup)).mode & 0o077, 0);
+  const backup = join(repo, parsed.paths[key].worktree.backup);
+  assert.equal(readFileSync(backup).equals(Buffer.from([0, 1, 2, 5])), true);
+  if (process.platform !== 'win32') {
+    assert.equal(lstatSync(backup).mode & 0o077, 0);
+  }
 });
 
 test('Group Result parser is strict and preserves JSON-escaped raw path tokens', () => {
