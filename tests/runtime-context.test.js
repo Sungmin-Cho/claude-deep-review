@@ -533,6 +533,13 @@ test('executable resolution and argv transport remain shell-free', async () => {
         COMSPEC: process.env.ComSpec || process.env.COMSPEC || 'C:\\Windows\\System32\\cmd.exe',
       },
     ];
+    const dangerousArguments = [
+      dangerous,
+      'embedded " quote',
+      'before-quote\\"after',
+      'trailing-backslash\\',
+      '',
+    ];
 
     for (const variant of variants) {
       const env = {
@@ -543,10 +550,12 @@ test('executable resolution and argv transport remain shell-free', async () => {
         DEEP_REVIEW_INJECT: `EXPANDED & type nul > "${marker}" & rem`,
       };
       assert.equal(resolveExecutable('probe', env)?.toLowerCase(), probe.toLowerCase());
-      const result = await runProcess('probe', [dangerous], { env });
-      assert.equal(result.code, 0, result.stderr.toString());
-      assert.deepEqual(JSON.parse(result.stdout.toString()), [dangerous]);
-      assert.equal(existsSync(marker), false);
+      for (const argument of dangerousArguments) {
+        const result = await runProcess('probe', [argument], { env });
+        assert.equal(result.code, 0, result.stderr.toString());
+        assert.deepEqual(JSON.parse(result.stdout.toString()), [argument]);
+        assert.equal(existsSync(marker), false);
+      }
     }
   } else {
     const probe = join(binDir, 'probe');

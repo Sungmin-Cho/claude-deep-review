@@ -80,25 +80,37 @@ export function resolveExecutable(name, env = process.env) {
   return null;
 }
 
-function escapeCmdMetacharacters(value) {
-  return String(value)
-    .replace(CMD_META_CHARACTERS, '^$1')
-    // cmd expands percent variables once. Expanding this reserved variable to
-    // a percent after tokenization preserves literal `%NAME%` without a
-    // recursive environment-variable expansion pass.
-    .replaceAll('%', `%${CMD_LITERAL_PERCENT_ENV}%`);
+function caretEscapeCmdSyntax(value) {
+  return String(value).replace(CMD_META_CHARACTERS, '^$1');
 }
 
-function escapeCmdCommand(value) {
-  return escapeCmdMetacharacters(value);
+function protectLiteralPercent(value) {
+  // cmd expands percent variables once. Expanding this reserved variable to
+  // a percent after tokenization preserves literal `%NAME%` without a
+  // recursive environment-variable expansion pass.
+  return String(value).replaceAll('%', `%${CMD_LITERAL_PERCENT_ENV}%`);
 }
 
-function escapeCmdArgument(value) {
+function escapeCmdArgument(value, nestedBatchLayer = true) {
   let escaped = String(value);
   escaped = escaped.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
   escaped = escaped.replace(/(?=(\\+?)?)\1$/g, '$1$1');
-  escaped = `"${escaped}"`;
-  return escapeCmdMetacharacters(escaped);
+  escaped = protectLiteralPercent(`"${escaped}"`);
+  escaped = caretEscapeCmdSyntax(escaped);
+  if (nestedBatchLayer) escaped = caretEscapeCmdSyntax(escaped);
+  return escaped;
+}
+
+function buildWindowsBatchCommand(command, args) {
+  const shellCommand = [
+    caretEscapeCmdSyntax(command),
+    ...args.map((argument) => escapeCmdArgument(argument, true)),
+  ].join(' ');
+  return `"${shellCommand}"`;
+}
+
+export function estimateWindowsBatchCommandUnits(command, args) {
+  return buildWindowsBatchCommand(command, args).length;
 }
 
 function cmdTransportEnvironment(env) {
@@ -124,13 +136,9 @@ function prepareSpawn(command, args, env) {
   const comSpec = environmentValue(env, 'ComSpec')
     || environmentValue(process.env, 'ComSpec')
     || 'cmd.exe';
-  const shellCommand = [
-    escapeCmdCommand(resolved),
-    ...args.map(escapeCmdArgument),
-  ].join(' ');
   return {
     command: comSpec,
-    args: ['/d', '/v:off', '/s', '/c', `"${shellCommand}"`],
+    args: ['/d', '/v:off', '/s', '/c', buildWindowsBatchCommand(resolved, args)],
     env: cmdTransportEnvironment(env),
     windowsVerbatimArguments: true,
   };

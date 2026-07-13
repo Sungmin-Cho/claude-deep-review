@@ -8,6 +8,7 @@ import test from 'node:test';
 
 import { captureFingerprint, __testing as fingerprintTesting } from '../hooks/scripts/lib/fingerprint.mjs';
 import { prepareAgyPrivacy, scanAgyPrivacy } from '../hooks/scripts/lib/agy-privacy.mjs';
+import * as processRuntime from '../hooks/scripts/lib/process.mjs';
 import {
   ensureCutover,
   __testing as mutationTesting,
@@ -678,6 +679,13 @@ test('native Windows agy transport truncates below CreateProcess and cmd limits 
     assert.equal(result.status, 'prompt_too_large');
     assert.equal(result.truncated, true);
     const units = agyTesting.estimateWindowsCommandUnits(binary, calls[0].args);
+    assert.equal(typeof processRuntime.estimateWindowsBatchCommandUnits, 'function');
+    assert.equal(
+      units,
+      binary.endsWith('.cmd')
+        ? processRuntime.estimateWindowsBatchCommandUnits(binary, calls[0].args)
+        : agyTesting.estimateWindowsCommandUnits(binary, calls[0].args),
+    );
     assert.ok(units <= agyTesting.windowsCommandLimit(binary), {
       binary, units, limit: agyTesting.windowsCommandLimit(binary),
     });

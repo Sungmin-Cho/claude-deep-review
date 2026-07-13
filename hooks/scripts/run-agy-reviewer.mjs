@@ -6,7 +6,11 @@ import { pathToFileURL } from 'node:url';
 
 import { prepareAgyPrivacy } from './lib/agy-privacy.mjs';
 import { captureFingerprint } from './lib/fingerprint.mjs';
-import { resolveExecutable, runProcess } from './lib/process.mjs';
+import {
+  estimateWindowsBatchCommandUnits,
+  resolveExecutable,
+  runProcess,
+} from './lib/process.mjs';
 import { atomicWriteFile, resolvePluginRoot } from './lib/runtime-context.mjs';
 
 const BODY_LIMIT = 198_000;
@@ -14,8 +18,6 @@ const WINDOWS_CREATE_PROCESS_LIMIT = 32_767;
 const WINDOWS_CMD_LIMIT = 8_191;
 const WINDOWS_COMMAND_HEADROOM = 512;
 const POSIX_PROMPT_ARGUMENT_LIMIT = 120 * 1024;
-const CMD_META_CHARACTERS = /([()\][!^"`<>&|;, *?])/g;
-const CMD_LITERAL_PERCENT_ENV = 'DEEP_REVIEW_CMD_LITERAL_PERCENT_4BFE8C1A';
 const READONLY_PREAMBLE = `READ-ONLY REVIEW MODE - ABSOLUTE, NON-NEGOTIABLE CONSTRAINT
 ============================================================
 You are a code reviewer running in STRICT READ-ONLY mode. You MUST NOT modify
@@ -97,19 +99,6 @@ function processArguments({ promptContent, projectRoot, timeoutSeconds, model })
   return args;
 }
 
-function escapeCmdMetacharacters(value) {
-  return String(value)
-    .replace(CMD_META_CHARACTERS, '^$1')
-    .replaceAll('%', `%${CMD_LITERAL_PERCENT_ENV}%`);
-}
-
-function escapeCmdArgument(value) {
-  let escaped = String(value);
-  escaped = escaped.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
-  escaped = escaped.replace(/(?=(\\+?)?)\1$/g, '$1$1');
-  return escapeCmdMetacharacters(`"${escaped}"`);
-}
-
 export function windowsCommandLimit(binary) {
   return /\.(?:cmd|bat)$/iu.test(String(binary))
     ? WINDOWS_CMD_LIMIT
@@ -118,11 +107,7 @@ export function windowsCommandLimit(binary) {
 
 export function estimateWindowsCommandUnits(binary, args) {
   if (/\.(?:cmd|bat)$/iu.test(String(binary))) {
-    const command = [
-      escapeCmdMetacharacters(binary),
-      ...args.map(escapeCmdArgument),
-    ].join(' ');
-    return command.length + 2;
+    return estimateWindowsBatchCommandUnits(String(binary), args.map(String));
   }
   return (String(binary).length * 2) + 2 + args.reduce(
     (total, argument) => total + (String(argument).length * 2) + 3,
