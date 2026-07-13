@@ -37,6 +37,10 @@ Never infer reviewer availability from the selected root or from a host label.
 - `--respond` — terminal. Read
   `{plugin_root}/skills/receiving-review/references/respond-execution.md`,
   execute the response protocol with the exact remaining arguments, and 종료.
+  That reference uses `respond-runtime.mjs` for report/PR/report-file I/O and
+  `phase6-protocol.mjs` for snapshot/test/verify/recover/commit on both hosts.
+  Claude named-agent fallback and Codex generic-subagent dispatch consume one
+  shared Accepted Items prompt; neither route uses a hook or MCP server.
 - `--qa` — terminal. Explain that App QA is reserved for a later release and
   종료 without creating state.
 - `review` — terminal for `--contract`, `--entropy`, reviewer flags, or no

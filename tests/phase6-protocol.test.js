@@ -903,6 +903,80 @@ test('artifact rotation keeps one previous generation and preserves unrelated tm
   assert.equal(readFileSync(join(tmp, 'unrelated.txt'), 'utf8'), 'keep');
 });
 
+test('run-test transports quotes, newlines, Unicode, and shell metacharacters as JSON argv data', async () => {
+  const repo = createGitFixture('phase6-json-argv-data');
+  const logPath = join(repo, '.deep-review', 'tmp', 'phase6-critical.log');
+  const literal = 'quoted "value"\n한글 Ω\n$HOME; $(not-executed)';
+  const result = await protocol.runLoggedTest({
+    repo,
+    itemId: 'ITEM-argv',
+    command: process.execPath,
+    args: ['-e', 'process.stdout.write(JSON.stringify(process.argv.slice(1)))', literal],
+    logPath,
+  });
+  assert.equal(result.code, 0);
+  const log = readFileSync(logPath, 'utf8');
+  assert.match(log, /^===== ITEM-argv START /mu);
+  assert.match(log, /===== ITEM-argv END exit=0 =====/u);
+  assert.ok(log.includes(JSON.stringify([literal])));
+});
+
+test('CLI commit keeps HEAD and index unchanged until the exact pre-staged confirmation flag', () => {
+  const repo = createGitFixture('phase6-cli-confirm');
+  writeRepoFile(repo, 'tracked.txt', 'user-staged\n');
+  git(repo, ['add', '--', 'tracked.txt']);
+  writeRepoFile(repo, 'tracked.txt', 'pre-dispatch-worktree\n');
+  const acceptedFile = join(repo, 'accepted.json');
+  writeFileSync(acceptedFile, JSON.stringify([accepted('tracked.txt')]));
+  const snapshotRun = spawnSync(process.execPath, [
+    join(root, 'hooks', 'scripts', 'phase6-protocol.mjs'),
+    'snapshot', '--repo', repo, '--severity', 'critical', '--accepted-items-file', acceptedFile,
+  ], { encoding: 'utf8', shell: false });
+  assert.equal(snapshotRun.status, 0, snapshotRun.stderr);
+  const snapshot = JSON.parse(snapshotRun.stdout);
+  writeRepoFile(repo, 'tracked.txt', 'phase6-final\n');
+
+  const argvFile = join(repo, '.deep-review', 'tmp', 'argv.json');
+  writeFileSync(argvFile, JSON.stringify({
+    command: process.execPath,
+    args: ['-e', 'process.stdout.write("ok")'],
+  }));
+  const logRun = spawnSync(process.execPath, [
+    join(root, 'hooks', 'scripts', 'phase6-protocol.mjs'),
+    'run-test', '--repo', repo, '--item-id', 'ITEM-1', '--argv-file', argvFile,
+    '--log-path', snapshot.log_path,
+  ], { encoding: 'utf8', shell: false });
+  assert.equal(logRun.status, 0, logRun.stderr);
+
+  const resultFile = join(repo, '.deep-review', 'tmp', 'group-result.md');
+  writeFileSync(resultFile, completedGroup([Buffer.from('tracked.txt')]));
+  const verifyRun = spawnSync(process.execPath, [
+    join(root, 'hooks', 'scripts', 'phase6-protocol.mjs'),
+    'verify', '--repo', repo, '--snapshot', snapshot.snapshot_path, '--result-file', resultFile,
+  ], { encoding: 'utf8', shell: false });
+  assert.equal(verifyRun.status, 0, verifyRun.stderr);
+
+  const headBefore = git(repo, ['rev-parse', 'HEAD']);
+  const indexBefore = git(repo, ['write-tree']);
+  const gatedRun = spawnSync(process.execPath, [
+    join(root, 'hooks', 'scripts', 'phase6-protocol.mjs'),
+    'commit', '--repo', repo, '--snapshot', snapshot.snapshot_path, '--severity', 'critical',
+  ], { encoding: 'utf8', shell: false });
+  assert.equal(gatedRun.status, 0, gatedRun.stderr);
+  assert.equal(JSON.parse(gatedRun.stdout).status, 'requires_user_confirmation');
+  assert.equal(git(repo, ['rev-parse', 'HEAD']), headBefore);
+  assert.equal(git(repo, ['write-tree']), indexBefore);
+
+  const confirmedRun = spawnSync(process.execPath, [
+    join(root, 'hooks', 'scripts', 'phase6-protocol.mjs'),
+    'commit', '--repo', repo, '--snapshot', snapshot.snapshot_path, '--severity', 'critical',
+    '--confirm-pre-staged',
+  ], { encoding: 'utf8', shell: false });
+  assert.equal(confirmedRun.status, 0, confirmedRun.stderr);
+  assert.equal(JSON.parse(confirmedRun.stdout).status, 'committed');
+  assert.notEqual(git(repo, ['rev-parse', 'HEAD']), headBefore);
+});
+
 test('CLI subcommands consume JSON files and emit JSON without invoking a shell', () => {
   const repo = createGitFixture('phase6-cli 공간 Ω');
   const acceptedFile = join(repo, 'accepted.json');

@@ -135,6 +135,79 @@ test('supported runtime references use Node/direct tools and the runtime-root co
   assert.match(combined, /plugin_root.{0,160}PLUGIN_ROOT.{0,160}CLAUDE_PLUGIN_ROOT/is);
 });
 
+test('respond references are shell-free and route every stateful operation through Node helpers', () => {
+  const respondReferences = [
+    'skills/deep-review/SKILL.md',
+    'skills/receiving-review/SKILL.md',
+    'skills/receiving-review/references/respond-execution.md',
+    'skills/receiving-review/references/response-protocol.md',
+    'skills/receiving-review/references/response-format.md',
+    'skills/receiving-review/references/phase6-delegation-spec.md',
+    'skills/receiving-review/references/phase6-prompt-contract.md',
+    'agents/phase6-implementer.md',
+  ];
+  const forbidden = /```(?:bash|sh|shell)|\bbash\s+-c\b|\btee\b|\bls\s+-[^\n]*t\b|\bmkdir\s+-p\b|\bcompgen\b|\b(?:awk|sed)\b|<\(|\$log_path|\$\{(?:severity|CLAUDE_PLUGIN_ROOT)|'\\''/iu;
+  for (const relativePath of respondReferences) {
+    assert.doesNotMatch(
+      read(relativePath),
+      forbidden,
+      `${relativePath} retains an executable shell-only respond recipe`,
+    );
+  }
+
+  const respond = read('skills/receiving-review/references/respond-execution.md');
+  assert.match(respond, /mutation-protocol\.mjs.{0,180}auto-recover/is);
+  assert.match(respond, /phase6-protocol\.mjs.{0,100}rotate/is);
+  for (const subcommand of ['list-reports', 'fetch-pr', 'write-report', 'post-pr-response']) {
+    assert.match(respond, new RegExp(`respond-runtime\\.mjs.{0,180}${subcommand}`, 'is'));
+  }
+  assert.match(respond, /fs\.stat|statSync/);
+  assert.match(respond, /(?:explicit|지정).{0,120}(?:unchanged|그대로)/is);
+  assert.match(respond, /exact.{0,80}\*-review\.md|\*-review\.md.{0,80}exact/is);
+});
+
+test('Claude and Codex Phase 6 dispatch reuse one accepted-items prompt and one Node protocol', () => {
+  const respond = read('skills/receiving-review/references/respond-execution.md');
+  const prompt = read('skills/receiving-review/references/phase6-prompt-contract.md');
+  const delegation = read('skills/receiving-review/references/phase6-delegation-spec.md');
+  const agent = read('agents/phase6-implementer.md');
+  const combined = [respond, prompt, delegation, agent].join('\n');
+
+  assert.match(respond, /Agent\(\{\s*subagent_type:\s*["']deep-review:phase6-implementer["']/s);
+  assert.match(respond, /Agent\(\{\s*subagent_type:\s*["']phase6-implementer["']/s);
+  assert.match(respond, /spawn_agent/);
+  assert.match(respond, /one generic subagent per severity group|심각도 그룹마다 하나의 generic subagent/i);
+  assert.match(respond, /first action.{0,200}absolute.{0,120}agents\/phase6-implementer\.md/is);
+  assert.match(respond, /nested dispatch.{0,80}(?:forbid|금지)/is);
+  assert.match(combined, /same serialized.{0,120}Accepted Items|Accepted Items.{0,120}byte-identical/is);
+  assert.match(combined, /snapshot_path.{0,160}allowed paths/is);
+
+  for (const subcommand of ['snapshot', 'run-test', 'verify', 'recover', 'commit']) {
+    assert.match(combined, new RegExp(`phase6-protocol\\.mjs.{0,180}${subcommand}`, 'is'));
+  }
+  assert.match(agent, /JSON argv file/i);
+  assert.match(agent, /JSON-escaped string token/i);
+  assert.match(agent, /(?:Agent|subagent).{0,100}(?:forbidden|금지)/is);
+  assert.match(respond, /always.{0,100}verify|verify.{0,100}(?:always|항상)/is);
+  assert.match(respond, /malformed.{0,180}execution_status.{0,40}error/is);
+  assert.match(respond, /requires_user_confirmation/);
+  assert.match(respond, /explicit affirmative|명시적 긍정/);
+  assert.match(respond, /decline|defer/i);
+  assert.match(respond, /DEEP_REVIEW_FORCE_FALLBACK=1/);
+  assert.match(respond, /zero-item|0건.{0,80}skip/is);
+  for (const executionPath of ['subagent', 'main_fallback', 'mixed', 'n/a']) {
+    assert.match(respond, new RegExp(escapeRegex(executionPath)));
+  }
+});
+
+test('review loop delegates Respond to the public branch and keeps defer and stop semantics', () => {
+  const loop = read('skills/deep-review-loop/SKILL.md');
+  assert.match(loop, /public `--respond` branch/);
+  assert.match(loop, /exact absolute.{0,80}round_review_report_path/is);
+  assert.match(loop, /DEFER-and-stop/);
+  assert.match(loop, /response halted/);
+});
+
 test('model and reviewer dispatch documentation preserves aliases and Codex generic independence', () => {
   const combined = [
     read('skills/deep-review-workflow/SKILL.md'),
