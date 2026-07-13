@@ -26,9 +26,8 @@
       "Write"
     ],
     "defaultPrompt": [
-      "$deep-review:deep-review-workflow",
-      "$deep-review:deep-review-loop",
-      "$deep-review:receiving-review"
+      "$deep-review:deep-review",
+      "$deep-review:deep-review-loop"
     ],
     "brandColor": "#111827",
     "screenshots": []

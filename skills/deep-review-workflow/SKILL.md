@@ -1,149 +1,73 @@
 ---
 name: deep-review-workflow
-description: |
-  deep-review 플러그인의 코어 워크플로우 정의. 환경 감지, 리뷰 파이프라인,
-  교차 검증, 리포트 합성 등 전체 리뷰 프로세스를 가이드한다.
+description: Internal cross-runtime review pipeline used by the public deep-review skill.
 user-invocable: false
 ---
 
 # Deep Review Workflow
 
-이 스킬은 `/deep-review` 커맨드에서 로드되어 리뷰 프로세스를 가이드합니다.
+This internal skill is loaded only by the public review branch. Public users
+invoke `$deep-review:deep-review` or its `/deep-review` Claude adapter.
 
-## 참조 문서
+## Reference map
 
-- `references/review-criteria.md` — 6가지 리뷰 관점
-- `references/codex-integration.md` — Codex 교차 검증
-- `references/ultracode-integration.md` — `--ultracode` 하이브리드 fan-out(차원 샤딩, 경로 A/B, join 계약, 단일 보이스 collapse). `--ultracode` 가 지정된 리뷰에서 읽는다.
-- `references/contract-schema.md` — Sprint Contract 스키마
-- `references/report-format.md` — 리포트 형식
-- `../receiving-review/SKILL.md` — 리뷰 피드백 대응 프로토콜 (`/deep-review --respond` 모드, Stage 5+ 참조)
+- `references/runtime-dispatch.md` — capability-based entry and reviewer matrix
+- `references/review-execution.md` — executable review pipeline
+- `references/review-criteria.md` — six review lenses and severity doctrine
+- `references/codex-integration.md` — Codex roles and synthesis
+- `references/agy-integration.md` — privacy-gated agy role
+- `references/ultracode-integration.md` — optional six-lens Claude fan-out
+- `references/recurring-findings-export.md` — Stage 5.5 export
+- `references/init-setup.md` — public init terminal branch
+- `references/contract-schema.md` and `references/report-format.md` — data contracts
 
-## 4단계 파이프라인
+The reviewed runtime-reference file map is the list above. Every executable
+review or loop path uses `.mjs`/`.js` helpers or direct host tools.
 
-### Stage 1: Collect (변경 수집)
+## Runtime root contract
 
-1. 환경 감지 스크립트 실행: `bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/detect-environment.sh`
-2. 결과를 key=value 형식으로 파싱
-3. 결과에 따라 diff 수집:
-   - `change_state=non-git` → 사용자에게 리뷰할 파일 목록 요청
-   - `change_state=initial` → 모든 파일 대상 리뷰
-   - `change_state=clean` → `git diff {review_base}..HEAD`
-   - `change_state=staged` → `git diff --cached`
-   - `change_state=unstaged` → `git diff`
-   - `change_state=mixed` → `git diff HEAD` (staged + unstaged 모두)
-   - `change_state=untracked-only` → `git ls-files --others --exclude-standard`로 파일 목록 수집
-4. **dirty working-tree 상태(staged/unstaged/mixed/untracked-only)에서 untracked > 0이면:**
-   - `git ls-files --others --exclude-standard`로 추가 파일을 리뷰 대상에 포함 (primary state의 diff와 union).
-   - **단, `clean` 은 union에서 제외** — clean 의 실효 대상은 커밋된 `review_base..HEAD` 이므로 leftover untracked 파일은 그 대상 집합에 없다(spec §4.1). `initial` 은 자체 `--cached --others` 열거를 쓴다.
-5. diff에서 제외 (**SSOT: `review-execution.md` 의 `SSOT:diff-exclusion-set` 앵커 "diff에서 제외" 목록 + `hooks/scripts/build-change-files.sh` 의 `EXCLUDE_SEGMENTS`/`EXCLUDE_BASENAME_GLOBS`**). 여기서 목록을 재기술하지 않는다 — 디렉토리 세그먼트(node_modules/dist/build/.next/target/.venv/__pycache__/.pytest_cache/vendor/.git)·파일명 글로브(*.min.js/*.generated.*/*.lock/.DS_Store)·바이너리의 **정확한 멤버십은 그 단일 출처를 따른다**. 이 목록은 diff 와 change_files manifest 의 대상 집합이 동일하도록(spec §4.1) 변경 시 SSOT 한 곳만 고치면 된다.
+Resolve `plugin_root` in this order: generic `PLUGIN_ROOT`, compatibility
+`CLAUDE_PLUGIN_ROOT`, then the current runtime module location. The generic
+override never identifies the host. Invoke
+`node {plugin_root}/hooks/scripts/detect-environment.mjs --cwd {project_root} --format json`
+and use its absolute `plugin_root` value for every later plugin path.
 
-### Stage 2: Contract Check (계약 검증)
+## Pipeline map
 
-`--contract` 플래그 처리:
-- `--contract SLICE-{NNN}` (슬라이스 지정): `.deep-review/contracts/SLICE-{NNN}.yaml`만 로드 (status: active 확인)
-- `--contract` (슬라이스 미지정): `.deep-review/contracts/` 내 모든 `status: active` contract 로드
-- 플래그 없이 `.deep-review/contracts/`에 active contract가 있으면: 자동으로 전체 contract 검증
-- contract 디렉토리가 없거나 active 파일이 없으면: 이 단계 건너뜀
-- `status: archived` contract는 자동 로드에서 제외. 명시적 SLICE-NNN 지정 시에도 archived이면 경고 표시.
-- YAML 파싱 오류 시: 해당 contract 건너뜀 + 경고 "Contract {파일명} 파싱 실패 — 건너뜀"
+1. Collect environment and target data with `detect-environment.mjs`,
+   `build-change-files.mjs`, direct Git host commands, and direct file reads.
+2. Load active Sprint Contracts when requested or present.
+3. Build one shared reviewer payload with `build-reviewer-payload.mjs`.
+4. Enumerate independent roles from `runtime-dispatch.md`, dispatch all
+   eligible roles, and enforce read-only fingerprints.
+5. Synthesize only trusted successful results into `report-format.md`.
+6. Restore any planned companion index exposure with `mutation-protocol.mjs`.
+7. Export recurring evidence through `wrap-recurring-findings-envelope.js`.
 
-### Stage 3: Deep Review (교차 검증)
+The detailed stages and failure behavior live only in `review-execution.md`.
 
-환경에 따라 리뷰어 구성이 달라짐:
+## Configuration
 
-**공통: 유저 고지 + 백그라운드 실행**
-모든 Case에서 리뷰어 spawn 직전 고지 메시지를 출력하고, 모든 리뷰어를 백그라운드에서 실행한다.
-- Case 1/2: "Opus 리뷰를 백그라운드에서 실행합니다. 완료되면 결과를 알려드리겠습니다."
-- Case 3: "3개 리뷰어(Opus, Codex review, Codex adversarial)를 백그라운드에서 실행합니다. 완료되면 결과를 합성하여 알려드리겠습니다."
-코드 경로 단일화를 위해 단독 리뷰어(Case 1/2)에서도 백그라운드로 실행한다.
+`review_model` is a non-empty installed Claude model alias; `fable` is a valid
+example. Treat the value as opaque and forward it unchanged to the named
+Claude agent or `run-claude-reviewer.mjs`. Unknown or unavailable aliases fail
+that role visibly and never fall back to a different model identity.
 
-**대용량 diff 처리 (Agent prompt 크기 관리)**
-리뷰어 spawn 전 diff 크기를 측정하고 임계치를 넘으면 전략을 조정한다:
-1. 측정: `Bash({ command: "git diff {base}..HEAD | wc -c" })`로 바이트 수 확인
-2. 임계치:
-   - `< 200 KB` → 전체 diff를 agent prompt에 포함 (기본 경로)
-   - `200 KB ~ 1 MB` → 파일 목록을 경로·변경라인 요약만 포함하고, agent가 필요한 파일을 `Read`로 직접 읽도록 지시 (이미 Read tool 보유)
-   - `> 1 MB` → 자동 분할 방식으로 전환:
-     a. `rules.yaml`의 `architecture.layers` 또는 디렉토리 트리에서 1차 그룹핑
-     b. 그룹별로 code-reviewer agent를 순차 spawn (병렬 시 총합 프롬프트 압박)
-     c. 최종 합성은 그룹별 리포트를 모아 상위에서 merge
-3. `*.min.js`, `*.lock`, `*.generated.*`, `vendor/`, `node_modules/` 외에도 300 KB를 초과하는 단일 파일은 기본 exclusion 후보로 표시하고 사용자에게 포함 여부 확인.
-4. Agent 호출이 size·token 오류로 실패하면 Stage 4의 "부분 성공" 경로로 처리하고 원인을 리포트에 기록. 무한 재시도 금지 (1회 재시도만 허용).
-
-**Claude reviewer 런타임 선택**
-
-- Claude Code 런타임: `Agent(code-reviewer, model: opus, run_in_background: true)` 를 사용한다.
-- Codex / non-Claude 런타임: Claude Code `Agent` tool이 없으므로 `hooks/scripts/run-claude-reviewer.sh` 를 Bash로 실행한다. 이 helper는 동일한 reviewer prompt를 받아 `claude -p --plugin-dir "{CLAUDE_PLUGIN_ROOT}" --agent code-reviewer --model opus` 로 Opus reviewer를 실행한다.
-- Codex의 `spawn_agent`로 대체하지 않는다. 그 결과는 Codex reviewer이지 Claude reviewer가 아니므로 3-way 독립성 계약을 만족하지 않는다.
-- `claude_cli=false` 또는 helper 실패 시 Claude reviewer는 `not_attempted`로 기록하고, 성공한 리뷰어만 N-way 합성한다.
-
-**Case 1: non-git (`is_git=false`)**
-→ Claude reviewer 단독 리뷰. Claude Code에서는 Agent tool, Codex/non-Claude에서는 `run-claude-reviewer.sh` bridge 사용. Codex companion 이 `ensureGitRepository` 로 즉시 에러 — 호출 경로 없음.
-
-**Case 2: git + `codex_plugin=false`**
-→ Claude reviewer 단독 리뷰 (Claude Code Agent 또는 Codex CLI bridge)
-→ 세션 내 최초 1회 안내:
-  - codex_cli=false: Codex 플러그인 설치 안내
-  - codex_cli=true: "CLI가 감지되었지만 플러그인이 필요합니다" 안내
-
-**Case 3: git + `codex_plugin=true`** (첫 커밋 전 상태도 포함)
-→ 3-way 병렬 백그라운드 실행:
-  1. Claude reviewer — Claude Code에서는 Agent(code-reviewer, model: opus, run_in_background: true), Codex/non-Claude에서는 `run-claude-reviewer.sh` CLI bridge
-  2. Bash(_timeout 900 node "{codex_companion_path}" review {codex_target_flag}, run_in_background: true) — 코드 리뷰 (`_timeout`은 `references/codex-integration.md` preflight 섹션의 portable shim)
-  3. Bash (run_in_background: true) — adversarial-review를 **단일 Bash 호출 내에 inline**으로 실행한다. mktemp 생성 → here-doc으로 focus_text 주입 → `_timeout 900 node ... adversarial-review ... - < "$focus_file"` 호출 → 종료 후 `rm -f` 정리. 별도 Bash에 `$focus_file`을 넘기면 subshell 경계에서 unset되므로 **반드시 같은 Bash command 문자열 안에서 완결**. 상세 예제는 `review-execution.md` Stage 3 참조. mktemp 경로는 `"${TMPDIR:-/tmp}/deep-review-focus.XXXXXX"` 형식 — 고정 경로 사용 금지.
-
-{codex_target_flag}: clean 또는 WIP 커밋 후 → `--base {review_base}`, dirty tree → `--scope working-tree` (companion 1.0.x 호환).
-**untracked-only**: `--scope working-tree` 가 `git ls-files --others --exclude-standard` 로 자동 수집 — 별도 fallback 불필요.
-
-**Codex Mutation Protocol (Case 3 전용, spec §3-§6)**
-
-*왜 필요한가*: Codex CLI 는 git-tracked 경로만 인식하므로, gitignored 세션 파일 (WIP, `.deep-review/`, `*.local.*` 등) 을 3-way 검증에 포함시키려면 임시 git-index mutation (intent-to-add) 이 필요하다. 검증 후 즉시 원상복구하여 사용자 워크트리에 흔적을 남기지 않는다.
-
-구현: `hooks/scripts/mutation-protocol.sh` 의 7개 함수 (`is_our_ita_entry`, `acquire_mutation_lock`, `release_mutation_lock`, `perform_mutation`, `restore_mutation`, `auto_recover`, `scan_sensitive_files`). Entry point: `review-execution.md` Stage 0.1 (auto_recover), Stage 2.1 (session inference), Stage 3.0 (perform_mutation), Stage 5.0 (restore_mutation).
-
-**커밋되지 않은 상태에서:**
-- 사용자에게 WIP 커밋 제안
-- 수락 → WIP 커밋 후 Case 3 (--base)
-- 거부 → Claude Opus 리뷰 (diff 기반) + Codex 도 실행 (`--scope working-tree` 로 동일 대상 리뷰)
-
-### Stage 4: Verdict (판정)
-
-1. 모든 백그라운드 리뷰어의 완료 알림 수신 후 결과 수집
-   - 완료 알림은 Claude Code 런타임이 자동 전달 (polling 불필요)
-   - 리뷰어 실패 시 "미수행" 표시, 성공한 리뷰어만으로 합성
-2. 교차 검증 합성 (`codex-integration.md` 참조)
-3. Verdict 결정: APPROVE / REQUEST_CHANGES / CONCERN
-4. 리포트 생성: `.deep-review/reports/{YYYY-MM-DD}-{HHmmss}-review.md` (Bash `date "+%Y-%m-%d-%H%M%S"`로 타임스탬프 생성)
-5. REQUEST_CHANGES 시:
-   "대응 방법을 선택하세요:"
-   (1) 증거 기반 대응 시작 (`/deep-review --respond`) ← 기본 추천
-   (2) codex:rescue로 수정 위임 (Codex 설치 시에만 표시)
-   (3) 수동으로 처리
-
-## Stage 5+ (커맨드 레벨 확장)
-
-실행 SSOT = 리뷰는 review-execution.md, 응답은 respond-execution.md; 본 스킬은 개념 맵 — 스킬은 판단·합성까지, 그 이후는 아래 소유권을 따른다:
-
-- **Stage 5 (응답)**: `--respond` 모드 — `../receiving-review/SKILL.md` 가 Phase 1~6 가이드 제공. respond 실행 절차(자동 복원/tmp 회전 → 리포트 로딩 → Phase 1~6 dispatch → Response 저장)는 `../receiving-review/references/respond-execution.md` 가 SSOT.
-- **Stage 5.5 (Recurring Findings Export)**: 매 라운드 종료 시 `.deep-review/recurring-findings.json` 갱신 (`references/recurring-findings-export.md`).
-- **Stage 6 (`--entropy` 스캔)**: 옵션 플래그 (`references/entropy-scan.md`).
-- **Stage 7 (`--qa`)**: 향후 릴리스 예정 — 현재 `app_qa.*` config 필드는 예약 스키마.
-
-## config.yaml 스키마
+The remaining top-level keys retain their existing meaning:
 
 ```yaml
-# .deep-review/config.yaml
-review_model: opus              # opus | sonnet (리뷰어 모델)
-codex_notified: false           # Codex 설치 안내 1회 표시 여부
-last_review: null               # 마지막 리뷰 시각 (ISO8601)
-app_qa:                         # Mode 2 (향후 릴리스에서 구현 예정 — dead field 허용)
+review_model: fable
+codex_notified: false
+agy_notified: false
+agy_enabled: true
+agy_sensitive_acked_fingerprint: ""
+agy_sensitive_acked_at: ""
+agy_fingerprint_mode: hybrid
+last_review: null
+app_qa:
   last_command: null
   last_url: null
 ```
 
-### 업데이트 원칙 (필드 보존)
-
-- **필드 변경은 Edit tool로 해당 라인만 교체**. `Write`로 전체 파일을 덮어쓰지 않는다 — 사용자가 수동으로 수정했을 수 있는 다른 필드가 사라진다.
-- 스키마에 없는 추가 필드가 있어도 삭제하지 않는다 (사용자의 확장을 존중).
-- YAML 파서 없이 텍스트 매칭으로 수정하므로 `old_string`에 전/후 컨텍스트를 충분히 포함해 유일성을 보장.
+Patch only the intended top-level key through the Node config writer or a
+precise host edit. Preserve unknown user keys.

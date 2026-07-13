@@ -7,8 +7,8 @@
  * claude-deep-suite/docs/envelope-migration.md §1).
  *
  * Designed to be called from review-execution.md Stage 5.5 precheck / recurring-findings-export.md ("Recurring
- * Findings Export") via the Bash tool. The agent synthesises the taxonomy
- * payload (jq aggregation over `.deep-review/reports/*.md`) into a temp file,
+ * Findings Export") through Node. The agent synthesises the taxonomy
+ * payload (classification aggregation over `.deep-review/reports/*.md`) into a temp file,
  * then invokes this helper to produce the final envelope-wrapped artifact at
  * the canonical path `.deep-review/recurring-findings.json`.
  *
@@ -19,6 +19,7 @@
  *     [--artifact-kind recurring-findings]    (default; reserved for sidecar kinds)
  *     [--parent-run-id <ULID>] \
  *     [--session-id <id>] \
+ *     [--discover-sources-from <project-root>] \
  *     [--source-session-receipt <path>] (chains parent_run_id from deep-work)
  *     [--source-artifact <path[:run_id]>]   (repeatable — generic source ref;
  *                                            typically review report markdown paths)
@@ -60,6 +61,7 @@ function usage(extra) {
       '         [--artifact-kind recurring-findings]\n' +
       '         [--parent-run-id <ULID>]\n' +
       '         [--session-id <id>]\n' +
+      '         [--discover-sources-from <project-root>]\n' +
       '         [--source-session-receipt <path>]\n' +
       '         [--source-artifact <path[:run_id]>] (repeatable)\n',
   );
@@ -72,6 +74,7 @@ const SINGLE_VALUE_FLAGS = new Set([
   'output',
   'parent-run-id',
   'session-id',
+  'discover-sources-from',
   'source-session-receipt',
 ]);
 const REPEATABLE_FLAGS = new Set(['source-artifact']);
@@ -117,6 +120,7 @@ function parseArgs(argv) {
     if (
       (key === 'session-id' ||
         key === 'source-session-receipt' ||
+        key === 'discover-sources-from' ||
         key === 'source-artifact' ||
         key === 'payload-file' ||
         key === 'output' ||
@@ -244,6 +248,62 @@ function parseSourceArtifactSpec(spec) {
   return { path: spec };
 }
 
+function compareUtf8Descending(left, right) {
+  return Buffer.compare(Buffer.from(right, 'utf8'), Buffer.from(left, 'utf8'));
+}
+
+function regularFile(filePath) {
+  try {
+    return fs.lstatSync(filePath).isFile();
+  } catch (_error) {
+    return false;
+  }
+}
+
+/**
+ * Discover the canonical deep-work receipt and the newest twenty review
+ * reports using Node filesystem APIs only. Directory entries are deliberately
+ * not followed through symbolic links. Ordering mirrors the old lexical
+ * newest-first contract, but is byte-deterministic on every host.
+ */
+function discoverSources(projectRoot) {
+  const root = path.resolve(projectRoot);
+  const receipts = [];
+  const deepWork = path.join(root, '.deep-work');
+  let sessionDirs = [];
+  try {
+    sessionDirs = fs.readdirSync(deepWork, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory());
+  } catch (_error) {
+    sessionDirs = [];
+  }
+  for (const entry of sessionDirs) {
+    for (const basename of ['session-receipt.json', 'receipt.json']) {
+      const candidate = path.join(deepWork, entry.name, basename);
+      if (regularFile(candidate)) receipts.push(candidate);
+    }
+  }
+  receipts.sort(compareUtf8Descending);
+
+  const reports = [];
+  const reportsRoot = path.join(root, '.deep-review', 'reports');
+  let reportEntries = [];
+  try {
+    reportEntries = fs.readdirSync(reportsRoot, { withFileTypes: true });
+  } catch (_error) {
+    reportEntries = [];
+  }
+  for (const entry of reportEntries) {
+    if (!entry.isFile() || !entry.name.endsWith('-review.md')) continue;
+    reports.push(path.join(reportsRoot, entry.name));
+  }
+  reports.sort(compareUtf8Descending);
+  return {
+    sessionReceipt: receipts[0] || '',
+    reports: reports.slice(0, 20),
+  };
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const required = ['payload-file', 'output'];
@@ -263,6 +323,9 @@ function main() {
 
   const payloadPath = path.resolve(process.cwd(), args['payload-file']);
   const outputPath = path.resolve(process.cwd(), args['output']);
+  const discovered = args['discover-sources-from']
+    ? discoverSources(args['discover-sources-from'])
+    : { sessionReceipt: '', reports: [] };
 
   const payload = readJson(payloadPath);
   if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
@@ -280,14 +343,15 @@ function main() {
   // Strict 3-way gate: foreign envelope at the session-receipt path is
   // rejected (returns null → path-only source_artifact, no parent_run_id
   // chain). Caller's explicit --parent-run-id always wins (set above).
-  if (args['source-session-receipt']) {
-    const recPath = path.resolve(process.cwd(), args['source-session-receipt']);
+  const receiptSource = args['source-session-receipt'] || discovered.sessionReceipt;
+  if (receiptSource) {
+    const recPath = path.resolve(process.cwd(), receiptSource);
     const recRunId = tryReadEnvelopeRunId(recPath, {
       producer: 'deep-work',
       artifactKind: 'session-receipt',
     });
     sourceArtifacts.push({
-      path: args['source-session-receipt'],
+      path: receiptSource,
       ...(recRunId ? { run_id: recRunId } : {}),
     });
     if (!parentRunId && recRunId) {
@@ -295,15 +359,38 @@ function main() {
     }
   }
 
+  const explicitSpecs = Array.isArray(args['source-artifact']) ? args['source-artifact'] : [];
+  const explicitByPath = new Map();
+  const explicitOrder = [];
+  for (const spec of explicitSpecs) {
+    const parsed = parseSourceArtifactSpec(spec);
+    if (!parsed) continue;
+    const key = path.resolve(process.cwd(), parsed.path);
+    if (!explicitByPath.has(key)) explicitOrder.push(key);
+    explicitByPath.set(key, spec);
+  }
+  const discoveredPaths = new Set(
+    discovered.reports.map((report) => path.resolve(process.cwd(), report)),
+  );
+  const sourceSpecs = discovered.reports.map((report) => (
+    explicitByPath.get(path.resolve(process.cwd(), report)) || report
+  ));
+  for (const key of explicitOrder) {
+    if (!discoveredPaths.has(key)) sourceSpecs.push(explicitByPath.get(key));
+  }
+  const seenSourcePaths = new Set(sourceArtifacts.map((entry) => path.resolve(process.cwd(), entry.path)));
+
   // Generic --source-artifact entries (repeatable; typically review report
   // markdown paths or other multi-source aggregator inputs).
   // For path-only entries (no `:run_id` suffix), auto-harvest the envelope's
   // run_id IF the file at path is a self-consistent envelope. Caller can
   // override by passing `path:run_id` explicitly.
-  if (Array.isArray(args['source-artifact'])) {
-    for (const spec of args['source-artifact']) {
+  if (sourceSpecs.length > 0) {
+    for (const spec of sourceSpecs) {
       const parsed = parseSourceArtifactSpec(spec);
       if (!parsed) continue;
+      const sourceKey = path.resolve(process.cwd(), parsed.path);
+      if (seenSourcePaths.has(sourceKey)) continue;
       if (!parsed.run_id) {
         // Auto-harvest with self-consistency check.
         const abs = path.isAbsolute(parsed.path)
@@ -315,6 +402,7 @@ function main() {
         }
       }
       sourceArtifacts.push(parsed);
+      seenSourcePaths.add(sourceKey);
     }
   }
 
@@ -372,4 +460,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { parseSourceArtifactSpec, tryReadEnvelopeRunId };
+module.exports = { discoverSources, parseSourceArtifactSpec, tryReadEnvelopeRunId };
