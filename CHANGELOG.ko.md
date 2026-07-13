@@ -4,6 +4,20 @@
 
 deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)와 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
+## [1.13.0] — 2026-07-11
+
+### 추가
+
+- 네이티브 Codex 리뷰·대응 스킬과 호스트 인식 리뷰어·Phase 6 서브에이전트 디스패치로 Claude Code와 Codex 모두에서 공개 워크플로를 제공합니다.
+
+### 변경
+
+- 지원되는 리뷰, 루프, 뮤테이션, 리뷰어 브리지, Stage 5.5 반복 발견 내보내기, 대응 검증이 macOS, Linux, Windows 11의 무의존성 Node 22 런타임에서 실행됩니다.
+
+### 수정
+
+- Codex 기본 훅 검증, 프로세스 간 뮤테이션 복구, Stage 5.5 zsh shopt 노이즈, Windows 경로·타임아웃 동작, 리뷰어 뮤테이션 fail-closed 처리를 수정했습니다.
+
 ## [1.12.3] — 2026-07-07
 
 ### 수정

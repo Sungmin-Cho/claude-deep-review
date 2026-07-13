@@ -5,16 +5,23 @@ on:
     branches: [main]
   pull_request:
     paths:
-      - 'hooks/scripts/**'
-      - 'hooks/hooks.json'
+      - 'docs/**'
+      - 'README.md'
+      - 'README.ko.md'
+      - 'CHANGELOG.md'
+      - 'CHANGELOG.ko.md'
+      - 'CLAUDE.md'
+      - 'AGENTS.md'
+      - 'hooks/**'
+      - 'hooks/scripts/test/**'
+      - 'scripts/**'
       - 'commands/**'
       - 'skills/**'
       - 'agents/**'
       - '.claude-plugin/**'
       - '.codex-plugin/**'
-      - 'tests/**'
-      - 'scripts/**'
       - 'package.json'
+      - 'tests/**'
       - '.github/workflows/**'
 
 permissions:
@@ -25,61 +32,37 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    name: tests (${{ matrix.os }})
+    name: native tests (${{ matrix.os }})
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
-      - name: Show bash version (M5.5 #4 — bash 3.2 visibility)
-        run: bash --version
-
-      - name: Run envelope tests
+      - name: Run native tests
         run: npm test
 
-      - name: Run mutation-protocol bash regression (M5.5 #5 + stat cross-platform fix)
-        run: bash hooks/scripts/test/test-mutation-protocol.sh
+  legacy-unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    name: legacy Unix oracle (${{ matrix.os }})
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Run sensitive-patterns library tests
-        run: bash hooks/scripts/test/test-sensitive-patterns-lib.sh
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
-      - name: detect-environment smoke test
-        run: bash hooks/scripts/test/test-detect-environment.sh
-
-      - name: run-agy-reviewer bridge test
-        run: bash hooks/scripts/test/test-run-agy-reviewer.sh
-
-      - name: Codex Claude reviewer bridge test
-        run: bash hooks/scripts/test/test-codex-claude-reviewer.sh
-
-      - name: ultracode/codex flags structural test
-        run: bash hooks/scripts/test/test-ultracode-flags.sh
-
-      - name: extract-fp-doctrine
-        run: bash hooks/scripts/test/test-extract-fp-doctrine.sh
-
-      - name: build-change-files
-        run: bash hooks/scripts/test/test-build-change-files.sh
-
-      - name: build-reviewer-payload
-        run: bash hooks/scripts/test/test-build-reviewer-payload.sh
-
-      - name: payload-ordering
-        run: bash hooks/scripts/test/test-payload-ordering.sh
-
-      - name: extract-anchor contract test
-        run: bash hooks/scripts/test/test-extract-anchor.sh
-
-      - name: test CI-enrollment drift guard
+      - name: Check recursive legacy enrollment
         run: bash scripts/check-test-ci-enrollment.sh
 
-      - name: CI-enrollment guard unit test
-        run: bash hooks/scripts/test/test-check-test-ci-enrollment.sh
-
-      - name: verdict-synthesis SSOT structural test
-        run: bash hooks/scripts/test/test-verdict-synthesis-ssot.sh
+      - name: Run recursive legacy oracle
+        run: npm run test:legacy

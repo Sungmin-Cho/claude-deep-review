@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
-# test-ultracode-flags.sh — structural assertions for v1.10.0 --ultracode/--codex flags.
-# deep-review is markdown-spec-driven: these greps assert the runtime contracts exist
-# in the command/skill/reference markdown. bash 3.2 compatible. exit 0 = all pass.
+# Structural oracle for current cross-runtime reviewer flags and ultracode.
 set -u
+
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-CMD="$ROOT/commands/deep-review.md"
-# Phase B: review-mode runtime contracts (reviewer enumeration, precedence, SEC-1, ultracode
-# collapse) now live in review-execution.md. §0.5 flag parse/validate + frontmatter stay in $CMD.
+PUBLIC="$ROOT/skills/deep-review/SKILL.md"
 REVEXEC="$ROOT/skills/deep-review-workflow/references/review-execution.md"
 LOOP="$ROOT/skills/deep-review-loop/SKILL.md"
 WF_SKILL="$ROOT/skills/deep-review-workflow/SKILL.md"
@@ -14,135 +11,145 @@ ULTRA="$ROOT/skills/deep-review-workflow/references/ultracode-integration.md"
 CODEXREF="$ROOT/skills/deep-review-workflow/references/codex-integration.md"
 REPORTFMT="$ROOT/skills/deep-review-workflow/references/report-format.md"
 P6_PROMPT="$ROOT/skills/receiving-review/references/phase6-prompt-contract.md"
-P6_DELEG="$ROOT/skills/receiving-review/references/phase6-delegation-spec.md"
 RESP_FMT="$ROOT/skills/receiving-review/references/response-format.md"
-CLAUDEMD="$ROOT/CLAUDE.md"
 
-PASS=0; FAIL=0
-ok(){ echo "PASS [$1] $2"; PASS=$((PASS+1)); }
-no(){ echo "FAIL [$1] $2"; FAIL=$((FAIL+1)); }
-# assert_grep ID FILE PATTERN DESC  — PATTERN must be present
-assert_grep(){ if grep -qE -e "$3" "$2" 2>/dev/null; then ok "$1" "$4"; else no "$1" "$4 (missing /$3/ in ${2##*/})"; fi; }
-# assert_absent ID FILE PATTERN DESC — PATTERN must be absent. -e: pattern may start with '--' (else grep treats it as an option, rc=2).
-assert_absent(){ if grep -qE -e "$3" "$2" 2>/dev/null; then no "$1" "$4 (unexpected /$3/ in ${2##*/})"; else ok "$1" "$4"; fi; }
-
-# ---------------------------------------------------------------------------
-t_parse_validation(){
-  # §2.2 — sugar expansion BEFORE validation, contradictions, parsing disambiguation
-  assert_grep P1 "$CMD" 'codex-only.*(전개|expand).*(먼저|before)|슈가 전개.*먼저' "sugar expand-before-validate"
-  assert_grep P2 "$CMD" '\-\-ultracode.*\-\-no-opus.*모순|\-\-no-opus.*\-\-ultracode.*모순' "--ultracode+--no-opus contradiction"
-  assert_grep P3 "$CMD" '\-\-codex.*\-\-no-codex.*모순' "--codex+--no-codex contradiction"
-  assert_grep P4 "$CMD" 'SLICE-\[0-9\]\+.*소비|다음 토큰이 .SLICE' "BC-4: --contract slice token disambiguation"
-  assert_grep P5 "$CMD" '\-\-respond.*reviewer.*무시|reviewer 구성 플래그는 리뷰 모드 전용' "BC-5: --respond+reviewer notice"
-  # SKILL-7 — frontmatter discoverability
-  assert_grep P6 "$CMD" 'argument-hint:.*\-\-ultracode|argument-hint:.*\-\-codex' "SKILL-7: argument-hint exposes flags"
+PASS=0
+FAIL=0
+ok() { echo "PASS [$1] $2"; PASS=$((PASS+1)); }
+no() { echo "FAIL [$1] $2"; FAIL=$((FAIL+1)); }
+assert_grep() {
+  if grep -qE -e "$3" "$2" 2>/dev/null; then
+    ok "$1" "$4"
+  else
+    no "$1" "$4 (missing /$3/ in $(basename "$2"))"
+  fi
+}
+assert_absent() {
+  if grep -qE -e "$3" "$2" 2>/dev/null; then
+    no "$1" "$4 (unexpected /$3/ in $(basename "$2"))"
+  else
+    ok "$1" "$4"
+  fi
 }
 
-t_precedence(){
-  # §2.3 precedence + BC-3 preservation + CONS-3 N=0 — now in review-execution.md (Stage 3 enum)
-  assert_grep PR1 "$REVEXEC" 'claude_reviewer *=' "claude_reviewer precedence resolver present"
-  assert_grep PR2 "$REVEXEC" 'none .*if .*\-\-no-opus' "no-opus -> none"
-  assert_grep PR3 "$REVEXEC" 'ultracode-fanout .*\-\-ultracode' "ultracode -> fanout"
-  assert_grep PR4 "$REVEXEC" 'single-opus .*else|single-opus.*기존 기본값' "else -> single-opus (BC-3 opus literal preserved)"
-  assert_grep PR5 "$REVEXEC" 'AGY_USER_DECLINED_THIS_RUN' "BC-3: per-run agy decline conjunct retained"
-  assert_grep PR6 "$REVEXEC" 'N_planned *=' "N_planned formula present"
-  assert_grep PR7 "$REVEXEC" 'N_planned *= *0|N=0.*검증.*에러|단발.*리뷰어가 없' "CONS-3: single-shot N=0 validation error"
+t_parse_validation() {
+  assert_grep P1 "$PUBLIC" 'Expand .*--codex-only.*before validation' "sugar expands before validation"
+  assert_grep P2 "$PUBLIC" 'Reject .*--ultracode.*--no-opus' "--ultracode plus --no-opus is rejected"
+  assert_grep P3 "$PUBLIC" '\-\-no-codex' "--codex plus --no-codex conflict is represented"
+  assert_grep P4 "$PUBLIC" 'SLICE-\[0-9\]\+' "--contract slice token is disambiguated"
+  assert_grep P5 "$PUBLIC" 'Reviewer flags combined with .*--respond.*ignored' "--respond reviewer flags are visibly ignored"
+  assert_grep P6 "$PUBLIC" 'argument-hint:.*\-\-ultracode.*\-\-codex' "public skill exposes reviewer flags"
 }
 
-t_sec1(){
-  assert_grep S1 "$REVEXEC" 'agy_included.*Stage 3\.5|Stage 3\.5.*agy_included|--no-agy.*Stage 3\.5.*(skip|건너)' "SEC-1: Stage 3.5 gated on agy_included"
-  assert_grep S2 "$REVEXEC" '\-\-no-agy.*fingerprint.*(변경하지|미변경|not).*|fingerprint.*변경하지 않' "SEC-1: --no-agy does not mutate fingerprint"
+t_precedence() {
+  assert_grep PR1 "$REVEXEC" 'resolve reviewer flags' "reviewer flags resolve before privacy"
+  assert_grep PR2 "$REVEXEC" '\-\-no-opus.*claude-opus' "--no-opus disables Claude role"
+  assert_grep PR3 "$ULTRA" '\-\-ultracode.*six focused lenses' "--ultracode selects six-lens fan-out"
+  assert_grep PR4 "$REVEXEC" 'named Claude agent or the Claude CLI bridge' "Claude capability fallback is explicit"
+  assert_grep PR5 "$REVEXEC" 'any error excludes.*agy' "agy decline remains per-run exclusion"
+  assert_grep PR6 "$CODEXREF" 'N_actual.*trusted successful roles' "N_actual counts trusted roles only"
+  assert_grep PR7 "$REVEXEC" 'N_actual == 0.*no verdict' "single-shot N=0 fails closed"
 }
 
-t_ultra_ref(){
-  assert_grep U1 "$ULTRA" '정확성|Correctness' "5 dimensions listed"
-  assert_grep U2 "$ULTRA" 'Workflow 가 .*문자 그대로 존재할 때만|도구 목록에 .Workflow' "ARCH-2 deterministic selection rule"
-  assert_grep U3 "$ULTRA" '먼저 codex/agy.*spawn|codex/agy.*먼저.*spawn' "ARCH-1 join contract (codex/agy spawn first, TQ-7)"
-  assert_grep U4 "$ULTRA" 'run-claude-reviewer\.sh' "path B bridge fallback"
-  assert_grep U5 "$ULTRA" 'floor\(line ?/ ?7\)|line_bucket' "VOICE-4 fixed bucket"
-  assert_grep U6 "$ULTRA" '\{file\}:\{line_bucket\}' "VOICE-1/2: identity key is {file}:{line_bucket} (TQ-3 positive)"
-  assert_grep U7 "$ULTRA" '강등·보존|무음 삭제 금지' "VOICE-6 demote-not-drop (TQ-7)"
-  assert_grep U8 "$ULTRA" 'partial-failure|K/5|≥1 샤드' "ARCH-8 partial-failure semantics"
-  assert_grep U9 "$WF_SKILL" 'ultracode-integration\.md' "SKILL points to new reference"
-  assert_grep U10 "$ULTRA" '최댓값 severity|severity 승격' "VOICE-1 max-severity promotion documented"
-  assert_grep U11 "$ULTRA" 'severity·category 는 키에서 제외|category 로 쪼개면.*이중 계산' "VOICE-1/2: key excludes severity+category (TQ-4)"
-  assert_grep U12 "$ULTRA" 'disjoint quorum 밴드|K ≥ 쿼럼\(=3\)' "CONS-10/SEC: opus_status disjoint quorum bands (SSOT)"
+t_security() {
+  assert_grep S1 "$REVEXEC" '\-\-no-agy.*skip the scan and preflight' "--no-agy short-circuits privacy work"
+  assert_grep S2 "$REVEXEC" 'create no state or config changes' "--no-agy makes no fingerprint/config mutation"
+  assert_grep S3 "$CODEXREF" 'changed result.*untrusted.*exclude' "generic reviewer mutation is excluded"
+  assert_grep S4 "$REVEXEC" '\-\-no-codex.*disables both' "--no-codex disables both Codex roles"
 }
 
-t_cmd_ultracode(){
-  assert_grep C1 "$REVEXEC" 'ultracode-integration\.md' "command references ultracode SSOT"
-  assert_grep C2 "$REVEXEC" 'codex/agy.*먼저.*spawn|먼저 codex/agy' "ARCH-1 ordering in command"
-  assert_grep C3 "$REVEXEC" 'Claude\(ultracode\)|단일.*보이스|single.*voice' "single-voice collapse referenced"
-  assert_grep C4 "$REVEXEC" 'disjoint quorum 밴드|K ≥ 쿼럼\(=3\)|샤드 성공 수 K' "CONS-10 opus_status disjoint quorum collapse (TQ-1)"
-  assert_grep C5 "$REVEXEC" 'Claude=ultracode|ultracode\(5-lens' "Review Mode ultracode label"
-  assert_grep C6 "$REVEXEC" 'agent-fanout fallback|UNVERIFIED fallback' "SC-4: fallback label present"
-  assert_absent C7 "$REVEXEC" 'iff ≥1 샤드' "REG-10: opus_status success NOT tied to ≥1 (disjoint quorum)"
-  assert_grep C8 "$REVEXEC" 'codex_included.*(NOT --no-codex|--no-codex 아님)|SEC-CODEX-1' "SEC-CODEX-1: --no-codex short-circuits mutation flow"
+t_ultracode() {
+  assert_grep U1 "$ULTRA" 'correctness, architecture, entropy, tests, readability' "six review dimensions are enumerated"
+  assert_grep U2 "$ULTRA" 'When named-agent capability exists' "fan-out is capability-selected"
+  assert_grep U3 "$REVEXEC" 'Launch every eligible role in a fresh background context' "eligible roles launch independently"
+  assert_grep U4 "$ULTRA" 'run-claude-reviewer.mjs' "fallback uses native Claude bridge"
+  assert_grep U5 "$ULTRA" 'seven-line bucket' "fixed seven-line bucket is documented"
+  assert_grep U6 "$ULTRA" 'severity, path, seven-line bucket, and substance' "issue identity inputs are explicit"
+  assert_grep U7 "$ULTRA" 'Keep lens-level provenance' "collapsed findings retain provenance"
+  assert_grep U8 "$ULTRA" '1 <= K < 4.*partial' "partial-failure band is explicit"
+  assert_grep U9 "$WF_SKILL" 'ultracode-integration.md' "workflow points to ultracode SSOT"
+  assert_grep U10 "$ULTRA" 'merge materially identical items' "collapse merges only material identity"
+  assert_grep U11 "$ULTRA" 'claude-opus.*voice to.*N_actual' "fan-out contributes one voice"
+  assert_grep U12 "$ULTRA" 'K >= 4.*success' "success requires quorum four"
 }
 
-t_reportfmt(){
-  assert_grep RF1 "$REPORTFMT" 'Claude=ultracode|ultracode\(5-lens' "report-format ultracode label"
-  assert_grep RF2 "$REPORTFMT" 'agy only|agy-only' "agy-only label (CONS-10)"
-  assert_grep RF3 "$REPORTFMT" 'disjoint quorum 밴드|opus_status.*쿼럼' "opus_status disjoint quorum collapse documented"
-  assert_grep RF4 "$REPORTFMT" '2-way \(codex-only \+ agy\)' "XF-3: codex-only+agy label present"
+t_execution_and_report() {
+  assert_grep C1 "$REVEXEC" 'Follow .*ultracode-integration.md' "review execution delegates to ultracode SSOT"
+  assert_grep C2 "$REVEXEC" 'Launch every eligible role' "review execution preserves independent launch"
+  assert_grep C3 "$REVEXEC" 'Six lenses collapse to one Anthropic voice' "review execution preserves one-voice accounting"
+  assert_absent C4 "$REVEXEC" 'K >= [0-9].*status is.*success' "quorum mechanics are not duplicated outside SSOT"
+  assert_grep C5 "$REVEXEC" '### 4.5 .*--ultracode' "review execution has ultracode branch"
+  assert_grep C6 "$ULTRA" 'degrade visibly' "fallback cannot claim verified fan-out"
+  assert_absent C7 "$ULTRA" 'K >= 1.*success|success.*K >= 1' "one shard cannot claim success"
+  assert_grep C8 "$REVEXEC" '\-\-no-codex.*disables both' "Codex disable precedes exposure flow"
+
+  assert_grep RF1 "$REPORTFMT" 'Claude=ultracode\(6-lens' "report labels ultracode mode"
+  assert_grep RF2 "$REPORTFMT" 'agy only|agy-only' "report labels agy-only mode"
+  assert_grep RF3 "$REPORTFMT" 'disjoint quorum.*K ≥.*4' "report mirrors quorum four"
+  assert_grep RF4 "$REPORTFMT" 'codex-only \+ agy' "report labels codex-only plus agy"
+
+  assert_grep X1 "$CODEXREF" 'runtime-dispatch.md.*owns role selection' "Codex reference defers capability ownership"
+  assert_grep X2 "$CODEXREF" 'Ultracode.*one Anthropic voice' "Codex synthesis counts collapsed ultracode once"
+  assert_absent X3 "$CODEXREF" 'K >= [0-9].*success' "Codex reference does not duplicate quorum bands"
 }
 
-t_codexref(){
-  assert_grep X1 "$CODEXREF" 'ultracode-integration\.md' "codex-integration links to ultracode SSOT"
-  assert_grep X2 "$CODEXREF" 'Claude\(ultracode\)|ultracode fan-out' "1-line note about ultracode voice"
-  # SKILL-4: collapse mechanics must NOT be duplicated here
-  assert_absent X3 "$CODEXREF" 'floor\(line ?/ ?7\)' "no duplicated collapse bucket here"
+t_phase6_and_loop() {
+  assert_grep E1 "$P6_PROMPT" 'Opus \(ultracode\)' "Phase 6 prompt preserves ultracode source"
+  assert_grep E3 "$RESP_FMT" 'Opus \(ultracode\)' "response format preserves ultracode source"
+  assert_grep E4 "$WF_SKILL" 'review_model.*non-empty installed Claude model alias' "workflow preserves arbitrary model aliases"
+  assert_absent E5 "$ROOT/agents/phase6-implementer.md" 'opus-ultracode' "Phase 6 implementer has no reviewer enum"
+
+  assert_grep L1 "$LOOP" 'argument-hint:.*ultracode.*codex-only' "loop exposes reviewer flags"
+  assert_grep L2 "$LOOP" 'Never forward .*--max' "loop has a never-forward set"
+  assert_grep L3 "$LOOP" 'Rounds 2\+ remove .*--ultracode' "rounds two plus remove ultracode"
+  assert_grep L4 "$LOOP" 'ultracode_consumed=true' "loop records ultracode consumption"
+  assert_grep L5 "$LOOP" 'N_actual == 0.*stop with operational failure' "loop N=0 is terminal"
+  assert_grep L6 "$LOOP" 'withhold.*--no-opus' "Codex-unavailable round retains a reviewer"
+  assert_grep L7 "$LOOP" '\-\-no-opus --no-agy' "integrated later rounds disable Opus and agy"
+  assert_grep L8 "$LOOP" 'floor\(line/7\)' "loop signature uses fixed bucket"
+  assert_absent L8b "$LOOP" 'line ±3' "stale moving bucket is absent"
+  assert_absent L9 "$LOOP" '\-\-contract.*only forwarded|only forward.*\-\-contract' "stale contract-only forwarding is absent"
+  assert_grep L10 "$LOOP" 'never requested ultracode, preserve the original reviewer' "plain loops retain original reviewer flags"
 }
 
-t_source_enum(){
-  # T7 정정: delegation-spec 는 enum 줄이 없으므로(214=예시값) 제외. prompt-contract + response-format + CLAUDE.md 만.
-  assert_grep E1 "$P6_PROMPT" 'Opus \(ultracode\)' "prompt-contract has Opus (ultracode)"
-  assert_grep E3 "$RESP_FMT"  'Opus \(ultracode\)' "response-format has Opus (ultracode)"
-  assert_grep E4 "$CLAUDEMD"  'opus-ultracode' "CLAUDE.md schema has opus-ultracode"
-  # absent-guards (편집 전후 모두 PASS): phase6-implementer 엔 enum 없음, delegation-spec 도 건드리지 않음
-  assert_absent E5 "$ROOT/agents/phase6-implementer.md" 'opus-ultracode|Opus \(ultracode\)' "phase6-implementer untouched (no enum there)"
+t_docs_and_versions() {
+  assert_grep D1 "$ROOT/README.md" '\-\-ultracode' "English README mentions ultracode"
+  assert_grep D2 "$ROOT/README.ko.md" '\-\-ultracode' "Korean README mentions ultracode"
+  assert_grep D3 "$PUBLIC" 'argument-hint:.*\-\-ultracode' "public skill is the flag discoverability authority"
+
+  version=$(node -p "require('$ROOT/package.json').version")
+  version_re=$(printf '%s' "$version" | sed 's/\./\\./g')
+  assert_grep V1 "$ROOT/.claude-plugin/plugin.json" "\"version\": *\"$version_re\"" "Claude manifest matches package version"
+  assert_grep V2 "$ROOT/.codex-plugin/plugin.json" "\"version\": *\"$version_re\"" "Codex manifest matches package version"
+  assert_grep V3 "$ROOT/package.json" "\"version\": *\"$version_re\"" "package version is readable"
+  assert_grep V4 "$ROOT/CHANGELOG.md" "^## \[$version_re\]" "English changelog contains current version"
+  assert_grep V5 "$ROOT/CHANGELOG.ko.md" "^## \[$version_re\]" "Korean changelog contains current version"
 }
 
-t_loop(){
-  assert_grep L1 "$LOOP" 'ultracode|codex-only' "SKILL-3: description/triggers mention ultracode/codex-only"
-  assert_grep L2 "$LOOP" 'never-forward|전달 안 함.*--max|--max.*전달 안' "LOOP-2: never-forward set"
-  assert_grep L3 "$LOOP" '--ultracode. 토큰을 제거|--ultracode.{0,3}토큰을 제거|strip.*--ultracode' "LOOP-3: strip --ultracode in R2+"
-  assert_grep L4 "$LOOP" 'ultracode_consumed' "ultracode_consumed gate"
-  assert_grep L5 "$LOOP" 'ultracode_consumed == false.*중단|--codex-only.*중단|reviewer.*0.*중단' "LOOP-1: codex-only -> stop branch"
-  assert_grep L6 "$LOOP" 'ultracode_consumed == true.*단일 Opus|통합 루프.*단일 Opus' "LOOP-1: integrated -> single-opus fallback"
-  assert_grep L7 "$LOOP" '--no-agy.*주입|R2\+.*--no-agy|라운드 2\+.*agy' "CONS-4: agy off in R2+"
-  assert_grep L8 "$LOOP" 'floor\(line ?/ ?7\)' "VOICE-4: signature uses fixed bucket"
-  assert_absent L8b "$LOOP" 'line ±3' "VOICE-4: no stale ±3 bucket remains"
-  assert_absent L9 "$LOOP" '\-\-contract.*만 전달' "F3: stale forward-only rule removed"
-  assert_grep L10 "$LOOP" 'ultracode_consumed == false.*그대로 유지|주입하지 않는다' "RLC-1/REG-1: R2+ injection gated on ultracode_consumed (no unconditional inject)"
+t_mutants() {
+  mutant=$(mktemp)
+  sed 's/Expand /Delay /' "$PUBLIC" > "$mutant"
+  assert_absent P1M "$mutant" 'Expand .*--codex-only.*before validation' "late-expansion mutant is rejected"
+
+  sed 's/skip the scan and preflight/run the scan and preflight/' "$REVEXEC" > "$mutant"
+  assert_absent S1M "$mutant" '\-\-no-agy.*skip the scan and preflight' "privacy-short-circuit mutant is rejected"
+
+  sed 's/K >= 4/K >= 1/' "$ULTRA" > "$mutant"
+  assert_absent U12M "$mutant" 'K >= 4.*success' "quorum-one mutant is rejected"
+
+  sed 's/N_actual == 0/N_actual > 0/' "$LOOP" > "$mutant"
+  assert_absent L5M "$mutant" 'N_actual == 0.*stop with operational failure' "N=0 fail-open mutant is rejected"
+  rm -f "$mutant"
 }
 
-t_docs(){
-  assert_grep D1 "$ROOT/README.md" '\-\-ultracode' "README mentions --ultracode"
-  assert_grep D2 "$ROOT/README.ko.md" '\-\-ultracode' "README.ko mentions --ultracode"
-  assert_grep D3 "$CLAUDEMD" '\-\-ultracode' "CLAUDE.md slash table mentions --ultracode"
-}
-
-t_version(){
-  assert_grep V1 "$ROOT/.claude-plugin/plugin.json" '"version": *"1\.12\.3"' "claude plugin 1.12.3"
-  assert_grep V2 "$ROOT/.codex-plugin/plugin.json" '"version": *"1\.12\.3"' "codex plugin 1.12.3"
-  assert_grep V3 "$ROOT/package.json" '"version": *"1\.12\.3"' "package.json 1.12.3"
-  assert_grep V4 "$ROOT/CHANGELOG.md" '1\.12\.3' "CHANGELOG has 1.12.3"
-  assert_grep V5 "$ROOT/CHANGELOG.ko.md" '1\.12\.3' "CHANGELOG.ko has 1.12.3"
-}
-
-# === main ===
 t_parse_validation
 t_precedence
-t_sec1
-t_ultra_ref
-t_cmd_ultracode
-t_reportfmt
-t_codexref
-t_source_enum
-t_loop
-t_docs
-t_version
+t_security
+t_ultracode
+t_execution_and_report
+t_phase6_and_loop
+t_docs_and_versions
+t_mutants
 echo "----"
 echo "ultracode-flags: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

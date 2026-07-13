@@ -80,6 +80,32 @@ test('Codex manifest exposes only the two public entrypoints and keeps hooks/MCP
   assert.deepEqual(JSON.parse(read('hooks/hooks.json')).hooks, {});
 });
 
+test('release documentation keeps Claude and Codex public route examples distinct', () => {
+  const publicSkill = read('skills/deep-review/SKILL.md');
+  const loopSkill = read('skills/deep-review-loop/SKILL.md');
+  const command = read('commands/deep-review.md');
+  const readmes = [read('README.md'), read('README.ko.md')];
+
+  assert.match(publicSkill, /\$deep-review:deep-review/u);
+  assert.match(publicSkill, /\/deep-review/u);
+  assert.match(loopSkill, /\$deep-review:deep-review-loop/u);
+  assert.match(loopSkill, /\/deep-review-loop/u);
+  assert.match(command, /same argument|same arguments|동일한 인자/iu);
+
+  for (const source of readmes) {
+    assert.match(source, /Claude Code/u);
+    assert.match(source, /Codex/u);
+    assert.equal(source.includes('/deep-review'), true);
+    assert.equal(source.includes('/deep-review --respond'), true);
+    assert.equal(source.includes('/deep-review-loop'), true);
+    assert.equal(source.includes('$deep-review:deep-review'), true);
+    assert.equal(source.includes('$deep-review:deep-review-loop'), true);
+    assert.match(source, /Node(?:\.js)? 22/u);
+    assert.match(source, /Windows 11/u);
+    assert.match(source, /Git Bash/u);
+  }
+});
+
 test('runtime dispatch SSOT is capability-based and defines the exact role matrix', () => {
   const dispatch = read('skills/deep-review-workflow/references/runtime-dispatch.md');
   const rows = [

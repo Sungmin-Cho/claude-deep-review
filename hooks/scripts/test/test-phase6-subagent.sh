@@ -88,13 +88,13 @@ else
   fail 4 "phase6-implementer not referenced in respond-execution.md"
 fi
 
-# 5. init-setup.md 의 .gitignore 권장 블록에 .deep-review/tmp/ 존재
-# extract_range: "### 8. .gitignore" 라인부터 다음 "### " 라인 직전까지
-gitignore_block=$(extract_range "$INITSETUP" '^### 8\. \.gitignore' '^### [0-9]')
-if echo "$gitignore_block" | grep -q "\.deep-review/tmp/"; then
-  pass 5 ".deep-review/tmp/ present in init .gitignore block"
+# 5. init-setup.md 의 현재 Ignore local state 블록에 .deep-review/tmp/ 존재.
+gitignore_block=$(extract_range "$INITSETUP" '^## 4\. Ignore local state' '^## [0-9]')
+if echo "$gitignore_block" | grep -q '^\.deep-review/tmp/$' \
+   && ! echo "$gitignore_block" | grep -Eq 'mkdir[[:space:]]+-p|shopt'; then
+  pass 5 ".deep-review/tmp/ present in shell-free init ignore block"
 else
-  fail 5 ".deep-review/tmp/ missing from init .gitignore block"
+  fail 5 ".deep-review/tmp/ missing or init ignore block reintroduced shell execution"
 fi
 
 # 6. response-format.md 에 execution_path 필드 언급 (snake_case 정식 표기, 스펙 §4.2)
@@ -141,25 +141,46 @@ else
   fail 10 "forbidden 'Execution path' variant found:\n$offenders"
 fi
 
-# 11. deep-review-loop 가 respond-execution.md 를 Read() 구문으로 재배선 + 옛 인라인 섹션 의존 제거 (P6, R3)
-# 단순 'respond-execution.md' 문자열 grep 금지(산문 언급만으로 통과) — 실제 Read({file_path:...}) 구문 매칭.
-if grep -Eq 'Read\(\{[[:space:]]*file_path:[[:space:]]*"[^"]*respond-execution\.md"' "$LOOP" \
+# 11. deep-review-loop 는 public --respond branch 에 exact absolute report path 를
+# 전달하고, respond implementation 을 다시 인라인하지 않는다.
+if grep -Eq 'public .*--respond.* branch' "$LOOP" \
+   && grep -q 'with the exact absolute' "$LOOP" \
+   && grep -q 'round_review_report_path' "$LOOP" \
    && ! grep -q '## Steps (대응 모드' "$LOOP"; then
-  pass 11 "deep-review-loop uses Read(...respond-execution.md) and no longer inlines command --respond section"
+  pass 11 "deep-review-loop delegates exact report to public --respond branch"
 else
-  fail 11 "deep-review-loop rewiring incomplete (missing Read() call or stale '## Steps (대응 모드' dependency)"
+  fail 11 "deep-review-loop public --respond delegation is incomplete or stale inline prose returned"
 fi
 
-# 12. phase6-protocol.yml paths 가 skills/deep-review-workflow/** 를 커버 (impl-fix R2)
-# — 이 워크플로우가 실행하는 test-phase6-subagent.sh 는 위 INITSETUP(init-setup.md,
-#   skills/deep-review-workflow/references/)을 읽으므로, 그 파일만 바꾼 PR 에서도 phase6
-#   테스트가 발화하려면 paths 에 해당 prefix 가 있어야 한다(구체 트리거-갭 봉합). 이는
-#   특정 워크플로우 한 곳의 회귀 핀일 뿐, 일반 트리거-커버리지 검증기는 아니다.
-PHASE6WF="$ROOT/.github/workflows/phase6-protocol.yml"
-if grep -qE "^[[:space:]]*-[[:space:]]*'skills/deep-review-workflow/\*\*'" "$PHASE6WF"; then
-  pass 12 "phase6-protocol.yml paths covers skills/deep-review-workflow/** (init-setup.md trigger)"
+# ID 5/11 decisive mutants: deleting the tmp ignore or public branch token
+# must make the corresponding current-contract predicates false.
+mutant_init=$(mktemp)
+grep -v '^\.deep-review/tmp/$' "$INITSETUP" > "$mutant_init"
+mutant_init_block=$(extract_range "$mutant_init" '^## 4\. Ignore local state' '^## [0-9]')
+if echo "$mutant_init_block" | grep -q '^\.deep-review/tmp/$'; then
+  fail 5M "tmp-ignore deletion mutant escaped ID 5"
 else
-  fail 12 "phase6-protocol.yml paths missing skills/deep-review-workflow/** (init-setup.md edits won't trigger phase6 tests)"
+  pass 5M "tmp-ignore deletion mutant rejected"
+fi
+
+mutant_loop=$(mktemp)
+sed 's/public .*--respond.* branch/private response branch/' "$LOOP" > "$mutant_loop"
+if grep -Eq 'public .*--respond.* branch' "$mutant_loop"; then
+  fail 11M "private-branch mutant escaped ID 11"
+else
+  pass 11M "private-branch mutant rejected"
+fi
+rm -f "$mutant_init" "$mutant_loop"
+
+# 12. phase6-protocol.yml paths 가 release-wide skills/** class 를 커버한다.
+# — 이 워크플로우가 실행하는 Node contract tests는 위 INITSETUP을 포함한 전체 skill
+#   runtime을 읽으므로, 좁은 historical prefix가 아니라 Task 9의 명시적 skills/**
+#   release filter가 있어야 어떤 skill runtime edit도 Phase 6 gate를 발화한다.
+PHASE6WF="$ROOT/.github/workflows/phase6-protocol.yml"
+if grep -qE "^[[:space:]]*-[[:space:]]*'skills/\*\*'" "$PHASE6WF"; then
+  pass 12 "phase6-protocol.yml paths covers the release-wide skills/** class"
+else
+  fail 12 "phase6-protocol.yml paths missing skills/** (skill runtime edits won't trigger Phase 6 tests)"
 fi
 
 echo "---"
