@@ -309,8 +309,20 @@ function gitObjectInventory(repo) {
 
 function replaceFileIdentity(file) {
   const bytes = readFileSync(file);
-  unlinkSync(file);
-  writeFileSync(file, bytes, { mode: 0o600 });
+  const before = lstatSync(file, { bigint: true });
+  const held = `${file}.held-old-inode-${crypto.randomUUID()}`;
+  renameSync(file, held);
+  try {
+    writeFileSync(file, bytes, { mode: 0o600, flag: 'wx' });
+    const after = lstatSync(file, { bigint: true });
+    assert.equal(
+      before.dev === after.dev && before.ino === after.ino,
+      false,
+      'replacement fixture must create a distinct file identity',
+    );
+  } finally {
+    rmSync(held, { force: true });
+  }
 }
 
 function advanceHeadWithTarget(repo, target) {
@@ -1897,9 +1909,7 @@ test('[group 9] a byte-identical survivor replacement cannot authorize torn-peer
   ensureCutover({ repo });
   const inspection = __testing.inspectProtocol({ repo });
   const survivor = join(repo, v3SlotRelative('a'));
-  const bytes = readFileSync(survivor);
-  unlinkSync(survivor);
-  writeFileSync(survivor, bytes);
+  replaceFileIdentity(survivor);
   writeFileSync(join(repo, v3SlotRelative('b')), '{torn');
   const before = protocolSnapshot(repo);
   const result = ensureCutover({ repo });
@@ -1919,9 +1929,7 @@ test('[group 9] a byte-identical survivor replacement cannot authorize torn-peer
   const selectedSlot = selectedInspection.publication.selected_slot;
   const otherSlot = selectedSlot === 'a' ? 'b' : 'a';
   const selectedPath = join(selectedRepo, v3SlotRelative(selectedSlot));
-  const selectedBytes = readFileSync(selectedPath);
-  unlinkSync(selectedPath);
-  writeFileSync(selectedPath, selectedBytes);
+  replaceFileIdentity(selectedPath);
   writeFileSync(join(selectedRepo, v3SlotRelative(otherSlot)), '{torn');
   const selectedBefore = protocolSnapshot(selectedRepo);
   const selectedResult = ensureCutover({ repo: selectedRepo });
