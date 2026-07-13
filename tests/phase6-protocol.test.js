@@ -817,7 +817,7 @@ test('raw paths survive snapshot, claim comparison, recover, and path-limited co
     const mangled = completedGroup([invalid]).replace(jsonToken(invalid), JSON.stringify('invalid-�.txt'));
     assert.throws(
       () => protocol.verifyPhase6({ repo: badRepo, snapshotPath: badSnapshot.snapshot_path, groupResult: mangled }),
-      /claim.*delta|delta.*claim/u,
+      /Phase 6 claim is outside the allowlist/u,
     );
   }
 });
