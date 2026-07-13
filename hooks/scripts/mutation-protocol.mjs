@@ -865,6 +865,12 @@ function physicalExistingPath(value, label) {
   }
 }
 
+function physicalProspectivePath(value, label) {
+  const absolute = resolve(value);
+  const physicalParent = physicalExistingPath(dirname(absolute), `${label} parent`);
+  return join(physicalParent, basename(absolute));
+}
+
 function checkRef(repo, name, allowOneLevel, options) {
   const args = ['check-ref-format'];
   if (allowOneLevel) args.push('--allow-onelevel');
@@ -1000,7 +1006,10 @@ export function preflightRepository({ repo, env, gitRunner }) {
     ['rev-parse', '--path-format=absolute', '--git-path', 'index'],
     options,
   ).stdout, 'index path');
-  const indexPath = isAbsolute(indexOutput) ? indexOutput : resolve(physicalRepo, indexOutput);
+  const indexCandidate = isAbsolute(indexOutput)
+    ? indexOutput
+    : resolve(physicalRepo, indexOutput);
+  const indexPath = physicalProspectivePath(indexCandidate, 'Git index');
   const commonRelative = relative(commonDirectory, gitDirectory);
   if (!(gitDirectory === commonDirectory
       || (commonRelative && commonRelative !== '..'

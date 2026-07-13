@@ -1168,6 +1168,26 @@ test('[group 2] repository topology and every inherited GIT_* spelling are sanit
   const zeroBefore = protocolSnapshot(zero);
   assert.equal(ensureCutover({ repo: zero }).status, 'ready');
   assert.notDeepEqual(protocolSnapshot(zero), zeroBefore);
+
+  const equivalentRepo = createGitFixture('group-2-equivalent-index-spelling');
+  const nativeIndex = indexPath(equivalentRepo);
+  const equivalentIndex = process.platform === 'win32'
+    ? nativeIndex.replaceAll('\\', '/')
+    : `${dirname(nativeIndex)}/./${basename(nativeIndex)}`;
+  const equivalent = __testing.preflightRepository({
+    repo: equivalentRepo,
+    gitRunner(gitRepo, args, options) {
+      if (args.includes('--git-path') && args.at(-1) === 'index') {
+        return {
+          code: 0,
+          stdout: Buffer.from(`${equivalentIndex}\n`),
+          stderr: Buffer.alloc(0),
+        };
+      }
+      return gitResult(gitRepo, args, options);
+    },
+  });
+  assert.equal(equivalent.indexPath, join(equivalent.gitDirectory, 'index'));
 });
 
 // Group 3: legacy quiescence and byte-identical refusal.
