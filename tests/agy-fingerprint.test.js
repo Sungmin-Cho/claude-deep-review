@@ -687,3 +687,45 @@ test('native Windows agy transport truncates below CreateProcess and cmd limits 
     assert.ok(sentPrompt.length < (binary.endsWith('.cmd') ? 4_000 : 16_000));
   }
 });
+
+test('POSIX agy transport keeps the prompt argument below the Linux per-string exec limit', async () => {
+  const repo = repository('agy-posix-command-line');
+  const configPath = config(repo);
+  const promptFile = join(repo, 'prompt.txt');
+  const outputFile = join(repo, 'out.txt');
+  writeFileSync(promptFile, Buffer.alloc(198_001, 97));
+
+  const calls = [];
+  const privacyPreparer = async () => ({
+    hits: [], fingerprint: 'same', outcome: 'acknowledged', error: null,
+  });
+  const result = await runAgyReviewer({
+    binary: '/usr/local/bin/agy',
+    projectRoot: repo,
+    pluginRoot,
+    configPath,
+    promptFile,
+    outputFile,
+    platform: 'linux',
+    mode: 'off',
+    privacyPreparer,
+    fingerprintCapturer: async () => ({ mode: 'off', digest: null, entries: 0, error: null }),
+    async processRunner(command, args) {
+      calls.push({ command, args });
+      return {
+        code: 0,
+        timedOut: false,
+        stdout: Buffer.from('partial review must be excluded\n'),
+        stderr: Buffer.alloc(0),
+      };
+    },
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(result.status, 'prompt_too_large');
+  assert.equal(result.truncated, true);
+  const sentPrompt = calls[0].args[calls[0].args.indexOf('-p') + 1];
+  const promptBytes = Buffer.byteLength(sentPrompt, 'utf8') + 1;
+  assert.ok(promptBytes <= 120 * 1024, `prompt argument was ${promptBytes} bytes`);
+  assert.ok(sentPrompt.startsWith('READ-ONLY REVIEW MODE'));
+});

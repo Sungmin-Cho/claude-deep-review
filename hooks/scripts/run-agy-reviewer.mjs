@@ -13,6 +13,7 @@ const BODY_LIMIT = 198_000;
 const WINDOWS_CREATE_PROCESS_LIMIT = 32_767;
 const WINDOWS_CMD_LIMIT = 8_191;
 const WINDOWS_COMMAND_HEADROOM = 512;
+const POSIX_PROMPT_ARGUMENT_LIMIT = 120 * 1024;
 const CMD_META_CHARACTERS = /([()\][!^"`<>&|;, *?])/g;
 const CMD_LITERAL_PERCENT_ENV = 'DEEP_REVIEW_CMD_LITERAL_PERCENT_4BFE8C1A';
 const READONLY_PREAMBLE = `READ-ONLY REVIEW MODE - ABSOLUTE, NON-NEGOTIABLE CONSTRAINT
@@ -142,22 +143,16 @@ function preparePromptTransport({ binary, body, projectRoot, timeoutSeconds, mod
       promptContent,
       estimatedUnits: platform === 'win32'
         ? estimateWindowsCommandUnits(binary, args)
-        : null,
+        : Buffer.byteLength(promptContent, 'utf8') + 1,
     };
   };
 
-  if (platform !== 'win32') {
-    return {
-      ...build(ordinaryLimit),
-      safe: true,
-      bodyBytes: ordinaryLimit,
-      truncated: body.length > ordinaryLimit,
-      transportTruncated: false,
-    };
-  }
-
-  const limit = windowsCommandLimit(binary);
-  const budget = limit - WINDOWS_COMMAND_HEADROOM;
+  const limit = platform === 'win32'
+    ? windowsCommandLimit(binary)
+    : POSIX_PROMPT_ARGUMENT_LIMIT;
+  const budget = platform === 'win32'
+    ? limit - WINDOWS_COMMAND_HEADROOM
+    : limit;
   let low = 0;
   let high = ordinaryLimit;
   let best = build(0);
@@ -276,14 +271,14 @@ export async function runAgyReviewer(options = {}) {
     warnings.push(`prompt body exceeded ${BODY_LIMIT} bytes and was truncated`);
   }
   if (promptTransport.transportTruncated) {
-    warnings.push('prompt body exceeded the safe native Windows command-line budget and was truncated');
+    warnings.push('prompt body exceeded the safe host command-line argument budget and was truncated');
   }
   if (!promptTransport.safe) {
     const processResult = {
       code: 0,
       timedOut: false,
       stdout: Buffer.alloc(0),
-      stderr: Buffer.from('native Windows command-line budget is unavailable for the required arguments\n'),
+      stderr: Buffer.from('host command-line argument budget is unavailable for the required arguments\n'),
     };
     const after = await fingerprintCapturer({ repo: projectRoot, pluginRoot, mode });
     const mutation = fingerprintChanged(before, after);
@@ -411,6 +406,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 
 export const __testing = Object.freeze({
   BODY_LIMIT,
+  POSIX_PROMPT_ARGUMENT_LIMIT,
   READONLY_PREAMBLE,
   estimateWindowsCommandUnits,
   fingerprintChanged,
