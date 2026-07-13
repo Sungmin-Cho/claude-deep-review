@@ -2,10 +2,13 @@
 
 const assert = require('node:assert/strict');
 const {
-  cpSync,
+  chmodSync,
+  copyFileSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } = require('node:fs');
 const path = require('node:path');
@@ -27,6 +30,21 @@ after(() => {
   for (const root of temporaryRoots) rmSync(root, { recursive: true, force: true });
 });
 
+function copyInstalledTree(source, destination) {
+  mkdirSync(destination, { recursive: true });
+  for (const entry of readdirSync(source, { withFileTypes: true })) {
+    const from = path.join(source, entry.name);
+    const to = path.join(destination, entry.name);
+    if (entry.isDirectory()) copyInstalledTree(from, to);
+    else if (entry.isFile()) {
+      copyFileSync(from, to);
+      chmodSync(to, statSync(from).mode & 0o777);
+    } else {
+      throw new Error(`unsupported installed fixture entry: ${from}`);
+    }
+  }
+}
+
 function installPluginFixture() {
   const repo = createGitFixture('deep review 공간 한글 Ω');
   const installedRoot = path.join(fixtureRootFor(repo), 'installed plugin 공간 Ω');
@@ -39,11 +57,12 @@ function installPluginFixture() {
     '.claude-plugin',
     '.codex-plugin',
   ]) {
-    cpSync(path.join(sourceRoot, relativePath), path.join(installedRoot, relativePath), {
-      recursive: true,
-    });
+    copyInstalledTree(
+      path.join(sourceRoot, relativePath),
+      path.join(installedRoot, relativePath),
+    );
   }
-  cpSync(path.join(sourceRoot, 'package.json'), path.join(installedRoot, 'package.json'));
+  copyFileSync(path.join(sourceRoot, 'package.json'), path.join(installedRoot, 'package.json'));
   assert.equal(path.basename(repo), 'deep review 공간 한글 Ω');
   return { repo, installedRoot };
 }
