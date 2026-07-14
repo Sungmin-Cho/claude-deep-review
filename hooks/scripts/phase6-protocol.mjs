@@ -613,21 +613,9 @@ function tokenizeLegacyCommand(value) {
   const tokens = [];
   let token = '';
   let quote = null;
-  let escaped = false;
   let active = false;
   for (let index = 0; index < value.length; index += 1) {
     const character = value[index];
-    if (escaped) {
-      token += character;
-      escaped = false;
-      active = true;
-      continue;
-    }
-    if (character === '\\') {
-      escaped = true;
-      active = true;
-      continue;
-    }
     if (quote) {
       if (character === quote) quote = null;
       else token += character;
@@ -653,7 +641,7 @@ function tokenizeLegacyCommand(value) {
     token += character;
     active = true;
   }
-  if (escaped || quote) throw new Error('legacy command contains an unterminated quote or escape');
+  if (quote) throw new Error('legacy command contains an unterminated quote');
   if (active) tokens.push(token);
   if (tokens.length === 0) throw new Error('legacy command produced no argv tokens');
   return tokens;

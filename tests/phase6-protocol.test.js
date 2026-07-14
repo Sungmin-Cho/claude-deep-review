@@ -80,6 +80,10 @@ function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
 function jsonToken(rawPath) {
   return JSON.stringify(repoPath.decodeRepoPath(rawPath));
 }
@@ -582,6 +586,26 @@ test('structured logged tests preserve argv/stdout/stderr and reject free-form s
   });
   assert.equal(quoted.code, 0);
   assert.match(readFileSync(logPath, 'utf8'), /quoted value Ω/u);
+
+  const windowsPath = 'C:\\hostedtoolcache\\windows\\node\\22.23.1\\x64\\node.exe';
+  const windowsPathResult = await protocol.runLoggedTest({
+    repo,
+    itemId: 'ITEM-9B',
+    command: `"${process.execPath}" -e "process.stdout.write(process.argv[1])" "${windowsPath}"`,
+    logPath,
+  });
+  assert.equal(windowsPathResult.code, 0);
+  assert.match(readFileSync(logPath, 'utf8'), new RegExp(escapeRegex(windowsPath)));
+
+  await assert.rejects(
+    protocol.runLoggedTest({
+      repo,
+      itemId: 'ITEM-9C',
+      command: `"${process.execPath}" -e "process.stdout.write('must-not-run')" \\;`,
+      logPath,
+    }),
+    /shell control|redirection/u,
+  );
 
   const timed = await protocol.runLoggedTest({
     repo,
