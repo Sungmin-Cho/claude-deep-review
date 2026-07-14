@@ -794,10 +794,13 @@ test('raw paths survive snapshot, claim comparison, recover, and path-limited co
     Buffer.from('space name.txt'),
     Buffer.from('한글 Ω.txt'),
     Buffer.from('-leading.txt'),
-    Buffer.from(':(glob)magic.txt'),
   ];
   if (process.platform !== 'win32') {
-    rawPaths.push(Buffer.from('tab\tname.txt'), Buffer.from('line\nname.txt'));
+    rawPaths.push(
+      Buffer.from(':(glob)magic.txt'),
+      Buffer.from('tab\tname.txt'),
+      Buffer.from('line\nname.txt'),
+    );
   }
   if (process.platform === 'linux') {
     rawPaths.push(
