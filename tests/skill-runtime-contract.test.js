@@ -24,11 +24,15 @@ function escapeRegex(value) {
 }
 
 function anchoredBody(source, name) {
+  const normalized = source.replace(/\r\n|\r/gu, '\n');
   const start = `<!-- ${name}:start -->`;
   const end = `<!-- ${name}:end -->`;
-  assert.notEqual(source.indexOf(start), -1, `${name} start marker missing`);
-  assert.notEqual(source.indexOf(end), -1, `${name} end marker missing`);
-  return source.slice(source.indexOf(start) + start.length, source.indexOf(end));
+  assert.notEqual(normalized.indexOf(start), -1, `${name} start marker missing`);
+  assert.notEqual(normalized.indexOf(end), -1, `${name} end marker missing`);
+  return normalized.slice(
+    normalized.indexOf(start) + start.length,
+    normalized.indexOf(end),
+  );
 }
 
 function runLoop(args) {
@@ -272,8 +276,14 @@ test('init is shell-free and doctrine anchors remain byte-identical under the No
   assert.match(criteria, /build-reviewer-payload\.mjs.{0,160}all supported runtimes/is);
   assert.match(criteria, /extract-fp-doctrine\.sh.{0,120}Unix parity oracle/is);
   assert.doesNotMatch(criteria, /extract-fp-doctrine\.sh.{0,120}(?:inject|주입)/is);
-  assert.equal(sha256(anchoredBody(criteria, 'fp-doctrine')), '1cfa74f3e6af65b7d778a476a3faf18d4e780392393ab0251bd1851b4cbf2dbe');
-  assert.equal(sha256(anchoredBody(criteria, 'fp-conservative')), '14a3f66dc8637dc14bc7a39c349dcc606a208f50c29ba8a934b8e6696ef1ba08');
+  const doctrineLf = anchoredBody(criteria, 'fp-doctrine');
+  const doctrineCrlf = anchoredBody(criteria.replace(/\r\n|\n|\r/gu, '\r\n'), 'fp-doctrine');
+  assert.equal(doctrineCrlf, doctrineLf);
+  assert.equal(sha256(doctrineLf), '1cfa74f3e6af65b7d778a476a3faf18d4e780392393ab0251bd1851b4cbf2dbe');
+  const conservativeLf = anchoredBody(criteria, 'fp-conservative');
+  const conservativeCrlf = anchoredBody(criteria.replace(/\r\n|\n|\r/gu, '\r\n'), 'fp-conservative');
+  assert.equal(conservativeCrlf, conservativeLf);
+  assert.equal(sha256(conservativeLf), '14a3f66dc8637dc14bc7a39c349dcc606a208f50c29ba8a934b8e6696ef1ba08');
 });
 
 test('loop-state snapshots sets, enforces one-report delta, compares paths, and emits metrics JSON', () => {
