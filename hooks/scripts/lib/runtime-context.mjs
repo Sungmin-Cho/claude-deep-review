@@ -22,9 +22,7 @@ export function detectRuntimeHost(env = process.env) {
 
 export function resolvePluginRoot({ env = process.env, moduleUrl = import.meta.url } = {}) {
   const configured = env.PLUGIN_ROOT || env.CLAUDE_PLUGIN_ROOT;
-  return configured
-    ? resolve(configured)
-    : fileURLToPath(new URL('../../..', moduleUrl));
+  return resolve(configured || fileURLToPath(new URL('../../..', moduleUrl)));
 }
 
 export function atomicWriteFile(filePath, data, options = {}) {

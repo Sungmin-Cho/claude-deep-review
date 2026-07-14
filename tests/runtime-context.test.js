@@ -212,7 +212,7 @@ test('PLUGIN_ROOT wins and module URL is the final root fallback', async () => {
   const moduleUrl = pathToFileURL(join(root, 'hooks', 'scripts', 'lib', 'probe.mjs')).href;
   assert.equal(
     resolvePluginRoot({ env: {}, moduleUrl }),
-    require('node:url').fileURLToPath(new URL('../../..', moduleUrl)),
+    root,
   );
 });
 
