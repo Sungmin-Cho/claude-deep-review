@@ -32,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     name: native tests (${{ matrix.os }})
     steps:
@@ -45,6 +45,46 @@ jobs:
 
       - name: Run native tests
         run: npm test
+
+  windows-test-shards:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - non-mutation
+          - groups-01-06
+          - groups-07-12
+          - groups-13-18
+          - groups-19-23
+          - r1-r2-core
+          - r2-c3
+          - r3-core
+          - r3-c3-r4
+          - r5-r6
+    runs-on: windows-latest
+    timeout-minutes: 20
+    name: Windows native shard (${{ matrix.shard }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run native test shard
+        run: node scripts/run-windows-native-shard.mjs "${{ matrix.shard }}"
+
+  windows-tests:
+    if: ${{ always() }}
+    needs: windows-test-shards
+    runs-on: ubuntu-latest
+    name: native tests (windows-latest)
+    steps:
+      - name: Require every Windows shard
+        env:
+          SHARD_RESULT: ${{ needs.windows-test-shards.result }}
+        run: test "$SHARD_RESULT" = success
 
   legacy-unix:
     strategy:
