@@ -146,7 +146,9 @@ function prepareSpawn(command, args, env) {
     || 'cmd.exe';
   const powerShellShim = siblingPowerShellShim(resolved);
   const powerShell = resolveExecutable('pwsh.exe', env)
-    || resolveExecutable('powershell.exe', env);
+    || resolveExecutable('powershell.exe', env)
+    || resolveExecutable('pwsh.exe', process.env)
+    || resolveExecutable('powershell.exe', process.env);
   if (powerShellShim && powerShell) {
     return {
       command: powerShell,
