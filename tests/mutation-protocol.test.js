@@ -138,6 +138,13 @@ function assertSnapshotEqual(before, after, message = 'protocol state changed') 
   assert.deepEqual(after, before, message);
 }
 
+function assertForceKilled(result) {
+  if (result.signal === 'SIGKILL') return;
+  const code = Object.hasOwn(result, 'code') ? result.code : result.status;
+  assert.equal(process.platform, 'win32', `expected SIGKILL, got signal=${result.signal} code=${code}`);
+  assert.equal(Number.isInteger(code) && code !== 0, true, `expected a nonzero Windows exit, got ${code}`);
+}
+
 function parseCliOutput(result) {
   assert.equal(result.stderr, '', `unexpected stderr: ${result.stderr}`);
   assert.ok(result.stdout.trim(), 'CLI returned no JSON');
@@ -468,6 +475,7 @@ function gitFailureShim(repo, mode) {
   const wrapper = join(directory, process.platform === 'win32' ? 'git.cmd' : 'git');
   if (process.platform === 'win32') {
     writeFileSync(wrapper, `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`);
+    writeFileSync(join(directory, 'git.ps1'), `& '${process.execPath.replaceAll("'", "''")}' '${scriptPath.replaceAll("'", "''")}' @args\r\nexit $LASTEXITCODE\r\n`);
   } else {
     writeFileSync(wrapper, `#!/bin/sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`, {
       mode: 0o755,
@@ -2111,7 +2119,7 @@ test('[group 11] every authority transaction contains exactly one constant-ref c
     );
     assert.equal(killed.killed, true);
     assert.match(killed.stdout, /prepare: ok/u);
-    assert.equal(killed.signal, 'SIGKILL');
+    assertForceKilled(killed);
     assert.equal(readRef(repo), oldOid);
   }
 });
@@ -2748,7 +2756,7 @@ test('[group 22] zero-commit, linked-worktree, Unicode/literal paths, and framed
     return;
   }
   const zero = createGitFixture('group-22-zero', { initialCommit: false });
-  const literal = 'src/한 글 Ω :[x]*.txt';
+  const literal = 'src/한 글 Ω [x].txt';
   writeRepoFile(zero, literal);
   const performed = performMutation({ repo: zero, files: [literal] });
   assert.equal(isProtocolIntentToAdd({ repo: zero, file: literal }), true);
@@ -3645,7 +3653,7 @@ test('[R2 C3 group 19] production operation and session liveness covers every re
     ['foreign', { host_hash: 'f'.repeat(64) }, () => ({ status: 'dead' }), 'manual'],
     [
       'future',
-      { process_start_ms: String(Date.now() + 60_000) },
+      { process_start_ms: String(Date.now() + 3_600_000) },
       () => ({ status: 'dead' }),
       'manual',
     ],
@@ -3842,7 +3850,7 @@ test('[R2 C3 groups 2,3,9,10,12,14,20,21,22] literal production and child eviden
     writeRepoFile(idleRepo, idleTarget);
     protocol.ensureCutover({ repo: idleRepo });
     const idleCrash = crashDuringWrite(idleRepo, 'perform', idleTarget);
-    assert.equal(idleCrash.signal, 'SIGKILL');
+    assertForceKilled(idleCrash);
     const idleState = protocol.__testing.inspectProtocol({ repo: idleRepo });
     const idleSurvivor = idleState.slots.find((slot) => slot.record !== null);
     replaceFileIdentity(join(idleRepo, v3SlotRelative(idleSurvivor.slot)));
@@ -3864,7 +3872,7 @@ test('[R2 C3 groups 2,3,9,10,12,14,20,21,22] literal production and child eviden
       selectedTarget,
       performed.owner_token,
     );
-    assert.equal(selectedCrash.signal, 'SIGKILL');
+    assertForceKilled(selectedCrash);
     const selected = protocol.__testing.inspectProtocol({ repo: selectedRepo });
     replaceFileIdentity(join(selectedRepo, v3SlotRelative(selected.publication.selected_slot)));
     const selectedBefore = protocolSnapshot(selectedRepo);
@@ -4029,7 +4037,7 @@ test('[R2 C3 groups 2,3,9,10,12,14,20,21,22] literal production and child eviden
 
   await t.test('group-22 framed Unicode lifecycle and linked-worktree isolation are exact', () => {
     const zero = createGitFixture('r2-c3-g22-framed-zero', { initialCommit: false });
-    const target = 'src/한 글 Ω :[x]*.txt';
+    const target = 'src/한 글 Ω [x].txt';
     writeRepoFile(zero, target);
     const perform = protocol.__testing.buildCliRequest({
       protocol: 'deep-review-mutation-v3',

@@ -59,6 +59,7 @@ process.stdout.write('agy review ok\\n');
   if (process.platform !== 'win32') return script;
   const wrapper = join(root, 'agy.cmd');
   writeFileSync(wrapper, `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`);
+  writeFileSync(join(root, 'agy.ps1'), `& '${process.execPath.replaceAll("'", "''")}' '${script.replaceAll("'", "''")}' @args\r\nexit $LASTEXITCODE\r\n`);
   return wrapper;
 }
 

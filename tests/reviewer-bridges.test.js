@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +36,7 @@ if (behavior === 'success') process.stdout.write('review ok Ω\\n');
   if (process.platform !== 'win32' || nodeModule) return script;
   const wrapper = join(root, `${name}.cmd`);
   writeFileSync(wrapper, `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`);
+  writeFileSync(join(root, `${name}.ps1`), `& '${process.execPath.replaceAll("'", "''")}' '${script.replaceAll("'", "''")}' @args\r\nexit $LASTEXITCODE\r\n`);
   return wrapper;
 }
 
@@ -77,7 +78,12 @@ test('Claude bridge preserves argv, stdin, Unicode paths, cwd, and arbitrary mod
   assert.equal(readFileSync(output, 'utf8'), 'review ok Ω\n');
   assert.equal(readFileSync(`${output}.status`, 'utf8'), 'success\n');
   const [row] = rows(log);
-  assert.equal(row.cwd, realpathSync(projectRoot));
+  const expectedCwd = statSync(projectRoot);
+  const actualCwd = statSync(row.cwd);
+  assert.deepEqual(
+    [actualCwd.dev, actualCwd.ino],
+    [expectedCwd.dev, expectedCwd.ino],
+  );
   assert.equal(row.stdin, 'shared prompt 리뷰 Ω');
   assert.deepEqual(row.argv, [
     '-p',

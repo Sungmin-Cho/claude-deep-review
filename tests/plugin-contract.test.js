@@ -87,12 +87,28 @@ test('release CI has exact Node 22 native and Unix legacy matrices', () => {
   const primary = jobBlock(primaryWorkflow, 'tests');
   assert.deepEqual(
     matrixOperatingSystems(primary),
-    ['ubuntu-latest', 'macos-latest', 'windows-latest'],
+    ['ubuntu-latest', 'macos-latest'],
   );
   assert.match(primary, /actions\/setup-node@v4/u);
   assert.match(primary, /node-version:\s*['"]22['"]/u);
   assert.match(primary, /run:\s*npm test(?:\s|$)/u);
   assert.doesNotMatch(primary, /\bbash\b|\bGit Bash\b/iu);
+
+  const windowsShards = jobBlock(primaryWorkflow, 'windows-test-shards');
+  assert.match(windowsShards, /runs-on:\s*windows-latest/u);
+  assert.match(
+    windowsShards,
+    /timeout-minutes:\s*\$\{\{ matrix\.shard == 'group-07' && 60 \|\| 30 \}\}/u,
+  );
+  assert.match(windowsShards, /actions\/setup-node@v4/u);
+  assert.match(windowsShards, /node-version:\s*['"]22['"]/u);
+  assert.match(windowsShards, /node scripts\/run-windows-native-shard\.mjs/u);
+  assert.doesNotMatch(windowsShards, /\bbash\b|\bGit Bash\b/iu);
+
+  const windows = jobBlock(primaryWorkflow, 'windows-tests');
+  assert.match(windows, /if:\s*\$\{\{ always\(\) \}\}/u);
+  assert.match(windows, /needs:\s*windows-test-shards/u);
+  assert.match(windows, /name:\s*native tests \(windows-latest\)/u);
 
   const legacy = jobBlock(primaryWorkflow, 'legacy-unix');
   assert.deepEqual(matrixOperatingSystems(legacy), ['ubuntu-latest', 'macos-latest']);
