@@ -197,6 +197,18 @@ test('installed Claude and Codex routes execute the production route grammar in 
   });
   assert.equal(missingReport.ok, false);
   assert.match(missingReport.error, /existing file/u);
+  assert.equal(route.parsePublicRoute({
+    entry: 'review',
+    host: 'codex',
+    cwd: repo,
+    argv: ['--respond', '--pr=7'],
+  }).ok, false);
+  assert.equal(route.parsePublicRoute({
+    entry: 'review',
+    host: 'codex',
+    cwd: repo,
+    argv: ['--respond', '--source=pr', '--pr=7'],
+  }).ok, true);
 });
 
 test('trusted installed reviewer output reaches the production one-reviewer approval path', async () => {
@@ -247,9 +259,7 @@ test('multi-reviewer synthesis requires materialized agreement and preserves spl
     error: 'consensus_required',
   });
   assert.deepEqual(synthesis.synthesizeReviewAttempts(attempts, {
-    critical: 0,
-    agreed_warning: 0,
-    split_warning: 1,
+    findings: [{ severity: 'warning', roles: ['codex-review'] }],
   }), {
     status: 'reviewed',
     n_actual: 2,
@@ -257,10 +267,43 @@ test('multi-reviewer synthesis requires materialized agreement and preserves spl
     phase6_allowed: true,
     exclusions: [],
   });
-  assert.equal(synthesis.synthesizeReviewAttempts(attempts, {
-    critical: 0,
-    agreed_warning: 1,
-    split_warning: 0,
+  const agreedAttempts = [
+    attempts[0],
+    {
+      ...attempts[1],
+      verdict: 'CONCERN',
+      issues: { critical: 0, warning: 1, info: 0 },
+    },
+  ];
+  assert.equal(synthesis.synthesizeReviewAttempts(agreedAttempts, {
+    findings: [{ severity: 'warning', roles: ['codex-review', 'agy'] }],
+  }).verdict, 'REQUEST_CHANGES');
+  assert.deepEqual(synthesis.synthesizeReviewAttempts(attempts, {
+    findings: [],
+  }), {
+    status: 'operational_failure',
+    n_actual: 2,
+    verdict: null,
+    phase6_allowed: false,
+    exclusions: [],
+    error: 'consensus_required',
+  });
+
+  const criticalAttempts = [
+    {
+      role: 'codex-review',
+      included: true,
+      exclusion: null,
+      verdict: 'REQUEST_CHANGES',
+      issues: { critical: 1, warning: 0, info: 0 },
+    },
+    attempts[1],
+  ];
+  assert.equal(synthesis.synthesizeReviewAttempts(criticalAttempts, {
+    findings: [],
+  }).phase6_allowed, false);
+  assert.equal(synthesis.synthesizeReviewAttempts(criticalAttempts, {
+    findings: [{ severity: 'critical', roles: ['codex-review'] }],
   }).verdict, 'REQUEST_CHANGES');
 });
 

@@ -243,8 +243,10 @@ operational failure and must remain visible.
 For every attempted role, serialize `role`, raw `output`, and the pre/post
 fingerprint results to a private `attempts` JSON array. When at least two roles
 remain trusted, perform the issue matching from `codex-integration.md` and add
-a `consensus` object with non-negative integer `critical`, `agreed_warning`,
-and `split_warning` counts. Serialize `{ attempts, consensus }`, then invoke:
+a `consensus.findings` array. Each finding records `severity` (`critical` or
+`warning`) and the unique admitted reviewer `roles` that reported that material
+finding. Include every admitted critical and warning exactly once per reporting
+role. Serialize `{ attempts, consensus }`, then invoke:
 
 ```text
 node {plugin_root}/hooks/scripts/review-synthesis.mjs --input ATTEMPTS_FILE
@@ -254,8 +256,8 @@ This production helper validates the report contract, excludes fingerprint
 drift or malformed/empty output, and is the executable authority for
 `N_actual`, terminal status, verdict, and `phase6_allowed`. Stop when it returns
 `operational_failure`; no later response or Phase 6 commit may proceed. A
-missing or invalid materialized consensus for two or more trusted roles fails
-closed with `consensus_required`.
+missing, invalid, or count-inconsistent materialized consensus for two or more
+trusted roles fails closed with `consensus_required`.
 
 Count only successful trusted reviewer roles:
 

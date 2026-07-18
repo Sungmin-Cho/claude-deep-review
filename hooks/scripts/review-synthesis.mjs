@@ -53,13 +53,41 @@ export function evaluateReviewerAttempt({
   return { role, included: true, exclusion: null, ...parsed };
 }
 
-function consensusVerdict(consensus) {
-  if (!consensus || typeof consensus !== 'object' || Array.isArray(consensus)) return null;
-  for (const key of ['critical', 'agreed_warning', 'split_warning']) {
-    if (!Number.isSafeInteger(consensus[key]) || consensus[key] < 0) return null;
+function consensusVerdict(consensus, included) {
+  if (!consensus || typeof consensus !== 'object' || Array.isArray(consensus)
+    || !Array.isArray(consensus.findings)) return null;
+  const roles = included.map((attempt) => attempt.role);
+  if (roles.some((role) => typeof role !== 'string' || role.length === 0)
+    || new Set(roles).size !== roles.length) return null;
+  const admittedRoles = new Set(roles);
+  const counts = new Map(roles.map((role) => [role, { critical: 0, warning: 0 }]));
+  let hasCritical = false;
+  let hasAgreedWarning = false;
+  let hasSplitWarning = false;
+
+  for (const finding of consensus.findings) {
+    if (!finding || typeof finding !== 'object' || Array.isArray(finding)
+      || !['critical', 'warning'].includes(finding.severity)
+      || !Array.isArray(finding.roles) || finding.roles.length === 0
+      || new Set(finding.roles).size !== finding.roles.length
+      || finding.roles.some((role) => !admittedRoles.has(role))) return null;
+    for (const role of finding.roles) counts.get(role)[finding.severity] += 1;
+    if (finding.severity === 'critical') hasCritical = true;
+    else if (finding.roles.length === included.length) hasAgreedWarning = true;
+    else hasSplitWarning = true;
   }
-  if (consensus.critical > 0 || consensus.agreed_warning > 0) return 'REQUEST_CHANGES';
-  if (consensus.split_warning > 0) return 'CONCERN';
+
+  for (const attempt of included) {
+    const expected = counts.get(attempt.role);
+    if (!attempt.issues || !Number.isSafeInteger(attempt.issues.critical)
+      || !Number.isSafeInteger(attempt.issues.warning)
+      || attempt.issues.critical < 0 || attempt.issues.warning < 0
+      || attempt.issues.critical !== expected.critical
+      || attempt.issues.warning !== expected.warning) return null;
+  }
+
+  if (hasCritical || hasAgreedWarning) return 'REQUEST_CHANGES';
+  if (hasSplitWarning) return 'CONCERN';
   return 'APPROVE';
 }
 
@@ -84,7 +112,7 @@ export function synthesizeReviewAttempts(attempts, consensus) {
     const warning = included[0].issues.warning;
     verdict = critical > 0 ? 'REQUEST_CHANGES' : warning > 0 ? 'CONCERN' : 'APPROVE';
   } else {
-    verdict = consensusVerdict(consensus);
+    verdict = consensusVerdict(consensus, included);
     if (verdict === null) {
       return {
         status: 'operational_failure',

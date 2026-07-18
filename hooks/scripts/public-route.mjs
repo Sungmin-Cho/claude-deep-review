@@ -69,11 +69,16 @@ function parseReview(argv, host, cwd) {
     const ignoredReviewerFlags = expanded.filter((token) => REVIEW_FLAGS.has(token));
     let reportPath = null;
     let sourcePr = false;
+    let prNumber = false;
     for (let index = 1; index < expanded.length; index += 1) {
       const token = expanded[index];
       if (REVIEW_FLAGS.has(token)) continue;
-      if (token === '--source=pr' || /^--pr=[1-9][0-9]*$/u.test(token)) {
+      if (token === '--source=pr') {
         sourcePr = true;
+        continue;
+      }
+      if (/^--pr=[1-9][0-9]*$/u.test(token)) {
+        prNumber = true;
         continue;
       }
       if (!token.startsWith('-') && reportPath === null) {
@@ -86,7 +91,10 @@ function parseReview(argv, host, cwd) {
       }
       return { ...routeError(`unknown respond argument: ${token}`), host, argv: expanded };
     }
-    if (reportPath !== null && sourcePr) {
+    if (prNumber && !sourcePr) {
+      return { ...routeError('--pr=NNN requires --source=pr'), host, argv: expanded };
+    }
+    if (reportPath !== null && (sourcePr || prNumber)) {
       return { ...routeError('respond accepts a report path or PR source options, not both'), host, argv: expanded };
     }
     return {

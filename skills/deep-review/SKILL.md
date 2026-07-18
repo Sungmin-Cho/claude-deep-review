@@ -46,7 +46,8 @@ The runtime enforces this grammar:
   it, report completion, and 종료. Do not load the review pipeline.
 - `--respond` — terminal. Read
   `{plugin_root}/skills/receiving-review/references/respond-execution.md`,
-  execute the response protocol with the exact remaining arguments, and 종료.
+  execute the response protocol using returned `reportPath` when non-null or
+  the validated PR-source options in returned `argv` otherwise, and 종료.
   That reference uses `respond-runtime.mjs` for report/PR/report-file I/O and
   `phase6-protocol.mjs` for snapshot/test/verify/recover/commit on both hosts.
   Claude named-agent fallback and Codex generic-subagent dispatch consume one
