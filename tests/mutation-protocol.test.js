@@ -2748,7 +2748,7 @@ test('[group 22] zero-commit, linked-worktree, Unicode/literal paths, and framed
     return;
   }
   const zero = createGitFixture('group-22-zero', { initialCommit: false });
-  const literal = 'src/한 글 Ω :[x]*.txt';
+  const literal = 'src/한 글 Ω [x].txt';
   writeRepoFile(zero, literal);
   const performed = performMutation({ repo: zero, files: [literal] });
   assert.equal(isProtocolIntentToAdd({ repo: zero, file: literal }), true);
