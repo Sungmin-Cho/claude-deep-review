@@ -16,6 +16,11 @@ reference and Node helper.
 
 ## 0. Validate
 
+Serialize the original argument tokens as a private JSON array and invoke
+`public-route.mjs --entry loop --host HOST --args-file ARGS_FILE`. Its returned
+JSON is the executable grammar authority. Stop on `ok=false` and use its
+expanded `argv` without independently reparsing it.
+
 - Reject `init`, `--respond`, and `--qa`; those are terminal routes of the
   public `$deep-review:deep-review` skill.
 - `--max=N` defaults to 5 and must be a positive integer. It counts Review

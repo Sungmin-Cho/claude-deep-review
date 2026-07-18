@@ -33,7 +33,7 @@ codex plugin install deep-review
 
 추가 설정은 필요 없습니다. 첫 실행 시 기본 `config.yaml`과 함께 `.deep-review/`가 생성됩니다. 프로젝트별 `rules.yaml`을 생성하려면 `/deep-review init`을 실행합니다.
 
-지원 런타임은 macOS, Linux, 네이티브 Windows 11에서 동작하는 무의존성 Node.js 22입니다. Git Bash는 필수 조건이 아닙니다.
+지원 런타임은 macOS, Linux, 네이티브 Windows 11에서 동작하는 무의존성 Node.js 22와 Git 2.45 이상입니다. Git Bash는 필수 조건이 아닙니다.
 
 ## 사용법
 

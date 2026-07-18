@@ -33,7 +33,7 @@ codex plugin install deep-review
 
 No additional configuration is required. On first run, `.deep-review/` is created with a default `config.yaml`. Run `/deep-review init` to generate a project-specific `rules.yaml`.
 
-The supported runtime is zero-dependency Node.js 22 on macOS, Linux, and native Windows 11. Git Bash is not a prerequisite.
+The supported runtime is zero-dependency Node.js 22 with Git 2.45 or newer on macOS, Linux, and native Windows 11. Git Bash is not a prerequisite.
 
 ## Usage
 

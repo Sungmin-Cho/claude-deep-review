@@ -240,6 +240,18 @@ If Stage 3 performed index exposure, send `restore` with the exact owner token
 to `mutation-protocol.mjs` before synthesis. A restore error is a terminal
 operational failure and must remain visible.
 
+For every attempted role, serialize `role`, raw `output`, and the pre/post
+fingerprint results to a private JSON array, then invoke:
+
+```text
+node {plugin_root}/hooks/scripts/review-synthesis.mjs --input ATTEMPTS_FILE
+```
+
+This production helper validates the report contract, excludes fingerprint
+drift or malformed/empty output, and is the executable authority for
+`N_actual`, terminal status, verdict, and `phase6_allowed`. Stop when it returns
+`operational_failure`; no later response or Phase 6 commit may proceed.
+
 Count only successful trusted reviewer roles:
 
 - `N_actual == 0`: no verdict is allowed; report an operational failure.

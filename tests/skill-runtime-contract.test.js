@@ -57,6 +57,7 @@ test('public skill owns the route-first grammar and Claude command is a thin sam
   assert.match(publicSkill, /--respond \(REPORT_PATH \| --source=pr/);
   assert.match(publicSkill, /--ultracode/);
   assert.match(publicSkill, /--codex-only/);
+  assert.match(publicSkill, /public-route\.mjs --entry review/);
   for (const route of ['init', '--respond', '--qa', 'review']) {
     assert.match(
       publicSkill,
@@ -71,6 +72,17 @@ test('public skill owns the route-first grammar and Claude command is a thin sam
   assert.doesNotMatch(command, /deep-review-workflow\/SKILL\.md/);
   assert.doesNotMatch(command, /review-execution\.md/);
   assert.ok(command.split(/\r?\n/).length <= 35, 'Claude shim duplicated the public pipeline');
+});
+
+test('production route and synthesis helpers own parsing and fail-closed reviewer admission', () => {
+  const publicSkill = read('skills/deep-review/SKILL.md');
+  const loop = read('skills/deep-review-loop/SKILL.md');
+  const review = read('skills/deep-review-workflow/references/review-execution.md');
+  assert.match(publicSkill, /returned JSON.{0,120}executable route authority/is);
+  assert.match(loop, /public-route\.mjs --entry loop/);
+  assert.match(review, /review-synthesis\.mjs --input/);
+  assert.match(review, /phase6_allowed/);
+  assert.match(review, /operational_failure.{0,160}no later response or Phase 6 commit/is);
 });
 
 test('Codex manifest exposes only the two public entrypoints and keeps hooks/MCP empty', () => {

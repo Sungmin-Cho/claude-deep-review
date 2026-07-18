@@ -77,6 +77,11 @@ test('package contract uses Node 22 and keeps Bash out of npm test', () => {
   assert.equal(manifest.scripts['test:legacy'], 'bash scripts/run-all-tests.sh');
 });
 
+test('bilingual runtime prerequisites disclose the enforced Git floor', () => {
+  assert.match(read('README.md'), /Git 2\.45 or newer/u);
+  assert.match(read('README.ko.md'), /Git 2\.45 이상/u);
+});
+
 test('release CI has exact Node 22 native and Unix legacy matrices', () => {
   const primaryWorkflow = read('.github/workflows/tests.yml');
   const primary = jobBlock(primaryWorkflow, 'tests');

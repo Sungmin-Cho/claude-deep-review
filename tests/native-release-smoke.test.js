@@ -71,33 +71,29 @@ function readInstalled(installedRoot, relativePath) {
   return readFileSync(path.join(installedRoot, relativePath), 'utf8');
 }
 
-function exercisePublicRoute(installedRoot, host, route) {
+async function loadInstalledRuntime(installedRoot) {
+  const routeUrl = pathToFileURL(
+    path.join(installedRoot, 'hooks', 'scripts', 'public-route.mjs'),
+  ).href;
+  const synthesisUrl = pathToFileURL(
+    path.join(installedRoot, 'hooks', 'scripts', 'review-synthesis.mjs'),
+  ).href;
+  return {
+    route: await import(routeUrl),
+    synthesis: await import(synthesisUrl),
+  };
+}
+
+async function exercisePublicRoute(installedRoot, host, route) {
   assert.ok(['claude', 'codex'].includes(host));
   assert.ok(['review', 'respond', 'loop'].includes(route));
-  const publicReview = readInstalled(installedRoot, 'skills/deep-review/SKILL.md');
-  const publicLoop = readInstalled(installedRoot, 'skills/deep-review-loop/SKILL.md');
-  const claudeAdapter = readInstalled(installedRoot, 'commands/deep-review.md');
-  if (host === 'claude') {
-    if (route === 'loop') {
-      assert.match(publicLoop, /Claude Code enters through \x60\/deep-review-loop\x60/u);
-    } else {
-      assert.match(claudeAdapter, /\/deep-review/u);
-      assert.match(claudeAdapter, /skills\/deep-review\/SKILL\.md/u);
-      assert.match(claudeAdapter, /\$ARGUMENTS/u);
-    }
-  } else if (route === 'loop') {
-    assert.match(publicLoop, /\$deep-review:deep-review-loop/u);
-  } else {
-    assert.match(publicReview, /\$deep-review:deep-review/u);
-  }
-  if (route === 'respond') {
-    assert.match(publicReview, /--respond.{0,40}terminal/isu);
-    assert.match(publicReview, /phase6-protocol\.mjs/u);
-  } else if (route === 'loop') {
-    assert.match(publicLoop, /N_actual == 0.{0,100}operational failure/isu);
-  } else {
-    assert.match(publicReview, /review.{0,40}terminal/isu);
-  }
+  const { route: runtime } = await loadInstalledRuntime(installedRoot);
+  const entry = route === 'loop' ? 'loop' : 'review';
+  const argv = route === 'respond' ? ['--respond'] : [];
+  const parsed = runtime.parsePublicRoute({ entry, argv, host });
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.route, route);
+  assert.equal(parsed.host, host);
 }
 
 function validReviewerReport() {
@@ -105,17 +101,9 @@ function validReviewerReport() {
     '# Deep Review Report',
     '## Summary',
     '- **Verdict**: APPROVE',
-    '- **Issues**: 🔴 0, 🟡 0, ℹ️ 0',
+    '- **Issues**: {🔴 0건, 🟡 0건, ℹ️ 0건}',
     '',
   ].join('\n');
-}
-
-function isWellFormedReviewerReport(value) {
-  return typeof value === 'string'
-    && /^# Deep Review Report$/mu.test(value)
-    && /^## Summary$/mu.test(value)
-    && /^- \*\*Verdict\*\*: (?:APPROVE|CONCERN|REQUEST_CHANGES)$/mu.test(value)
-    && /^- \*\*Issues\*\*:/mu.test(value);
 }
 
 async function runGenericReviewerFake({ repo, installedRoot, behavior }) {
@@ -138,6 +126,8 @@ async function runGenericReviewerFake({ repo, installedRoot, behavior }) {
     output = 'APPROVE without the shipped report contract';
   } else if (behavior === 'unavailable') {
     output = '';
+  } else if (behavior === 'valid') {
+    output = validReviewerReport();
   } else {
     throw new Error('unknown reviewer fake behavior');
   }
@@ -148,41 +138,20 @@ async function runGenericReviewerFake({ repo, installedRoot, behavior }) {
     mode: 'hybrid',
   });
   assert.equal(after.error, null);
-  const trusted = before.digest === after.digest;
-  const wellFormed = isWellFormedReviewerReport(output);
-  const included = trusted && wellFormed;
-  return {
-    included,
-    nActual: included ? 1 : 0,
-    verdict: included ? 'APPROVE' : null,
-    terminalStatus: included ? 'reviewed' : 'operational_failure',
-    exclusion: !trusted
-      ? 'fingerprint_mismatch'
-      : (!wellFormed ? 'malformed_or_empty_result' : null),
-  };
+  const { synthesis } = await loadInstalledRuntime(installedRoot);
+  return synthesis.evaluateReviewerAttempt({
+    role: 'codex-review',
+    output,
+    beforeFingerprint: before,
+    afterFingerprint: after,
+  });
 }
 
-function applyTerminalGate(reviewResult, onPhase6Commit) {
-  if (reviewResult.nActual === 0) {
-    return {
-      status: 'operational_failure',
-      verdict: null,
-      phase6Committed: false,
-    };
-  }
-  onPhase6Commit();
-  return {
-    status: 'reviewed',
-    verdict: reviewResult.verdict,
-    phase6Committed: true,
-  };
-}
-
-test('installed Claude and Codex routes resolve review, respond, and loop in a spaces/Unicode fixture', () => {
+test('installed Claude and Codex routes execute the production route grammar in a spaces/Unicode fixture', async () => {
   const { installedRoot } = installPluginFixture();
   for (const host of ['claude', 'codex']) {
     for (const route of ['review', 'respond', 'loop']) {
-      exercisePublicRoute(installedRoot, host, route);
+      await exercisePublicRoute(installedRoot, host, route);
     }
   }
   const codexManifest = JSON.parse(readInstalled(installedRoot, '.codex-plugin/plugin.json'));
@@ -192,65 +161,90 @@ test('installed Claude and Codex routes resolve review, respond, and loop in a s
   ]);
   assert.equal(Object.hasOwn(codexManifest, 'hooks'), false);
   assert.equal(Object.hasOwn(codexManifest, 'mcpServers'), false);
+  const { route } = await loadInstalledRuntime(installedRoot);
+  assert.equal(route.parsePublicRoute({
+    entry: 'review', host: 'codex', argv: ['--ultracode', '--no-opus'],
+  }).ok, false);
+  assert.equal(route.parsePublicRoute({
+    entry: 'loop', host: 'claude', argv: ['--respond'],
+  }).ok, false);
+});
+
+test('trusted installed reviewer output reaches the production one-reviewer approval path', async () => {
+  const { repo, installedRoot } = installPluginFixture();
+  const review = await runGenericReviewerFake({ repo, installedRoot, behavior: 'valid' });
+  assert.deepEqual(review, {
+    role: 'codex-review',
+    included: true,
+    exclusion: null,
+    verdict: 'APPROVE',
+    issues: { critical: 0, warning: 0, info: 0 },
+  });
+  const { synthesis } = await loadInstalledRuntime(installedRoot);
+  assert.deepEqual(synthesis.synthesizeReviewAttempts([review]), {
+    status: 'reviewed',
+    n_actual: 1,
+    verdict: 'APPROVE',
+    phase6_allowed: true,
+    exclusions: [],
+  });
 });
 
 test('Codex generic reviewer mutation is fingerprinted and excluded', async () => {
   const { repo, installedRoot } = installPluginFixture();
-  exercisePublicRoute(installedRoot, 'codex', 'review');
+  await exercisePublicRoute(installedRoot, 'codex', 'review');
   const headBefore = git(repo, ['rev-parse', 'HEAD']);
   const review = await runGenericReviewerFake({ repo, installedRoot, behavior: 'mutate' });
   assert.deepEqual(review, {
+    role: 'codex-review',
     included: false,
-    nActual: 0,
-    verdict: null,
-    terminalStatus: 'operational_failure',
     exclusion: 'fingerprint_mismatch',
+    verdict: null,
+    issues: null,
   });
-  let commitCalls = 0;
-  const terminal = applyTerminalGate(review, () => { commitCalls += 1; });
+  const { synthesis } = await loadInstalledRuntime(installedRoot);
+  const terminal = synthesis.synthesizeReviewAttempts([review]);
   assert.deepEqual(terminal, {
     status: 'operational_failure',
+    n_actual: 0,
     verdict: null,
-    phase6Committed: false,
+    phase6_allowed: false,
+    exclusions: [{ role: 'codex-review', reason: 'fingerprint_mismatch' }],
   });
-  assert.equal(commitCalls, 0);
   assert.equal(git(repo, ['rev-parse', 'HEAD']), headBefore);
 });
 
 test('malformed generic reviewer result fails closed with no Phase 6 commit', async () => {
   const { repo, installedRoot } = installPluginFixture();
-  exercisePublicRoute(installedRoot, 'codex', 'respond');
+  await exercisePublicRoute(installedRoot, 'codex', 'respond');
   const headBefore = git(repo, ['rev-parse', 'HEAD']);
   const review = await runGenericReviewerFake({ repo, installedRoot, behavior: 'malformed' });
   assert.equal(review.included, false);
-  assert.equal(review.nActual, 0);
   assert.equal(review.verdict, null);
   assert.equal(review.exclusion, 'malformed_or_empty_result');
-  let commitCalls = 0;
-  const terminal = applyTerminalGate(review, () => { commitCalls += 1; });
+  const { synthesis } = await loadInstalledRuntime(installedRoot);
+  const terminal = synthesis.synthesizeReviewAttempts([review]);
   assert.equal(terminal.status, 'operational_failure');
-  assert.equal(terminal.phase6Committed, false);
-  assert.equal(commitCalls, 0);
+  assert.equal(terminal.phase6_allowed, false);
   assert.equal(git(repo, ['rev-parse', 'HEAD']), headBefore);
 });
 
 test('N_actual=0 is terminal on both hosts and the loop cannot commit', async () => {
   for (const host of ['claude', 'codex']) {
     const { repo, installedRoot } = installPluginFixture();
-    exercisePublicRoute(installedRoot, host, 'loop');
+    await exercisePublicRoute(installedRoot, host, 'loop');
     const headBefore = git(repo, ['rev-parse', 'HEAD']);
     const review = await runGenericReviewerFake({
       repo,
       installedRoot,
       behavior: 'unavailable',
     });
-    let commitCalls = 0;
-    const terminal = applyTerminalGate(review, () => { commitCalls += 1; });
-    assert.equal(review.nActual, 0);
+    const { synthesis } = await loadInstalledRuntime(installedRoot);
+    const terminal = synthesis.synthesizeReviewAttempts([review]);
+    assert.equal(terminal.n_actual, 0);
     assert.equal(terminal.status, 'operational_failure');
     assert.equal(terminal.verdict, null);
-    assert.equal(terminal.phase6Committed, false);
-    assert.equal(commitCalls, 0);
+    assert.equal(terminal.phase6_allowed, false);
     assert.equal(git(repo, ['rev-parse', 'HEAD']), headBefore);
   }
 });

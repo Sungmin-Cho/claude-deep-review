@@ -20,6 +20,16 @@ Never infer reviewer availability from the selected root or from a host label.
 
 ## Argument validation
 
+Serialize the original argument tokens as a private JSON array and invoke:
+
+```text
+node {plugin_root}/hooks/scripts/public-route.mjs --entry review --host HOST --args-file ARGS_FILE
+```
+
+The returned JSON is the executable route authority. Stop on `ok=false`; use
+its expanded `argv` and terminal `route` without independently reparsing them.
+The runtime enforces this grammar:
+
 1. Expand `--codex-only` to `--codex --no-opus --no-agy` before validation.
 2. Reject `--ultracode` with `--no-opus`, and reject `--codex` with
    `--no-codex`.
