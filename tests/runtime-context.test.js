@@ -626,3 +626,35 @@ test('Windows batch preparation defers literal percent through one expansion pas
   assert.equal(expandedOnce.includes('EXPANDED-INJECTION'), false);
   assert.equal(expandedOnce.includes('EXPANDED-PATH'), false);
 });
+
+test('Windows raw batch transport rejects quotes and line breaks without a shim', async () => {
+  const source = readFileSync(new URL(processUrl), 'utf8');
+  const forcedWindowsSource = source.replace(
+    "const IS_WINDOWS = process.platform === 'win32';",
+    'const IS_WINDOWS = true;',
+  );
+  assert.notEqual(forcedWindowsSource, source, 'the platform seam must remain testable');
+  const module = await import(
+    `data:text/javascript;base64,${Buffer.from(forcedWindowsSource).toString('base64')}`
+  );
+  const root = mkdtempSync(join(tmpdir(), 'deep-review-cmd-reject-'));
+  const command = join(root, 'probe.cmd');
+  writeFileSync(command, '@echo off\r\n');
+  const env = {
+    ...process.env,
+    ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+  };
+  const expected = 'Windows batch arguments containing quotes or line breaks require a sibling PowerShell shim\n';
+
+  for (const argument of ['embedded " quote', 'line one\rline two', 'line one\nline two']) {
+    const asyncResult = await module.runProcess(command, [argument], { env });
+    assert.equal(asyncResult.code, 2);
+    assert.equal(asyncResult.timedOut, false);
+    assert.equal(asyncResult.stderr.toString(), expected);
+
+    const syncResult = module.runProcessSync(command, [argument], { env });
+    assert.equal(syncResult.code, 2);
+    assert.equal(syncResult.timedOut, false);
+    assert.equal(syncResult.stderr.toString(), expected);
+  }
+});

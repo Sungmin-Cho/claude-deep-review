@@ -26,8 +26,8 @@ const POSIX_GROUP_EXIT_UNCONFIRMED_DIAGNOSTIC =
   'POSIX process group remained after SIGKILL; cleanup could not be confirmed before the hard deadline\n';
 const WINDOWS_TASKKILL_FALLBACK_DIAGNOSTIC =
   'Windows taskkill failed; sent direct SIGKILL fallback\n';
-const WINDOWS_BATCH_QUOTE_DIAGNOSTIC =
-  'Windows batch arguments containing quotes require a sibling PowerShell shim\n';
+const WINDOWS_BATCH_UNSAFE_ARGUMENT_DIAGNOSTIC =
+  'Windows batch arguments containing quotes or line breaks require a sibling PowerShell shim\n';
 
 function environmentValue(env, name) {
   if (!IS_WINDOWS) return env[name];
@@ -164,8 +164,8 @@ function prepareSpawn(command, args, env) {
       windowsVerbatimArguments: false,
     };
   }
-  if (args.some((argument) => String(argument).includes('"'))) {
-    return { rejectedReason: WINDOWS_BATCH_QUOTE_DIAGNOSTIC };
+  if (args.some((argument) => /["\r\n]/u.test(String(argument)))) {
+    return { rejectedReason: WINDOWS_BATCH_UNSAFE_ARGUMENT_DIAGNOSTIC };
   }
   return {
     command: comSpec,
