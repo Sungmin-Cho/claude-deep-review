@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -43,10 +43,16 @@ function validateReviewerFlags(argv) {
   return null;
 }
 
-function parseReview(argv, host) {
+function existingFile(path) {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function parseReview(argv, host, cwd) {
   const expanded = expandCodexOnly(argv);
-  const conflict = validateReviewerFlags(expanded);
-  if (conflict) return { ...routeError(conflict), host, argv: expanded };
   if (expanded[0] === 'init') {
     return expanded.length === 1
       ? { ok: true, route: 'init', host, argv: expanded }
@@ -61,16 +67,40 @@ function parseReview(argv, host) {
   if (respondIndex >= 0) {
     if (respondIndex !== 0) return { ...routeError('--respond must be the first argument'), host, argv: expanded };
     const ignoredReviewerFlags = expanded.filter((token) => REVIEW_FLAGS.has(token));
+    let reportPath = null;
+    let sourcePr = false;
     for (let index = 1; index < expanded.length; index += 1) {
       const token = expanded[index];
       if (REVIEW_FLAGS.has(token)) continue;
-      if (token === '--source=pr' || /^--pr=[1-9][0-9]*$/u.test(token)) continue;
-      if (!token.startsWith('-') && index === 1) continue;
+      if (token === '--source=pr' || /^--pr=[1-9][0-9]*$/u.test(token)) {
+        sourcePr = true;
+        continue;
+      }
+      if (!token.startsWith('-') && reportPath === null) {
+        const candidate = resolve(cwd, token);
+        if (!existingFile(candidate)) {
+          return { ...routeError(`respond report path must name an existing file: ${token}`), host, argv: expanded };
+        }
+        reportPath = candidate;
+        continue;
+      }
       return { ...routeError(`unknown respond argument: ${token}`), host, argv: expanded };
     }
-    return { ok: true, route: 'respond', host, argv: expanded, ignoredReviewerFlags };
+    if (reportPath !== null && sourcePr) {
+      return { ...routeError('respond accepts a report path or PR source options, not both'), host, argv: expanded };
+    }
+    return {
+      ok: true,
+      route: 'respond',
+      host,
+      argv: expanded,
+      ignoredReviewerFlags,
+      reportPath,
+    };
   }
 
+  const conflict = validateReviewerFlags(expanded);
+  if (conflict) return { ...routeError(conflict), host, argv: expanded };
   for (let index = 0; index < expanded.length; index += 1) {
     const token = expanded[index];
     if (REVIEW_FLAGS.has(token)) continue;
@@ -105,12 +135,13 @@ function parseLoop(argv, host) {
   return { ok: true, route: 'loop', host, argv: expanded };
 }
 
-export function parsePublicRoute({ entry = 'review', argv = [], host }) {
+export function parsePublicRoute({ entry = 'review', argv = [], host, cwd = process.cwd() }) {
   const normalizedHost = normalizeHost(host);
   if (!Array.isArray(argv) || argv.some((token) => typeof token !== 'string')) {
     throw new TypeError('argv must be an array of strings');
   }
-  if (entry === 'review') return parseReview(argv, normalizedHost);
+  if (typeof cwd !== 'string' || cwd.length === 0) throw new TypeError('cwd must be non-empty');
+  if (entry === 'review') return parseReview(argv, normalizedHost, cwd);
   if (entry === 'loop') return parseLoop(argv, normalizedHost);
   throw new TypeError('entry must be review or loop');
 }
@@ -123,6 +154,7 @@ function cliOptions(argv) {
     if (argv[index] === '--entry') options.entry = value;
     else if (argv[index] === '--host') options.host = value;
     else if (argv[index] === '--args-file') options.argsFile = value;
+    else if (argv[index] === '--cwd') options.cwd = value;
     else throw new Error(`unknown argument: ${argv[index]}`);
   }
   return options;
@@ -133,7 +165,7 @@ if (invoked) {
   try {
     const options = cliOptions(process.argv.slice(2));
     const argv = options.argsFile ? JSON.parse(readFileSync(resolve(options.argsFile), 'utf8')) : [];
-    const result = parsePublicRoute({ entry: options.entry, host: options.host, argv });
+    const result = parsePublicRoute({ entry: options.entry, host: options.host, argv, cwd: options.cwd });
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if (!result.ok) process.exitCode = 2;
   } catch (error) {

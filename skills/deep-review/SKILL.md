@@ -23,7 +23,7 @@ Never infer reviewer availability from the selected root or from a host label.
 Serialize the original argument tokens as a private JSON array and invoke:
 
 ```text
-node {plugin_root}/hooks/scripts/public-route.mjs --entry review --host HOST --args-file ARGS_FILE
+node {plugin_root}/hooks/scripts/public-route.mjs --entry review --host HOST --cwd PROJECT_ROOT --args-file ARGS_FILE
 ```
 
 The returned JSON is the executable route authority. Stop on `ok=false`; use

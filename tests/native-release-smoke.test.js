@@ -98,7 +98,7 @@ async function exercisePublicRoute(installedRoot, host, route) {
 
 function validReviewerReport() {
   return [
-    '# Deep Review Report',
+    '# Deep Review Report — 2026-07-18',
     '## Summary',
     '- **Verdict**: APPROVE',
     '- **Issues**: {🔴 0건, 🟡 0건, ℹ️ 0건}',
@@ -148,7 +148,7 @@ async function runGenericReviewerFake({ repo, installedRoot, behavior }) {
 }
 
 test('installed Claude and Codex routes execute the production route grammar in a spaces/Unicode fixture', async () => {
-  const { installedRoot } = installPluginFixture();
+  const { repo, installedRoot } = installPluginFixture();
   for (const host of ['claude', 'codex']) {
     for (const route of ['review', 'respond', 'loop']) {
       await exercisePublicRoute(installedRoot, host, route);
@@ -168,6 +168,35 @@ test('installed Claude and Codex routes execute the production route grammar in 
   assert.equal(route.parsePublicRoute({
     entry: 'loop', host: 'claude', argv: ['--respond'],
   }).ok, false);
+  const reportPath = path.join(repo, 'review report 한글.md');
+  writeFileSync(reportPath, validReviewerReport());
+  const explicitReport = route.parsePublicRoute({
+    entry: 'review',
+    host: 'codex',
+    cwd: repo,
+    argv: [
+      '--respond',
+      '--codex',
+      '--no-codex',
+      'review report 한글.md',
+      '--ultracode',
+      '--no-opus',
+    ],
+  });
+  assert.equal(explicitReport.ok, true);
+  assert.equal(explicitReport.route, 'respond');
+  assert.equal(explicitReport.reportPath, reportPath);
+  assert.deepEqual(explicitReport.ignoredReviewerFlags, [
+    '--codex', '--no-codex', '--ultracode', '--no-opus',
+  ]);
+  const missingReport = route.parsePublicRoute({
+    entry: 'review',
+    host: 'codex',
+    cwd: repo,
+    argv: ['--respond', '--codex', 'missing report.md'],
+  });
+  assert.equal(missingReport.ok, false);
+  assert.match(missingReport.error, /existing file/u);
 });
 
 test('trusted installed reviewer output reaches the production one-reviewer approval path', async () => {
@@ -188,6 +217,51 @@ test('trusted installed reviewer output reaches the production one-reviewer appr
     phase6_allowed: true,
     exclusions: [],
   });
+});
+
+test('multi-reviewer synthesis requires materialized agreement and preserves split warnings', async () => {
+  const { installedRoot } = installPluginFixture();
+  const { synthesis } = await loadInstalledRuntime(installedRoot);
+  const attempts = [
+    {
+      role: 'codex-review',
+      included: true,
+      exclusion: null,
+      verdict: 'CONCERN',
+      issues: { critical: 0, warning: 1, info: 0 },
+    },
+    {
+      role: 'agy',
+      included: true,
+      exclusion: null,
+      verdict: 'APPROVE',
+      issues: { critical: 0, warning: 0, info: 0 },
+    },
+  ];
+  assert.deepEqual(synthesis.synthesizeReviewAttempts(attempts), {
+    status: 'operational_failure',
+    n_actual: 2,
+    verdict: null,
+    phase6_allowed: false,
+    exclusions: [],
+    error: 'consensus_required',
+  });
+  assert.deepEqual(synthesis.synthesizeReviewAttempts(attempts, {
+    critical: 0,
+    agreed_warning: 0,
+    split_warning: 1,
+  }), {
+    status: 'reviewed',
+    n_actual: 2,
+    verdict: 'CONCERN',
+    phase6_allowed: true,
+    exclusions: [],
+  });
+  assert.equal(synthesis.synthesizeReviewAttempts(attempts, {
+    critical: 0,
+    agreed_warning: 1,
+    split_warning: 0,
+  }).verdict, 'REQUEST_CHANGES');
 });
 
 test('Codex generic reviewer mutation is fingerprinted and excluded', async () => {

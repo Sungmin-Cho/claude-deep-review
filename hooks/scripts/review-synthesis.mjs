@@ -8,7 +8,8 @@ const VERDICTS = new Set(['APPROVE', 'CONCERN', 'REQUEST_CHANGES']);
 
 export function parseReviewerReport(output) {
   if (typeof output !== 'string' || output.length === 0) return null;
-  if (!/^# Deep Review Report$/mu.test(output) || !/^## Summary$/mu.test(output)) return null;
+  if (!/^# Deep Review Report — [0-9]{4}-[0-9]{2}-[0-9]{2}$/mu.test(output)
+    || !/^## Summary$/mu.test(output)) return null;
   const verdictMatch = /^- \*\*Verdict\*\*:\s*(APPROVE|CONCERN|REQUEST_CHANGES)\s*$/mu.exec(output);
   const issuesMatch = /^- \*\*Issues\*\*:\s*[^\n]*?🔴\s*([0-9]+)[^\n]*?🟡\s*([0-9]+)[^\n]*?ℹ(?:️)?\s*([0-9]+)[^\n]*$/mu.exec(output);
   if (!verdictMatch || !issuesMatch || !VERDICTS.has(verdictMatch[1])) return null;
@@ -52,7 +53,17 @@ export function evaluateReviewerAttempt({
   return { role, included: true, exclusion: null, ...parsed };
 }
 
-export function synthesizeReviewAttempts(attempts) {
+function consensusVerdict(consensus) {
+  if (!consensus || typeof consensus !== 'object' || Array.isArray(consensus)) return null;
+  for (const key of ['critical', 'agreed_warning', 'split_warning']) {
+    if (!Number.isSafeInteger(consensus[key]) || consensus[key] < 0) return null;
+  }
+  if (consensus.critical > 0 || consensus.agreed_warning > 0) return 'REQUEST_CHANGES';
+  if (consensus.split_warning > 0) return 'CONCERN';
+  return 'APPROVE';
+}
+
+export function synthesizeReviewAttempts(attempts, consensus) {
   if (!Array.isArray(attempts)) throw new TypeError('attempts must be an array');
   const included = attempts.filter((attempt) => attempt?.included === true);
   const exclusions = attempts
@@ -67,13 +78,24 @@ export function synthesizeReviewAttempts(attempts) {
       exclusions,
     };
   }
-  const critical = included.reduce((count, attempt) => count + attempt.issues.critical, 0);
-  const warning = included.reduce((count, attempt) => count + attempt.issues.warning, 0);
-  const verdict = critical > 0
-    ? 'REQUEST_CHANGES'
-    : warning > 0
-      ? (included.length === 1 ? 'CONCERN' : 'REQUEST_CHANGES')
-      : 'APPROVE';
+  let verdict;
+  if (included.length === 1) {
+    const critical = included[0].issues.critical;
+    const warning = included[0].issues.warning;
+    verdict = critical > 0 ? 'REQUEST_CHANGES' : warning > 0 ? 'CONCERN' : 'APPROVE';
+  } else {
+    verdict = consensusVerdict(consensus);
+    if (verdict === null) {
+      return {
+        status: 'operational_failure',
+        n_actual: included.length,
+        verdict: null,
+        phase6_allowed: false,
+        exclusions,
+        error: 'consensus_required',
+      };
+    }
+  }
   return {
     status: 'reviewed',
     n_actual: included.length,
@@ -89,13 +111,15 @@ if (invoked) {
     const inputIndex = process.argv.indexOf('--input');
     if (inputIndex < 0 || !process.argv[inputIndex + 1]) throw new Error('--input FILE is required');
     const input = JSON.parse(readFileSync(resolve(process.argv[inputIndex + 1]), 'utf8'));
-    if (!Array.isArray(input)) throw new TypeError('input must be an attempt array');
-    const attempts = input.map((attempt) => (
+    const attemptInput = Array.isArray(input) ? input : input?.attempts;
+    if (!Array.isArray(attemptInput)) throw new TypeError('input must contain an attempt array');
+    const attempts = attemptInput.map((attempt) => (
       Object.hasOwn(attempt || {}, 'output')
         ? evaluateReviewerAttempt(attempt)
         : attempt
     ));
-    process.stdout.write(`${JSON.stringify(synthesizeReviewAttempts(attempts))}\n`);
+    const consensus = Array.isArray(input) ? undefined : input.consensus;
+    process.stdout.write(`${JSON.stringify(synthesizeReviewAttempts(attempts, consensus))}\n`);
   } catch (error) {
     process.stderr.write(`${JSON.stringify({ status: 'error', error: error.message })}\n`);
     process.exitCode = 2;
