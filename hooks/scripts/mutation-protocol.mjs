@@ -731,7 +731,7 @@ export function sanitizeGitEnvironment(environment = process.env) {
   return sanitized;
 }
 
-function childGitEnvironment(environment = process.env, indexFile) {
+function childGitEnvironment(environment = process.env, indexFile, literalPathspecs = false) {
   const sanitized = sanitizeGitEnvironment(environment);
   const result = {
     ...sanitized,
@@ -739,6 +739,7 @@ function childGitEnvironment(environment = process.env, indexFile) {
     LC_ALL: 'C',
   };
   if (indexFile !== undefined) result.GIT_INDEX_FILE = indexFile;
+  if (literalPathspecs) result.GIT_LITERAL_PATHSPECS = '1';
   return Object.freeze(result);
 }
 
@@ -747,7 +748,7 @@ function runGit(repo, args, options = {}) {
   let result;
   try {
     result = runner(repo, args, {
-      env: childGitEnvironment(options.env, options.indexFile),
+      env: childGitEnvironment(options.env, options.indexFile, options.literalPathspecs),
       input: options.input,
       maxBuffer: options.maxBuffer,
       timeoutMs: options.timeoutMs,
@@ -3278,7 +3279,8 @@ export function performMutation(options = {}) {
         ['add', '-f', '-N', '--pathspec-from-file=-', '--pathspec-file-nul'],
         {
           ...context.preflight,
-          input: nulPathBuffer(initial.targets, true),
+          input: nulPathBuffer(initial.targets),
+          literalPathspecs: true,
         },
       );
       if (add.code !== 0) {

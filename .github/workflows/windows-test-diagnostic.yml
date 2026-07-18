@@ -9,26 +9,12 @@ permissions:
   contents: read
 
 jobs:
-  test-file:
-    strategy:
-      fail-fast: false
-      max-parallel: 4
-      matrix:
-        include:
-          - label: groups-01-12
-            pattern: '^\[group (?:[1-9]|1[0-2])\]'
-          - label: groups-13-23
-            pattern: '^\[group (?:1[3-9]|2[0-3])\]'
-          - label: r1-r2
-            pattern: '^\[(?:R1C|R2)'
-          - label: r3-r6
-            pattern: '^\[(?:R3|R4|R5|R6)'
+  group-22:
     runs-on: windows-latest
     timeout-minutes: 15
-    name: mutation ${{ matrix.label }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node --test --test-name-pattern '${{ matrix.pattern }}' tests/mutation-protocol.test.js
+      - run: node --test --test-name-pattern '^\[group 22\]' tests/mutation-protocol.test.js
