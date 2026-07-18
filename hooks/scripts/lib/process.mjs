@@ -104,7 +104,7 @@ function escapeCmdArgument(value, nestedBatchLayer = true) {
 function buildWindowsBatchCommand(command, args) {
   const shellCommand = [
     caretEscapeCmdSyntax(command),
-    ...args.map((argument) => escapeCmdArgument(argument, true)),
+    ...args.map((argument) => escapeCmdArgument(argument, false)),
   ].join(' ');
   return `"${shellCommand}"`;
 }

@@ -16,21 +16,9 @@ jobs:
       matrix:
         file:
           - tests/agy-fingerprint.test.js
-          - tests/change-files.test.js
-          - tests/config-contract.test.js
-          - tests/detect-environment.test.js
-          - tests/envelope-chain.test.js
-          - tests/envelope-emit.test.js
           - tests/mutation-protocol.test.js
-          - tests/native-release-smoke.test.js
-          - tests/phase6-protocol.test.js
-          - tests/plugin-contract.test.js
-          - tests/respond-runtime.test.js
           - tests/reviewer-bridges.test.js
-          - tests/reviewer-payload.test.js
           - tests/runtime-context.test.js
-          - tests/skill-runtime-contract.test.js
-          - tests/stage55-export.test.js
     runs-on: windows-latest
     timeout-minutes: 15
     name: ${{ matrix.file }}
