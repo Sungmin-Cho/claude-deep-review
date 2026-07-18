@@ -520,10 +520,16 @@ test('executable resolution and argv transport remain shell-free', async () => {
 
   if (process.platform === 'win32') {
     const probe = join(binDir, 'probe.cmd');
+    const powerShellProbe = join(binDir, 'probe.ps1');
     writeFileSync(probe, [
       '@echo off',
       'if not "%~2"=="" type nul > "%PROBE_MARKER_FILE%"',
       '"%NODE_EXE%" -e "process.stdout.write(JSON.stringify(process.argv.slice(1)))" "%~1"',
+      '',
+    ].join('\r\n'));
+    writeFileSync(powerShellProbe, [
+      `& '${process.execPath.replaceAll("'", "''")}' -e 'process.stdout.write(JSON.stringify(process.argv.slice(1)))' @args`,
+      'exit $LASTEXITCODE',
       '',
     ].join('\r\n'));
 

@@ -36,6 +36,7 @@ if (behavior === 'success') process.stdout.write('review ok Ω\\n');
   if (process.platform !== 'win32' || nodeModule) return script;
   const wrapper = join(root, `${name}.cmd`);
   writeFileSync(wrapper, `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`);
+  writeFileSync(join(root, `${name}.ps1`), `& '${process.execPath.replaceAll("'", "''")}' '${script.replaceAll("'", "''")}' @args\r\nexit $LASTEXITCODE\r\n`);
   return wrapper;
 }
 

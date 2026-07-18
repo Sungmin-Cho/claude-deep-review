@@ -1,6 +1,7 @@
 import {
   accessSync,
   constants,
+  existsSync,
   statSync,
 } from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -24,6 +25,8 @@ const POSIX_GROUP_EXIT_UNCONFIRMED_DIAGNOSTIC =
   'POSIX process group remained after SIGKILL; cleanup could not be confirmed before the hard deadline\n';
 const WINDOWS_TASKKILL_FALLBACK_DIAGNOSTIC =
   'Windows taskkill failed; sent direct SIGKILL fallback\n';
+const WINDOWS_BATCH_QUOTE_DIAGNOSTIC =
+  'Windows batch arguments containing quotes require a sibling PowerShell shim\n';
 
 function environmentValue(env, name) {
   if (!IS_WINDOWS) return env[name];
@@ -109,6 +112,11 @@ function buildWindowsBatchCommand(command, args) {
   return `"${shellCommand}"`;
 }
 
+function siblingPowerShellShim(filePath) {
+  const candidate = filePath.replace(/\.(?:cmd|bat)$/iu, '.ps1');
+  return candidate !== filePath && existsSync(candidate) ? candidate : null;
+}
+
 export function estimateWindowsBatchCommandUnits(command, args) {
   return buildWindowsBatchCommand(command, args).length;
 }
@@ -136,6 +144,26 @@ function prepareSpawn(command, args, env) {
   const comSpec = environmentValue(env, 'ComSpec')
     || environmentValue(process.env, 'ComSpec')
     || 'cmd.exe';
+  const powerShellShim = siblingPowerShellShim(resolved);
+  const powerShell = resolveExecutable('pwsh.exe', env)
+    || resolveExecutable('powershell.exe', env);
+  if (powerShellShim && powerShell) {
+    return {
+      command: powerShell,
+      args: [
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', powerShellShim,
+        ...args,
+      ],
+      windowsVerbatimArguments: false,
+    };
+  }
+  if (args.some((argument) => String(argument).includes('"'))) {
+    return { rejectedReason: WINDOWS_BATCH_QUOTE_DIAGNOSTIC };
+  }
   return {
     command: comSpec,
     args: ['/d', '/v:off', '/s', '/c', buildWindowsBatchCommand(resolved, args)],
@@ -213,6 +241,15 @@ export function runProcess(command, args = [], options = {}) {
 
   const env = options.env ?? process.env;
   const prepared = prepareSpawn(command, args.map(String), env);
+  if (prepared.rejectedReason) {
+    return Promise.resolve({
+      code: 2,
+      signal: undefined,
+      timedOut: false,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.from(prepared.rejectedReason),
+    });
+  }
   return new Promise((resolveResult) => {
     const stdout = [];
     const stderr = [];
