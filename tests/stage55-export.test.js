@@ -1,0 +1,96 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+
+const root = path.resolve(__dirname, '..');
+const wrapper = path.join(root, 'hooks', 'scripts', 'wrap-recurring-findings-envelope.js');
+
+function receiptEnvelope(runId) {
+  return {
+    $schema: 'https://example.invalid/envelope.json',
+    schema_version: '1.0',
+    envelope: {
+      producer: 'deep-work',
+      producer_version: '6.9.4',
+      artifact_kind: 'session-receipt',
+      run_id: runId,
+      generated_at: '2026-07-13T00:00:00Z',
+      schema: { name: 'session-receipt', version: '1.0' },
+      git: { head: 'abc1234', branch: 'main', dirty: false },
+      provenance: { source_artifacts: [], tool_versions: { node: process.version } },
+    },
+    payload: { session_id: 'session', health_report: { ok: true } },
+  };
+}
+
+test('Stage 5.5 discovers the canonical receipt and newest 20 reports without a shell', () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-stage55-'));
+  const project = path.join(parent, 'deep review 반복 Ω');
+  const reportsDir = path.join(project, '.deep-review', 'reports');
+  fs.mkdirSync(reportsDir, { recursive: true });
+  const payload = path.join(project, '.deep-review', 'payload.json');
+  const output = path.join(project, '.deep-review', 'recurring-findings.json');
+  fs.writeFileSync(payload, JSON.stringify({
+    updated_at: '2026-07-13T00:00:00Z',
+    taxonomy_version: '1.0',
+    findings: [],
+  }));
+
+  for (let index = 0; index < 25; index += 1) {
+    const name = `2026-07-13-${String(index).padStart(6, '0')}-review.md`;
+    fs.writeFileSync(path.join(reportsDir, name), `# report ${index}\n`);
+  }
+  fs.writeFileSync(path.join(reportsDir, 'zzzz-not-report.md'), '# unrelated\n');
+
+  const older = path.join(project, '.deep-work', '2026-07-13T00-00-00', 'session-receipt.json');
+  const newest = path.join(project, '.deep-work', '2026-07-13T01-00-00', 'session-receipt.json');
+  fs.mkdirSync(path.dirname(older), { recursive: true });
+  fs.mkdirSync(path.dirname(newest), { recursive: true });
+  fs.writeFileSync(older, JSON.stringify(receiptEnvelope('01J00000000000000000000000')));
+  fs.writeFileSync(newest, JSON.stringify(receiptEnvelope('01J00000000000000000000001')));
+
+  const result = spawnSync(process.execPath, [
+    wrapper,
+    '--payload-file', payload,
+    '--output', output,
+    '--discover-sources-from', project,
+    '--source-artifact', `${path.join(reportsDir, '2026-07-13-000024-review.md')}:01J00000000000000000000002`,
+  ], {
+    cwd: project,
+    env: { ...process.env, SHELL: '/bin/zsh' },
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /shopt|command not found/i);
+
+  const artifact = JSON.parse(fs.readFileSync(output, 'utf8'));
+  assert.equal(artifact.envelope.parent_run_id, '01J00000000000000000000001');
+  const sources = artifact.envelope.provenance.source_artifacts;
+  assert.equal(sources.length, 21);
+  assert.equal(sources[0].path, newest);
+  assert.equal(sources[0].run_id, '01J00000000000000000000001');
+  const expectedReports = Array.from({ length: 20 }, (_, offset) => (
+    path.join(reportsDir, `2026-07-13-${String(24 - offset).padStart(6, '0')}-review.md`)
+  ));
+  assert.deepEqual(sources.slice(1).map((entry) => entry.path), expectedReports);
+  assert.equal(sources[1].run_id, '01J00000000000000000000002', 'explicit source run_id overrides discovery');
+});
+
+test('Stage 5.5 executable reference is shell-free and delegates discovery to the wrapper', () => {
+  const source = fs.readFileSync(
+    path.join(root, 'skills', 'deep-review-workflow', 'references', 'recurring-findings-export.md'),
+    'utf8',
+  );
+  assert.doesNotMatch(source, /```(?:sh|shell|bash)/i);
+  assert.match(
+    source,
+    /node wrap-recurring-findings-envelope\.js --payload-file FILE --output FILE --discover-sources-from PROJECT_ROOT/,
+  );
+  assert.match(source, /payload.{0,100}preserv/is);
+  assert.match(source, /nonzero|non-zero/i);
+});

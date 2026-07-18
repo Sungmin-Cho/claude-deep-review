@@ -26,11 +26,21 @@ rm -f "$doc" "$cf" "$ctx" "$diff"
 # M-2 carry-over: negative assertion — skip-empty guard omits doctrine header from diff-only payload
 assert_failure "printf '%s' \"$out2\" | grep -q 'REVIEW SUPPRESSION DOCTRINE'" "diff-only payload omits doctrine header (skip-empty)"
 
-# Doc-structure assertions (Task 5)
+# Supported-runtime doc assertions. The shell implementation above remains a
+# Unix parity oracle; orchestration must use the Node builder.
 UC="$HERE/../../../skills/deep-review-workflow/references/ultracode-integration.md"
-assert_success "grep -q 'build-reviewer-payload.sh' \"$UC\"" "ultracode shards use shared builder"
-assert_success "grep -q 'fp_doctrine' \"$UC\"" "ultracode shards include fp_doctrine"
+assert_success "grep -q 'build-reviewer-payload.mjs' \"$UC\"" "ultracode shards use shared Node builder"
+assert_success "grep -Eq 'identical doctrine|동일한 doctrine' \"$UC\"" "ultracode shards receive shared doctrine"
+assert_failure "grep -q 'build-reviewer-payload.sh' \"$UC\"" "supported ultracode path rejects shell-era builder"
 RF="$HERE/../../../skills/deep-review-workflow/references/report-format.md"
 assert_success "grep -q 'Warnings' \"$RF\"" "report-format has Warnings line"
+
+# Decisive mutant: replacing the Node authority with the old shell name must
+# break the positive contract and trip the shell-only negative guard.
+mutant=$(mktemp)
+sed 's/build-reviewer-payload\.mjs/build-reviewer-payload.sh/' "$UC" > "$mutant"
+assert_failure "grep -q 'build-reviewer-payload.mjs' \"$mutant\"" "shell-name mutant loses Node builder authority"
+assert_success "grep -q 'build-reviewer-payload.sh' \"$mutant\"" "shell-name mutant is detected"
+rm -f "$mutant"
 
 test_summary

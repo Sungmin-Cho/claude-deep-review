@@ -17,19 +17,18 @@
 
 - `--respond {path}` → 지정된 리포트 로드
 - `--respond` (경로 없음) → `.deep-review/reports/*-review.md` 중 **mtime 기준 가장 최근** 하나 로드
-  (`ls -1t .deep-review/reports/*-review.md | head -1`). `-ultrareview.md` 같은 비표준 접미사는 glob에서 제외되어 일상 리뷰와 분리됨.
-- `--respond --source=pr [--pr=NNN]` → GitHub PR 코멘트를 `gh api`로 수집 (PR 번호 자동 감지 또는 수동 지정)
+  (`respond-runtime.mjs list-reports`). Node `fs.stat` mtime 내림차순과 절대
+  path tie-break를 사용하며, `-ultrareview.md` 같은 비표준 접미사는 제외된다.
+- `--respond --source=pr [--pr=NNN]` → `respond-runtime.mjs fetch-pr`로
+  GitHub PR 코멘트를 수집 (PR 번호 자동 감지 또는 수동 지정)
 - 리포트가 없으면: "대응할 리뷰 리포트가 없습니다. 먼저 `/deep-review`를 실행하세요."
 
 ### PR 코멘트 수집 (`--source=pr`)
 
-```bash
-# PR 번호 자동 감지 (현재 브랜치에 연결된 open PR)
-pr_number=$(gh pr view --json number -q .number 2>/dev/null || true)
-
-# owner/repo 자동 감지
-pr_repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)
-```
+Main은 absolute project root와 optional PR number만 runtime에 전달한다.
+Runtime은 `gh repo view`, optional `gh pr view`, 세 `gh api` endpoint를
+각각 argv array로 실행한다. PR number는 process 시작 전에 canonical
+positive integer로 검증한다.
 
 **감지 실패 처리**:
 
@@ -45,16 +44,10 @@ pr_repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || tru
 
 **수집**:
 
-```bash
-# top-level 리뷰 본문 수집 (REQUEST_CHANGES 본문 등)
-gh api --paginate "repos/${pr_repo}/pulls/${pr_number}/reviews"
-
-# 인라인 리뷰 코멘트 수집
-gh api --paginate "repos/${pr_repo}/pulls/${pr_number}/comments"
-
-# 일반 이슈 코멘트 수집
-gh api --paginate "repos/${pr_repo}/issues/${pr_number}/comments"
-```
+`respond-runtime.mjs fetch-pr`은 top-level review, inline review comment,
+issue comment를 분리된 배열로 반환한다. 본문은 JSON data이고 command
+text가 아니다. Endpoint 문자열은 검증된 owner/repository와 numeric PR로만
+구성한다.
 
 각 `gh api` 호출은 non-zero exit 시 "PR 코멘트 수집 실패 (엔드포인트: ...)" 메시지를 남기고
 해당 카테고리만 skip한다 (전체 중단 금지). 3개 모두 실패하면 사용자 에스컬레이션.
@@ -262,27 +255,40 @@ verification:
 
 ### 구현 규칙 — 그룹 dispatch
 
-Phase 6는 심각도 그룹(🔴 → 🟡 → ℹ️)별로 `phase6-implementer` 서브에이전트에 dispatch된다. Main은 판단·검증·기록만 담당한다.
+Phase 6는 심각도 그룹(🔴 → 🟡 → ℹ️)별 group dispatch다. Main은
+판단·검증·기록을 담당하고, implementation context는 이미 ACCEPT된 항목만
+수정한다.
 
-**단일 소스 (Single Source of Truth)** — 본 문서는 스킬 로드 시점의 *불변량 요약*이다. 실제 shell 로직과 상충하면 아래 소스를 우선한다:
+**단일 소스 (Single Source of Truth)** — 본 문서는 불변량 요약이다.
+실행 세부는 아래 Node 계약을 우선한다:
 
 | 영역 | 단일 소스 |
 |---|---|
-| Main의 구현 절차 (pre-snapshot, dispatch, DELTA 검증, allowlist, 그룹 커밋, dirty recovery) | `skills/receiving-review/references/respond-execution.md` Step 2.5 |
+| Main의 구현 절차 (snapshot, dispatch, verify, commit, recover) | `skills/receiving-review/references/respond-execution.md` Phase 6 loop |
 | Main↔Subagent 입출력 계약 | `references/phase6-prompt-contract.md` |
 | 설계 배경·결정 사항 | `references/phase6-delegation-spec.md` |
 | Subagent의 구현 절차 | `agents/phase6-implementer.md` 시스템 프롬프트 |
-| 실행 검증 | `hooks/scripts/test/test-phase6-protocol-e2e.sh` (E1~E12) |
+| 실행 검증 | `hooks/scripts/phase6-protocol.mjs` + `tests/phase6-protocol.test.js` |
 
 **불변량 요약** (스킬 단독 로드 시 최소 보장 — 세부는 위 단일 소스 참조):
 
-1. **그룹 loop**: 🔴 → 🟡 → ℹ️. 빈 그룹 skip. 그룹별 로그 `.deep-review/tmp/phase6-{severity}.log`.
-2. **Pre-dispatch baseline**: `ALLOWED` (= `target_location` ∪ `modifiable_paths`) 각 파일의 `git hash-object` + per-file 복사본을 `.deep-review/tmp/phase6-{severity}-baseline/` 에 저장 (E2/E5 dirty-tree race 방지).
-3. **Dispatch fallback**: `deep-review:phase6-implementer` → `phase6-implementer` → main fallback (2단계).
-4. **Trust boundary**: 서브에이전트가 `ALLOWED` 외부 경로를 수정·생성·삭제하면 `execution_status=error`. content-aware DELTA (post-hash ≠ PRE_HASH) + claim 정규화 비교 + REVERTED check 모두 통과해야 PASS.
-5. **그룹 커밋**: 전원 PASS AND 검증 통과 시에만 `git commit --only -m "..." -- <pathspec>` (pathspec-limited). `git add -A` / pathspec-less commit 금지. pre-staged hunk 검출 시 AskUserQuestion.
-6. **Dirty recovery**: 검증 실패 시 사용자에게 (1) 유지 (2) baseline 복원 (3) 중단 — `git restore --source=HEAD` 는 pre-existing WIP 를 파괴하므로 금지, Step 2 baseline 복사만 사용.
-7. **Context 안전장치**: main fallback 시 남은 항목 ≥ 5 이면 DEFER 제안.
+1. **그룹 loop**: 🔴 → 🟡 → ℹ️. 빈 그룹은 snapshot 없이 skip.
+2. **Shared prompt**: Claude named/fallback과 Codex generic context가 동일한
+   Accepted Items text를 사용한다. Codex는 shipped agent file을 먼저 읽는다.
+3. **Snapshot**: `phase6-protocol.mjs snapshot`이 allowed paths, worktree,
+   index, staged state, outside dirty state, HEAD, log path를 소유한다.
+4. **Test**: implementation context는 JSON argv file을 만들고
+   `phase6-protocol.mjs run-test`를 호출한다.
+5. **Verify**: Main은 raw result를 file로 저장하고 항상
+   `phase6-protocol.mjs verify`를 호출한다. Malformed result, missing log,
+   unexpected delta, outside mutation, index change, HEAD change는 error다.
+6. **Commit**: verified + failed 0일 때만 Node commit을 호출한다.
+   `requires_user_confirmation`이면 명시적 긍정 전까지 HEAD와 index를
+   그대로 둔다. decline/defer는 commit하지 않는다.
+7. **Recovery**: HEAD가 snapshot과 같을 때만 Node recover를 호출한다.
+   Snapshot이 worktree와 index를 독립적으로 복원한다.
+8. **Stop**: error, regression halt, failed item은 다음 그룹을 차단한다.
+9. **Context 안전장치**: main fallback 시 남은 항목 ≥ 5 이면 DEFER 제안.
 
 ### Response 리포트 생성
 
@@ -293,19 +299,11 @@ Phase 6는 심각도 그룹(🔴 → 🟡 → ℹ️)별로 `phase6-implementer`
 
 **중요**: PR 코멘트 게시는 구현+테스트 성공 이후에 수행한다. 구현 전에 "Fixed" 등을 게시하면, 실패 시 거짓 답글이 남는다.
 
-각 ACCEPT 항목 중 **서브에이전트가 PASS로 반환하고 main 검증(content-aware DELTA = suffix-stripped CLAIM, allowlist 내부, REVERTED 없음, `log_path` 가용)을 통과한 항목**에 대해서만 해당 코멘트에 답글 (스펙 §4.2 W6):
-
-인라인 코멘트:
-```bash
-gh api repos/{owner}/{repo}/pulls/{pr_number}/comments/{comment_id}/replies \
-  -f body="[응답 내용]"
-```
-
-일반 코멘트:
-```bash
-gh api repos/{owner}/{repo}/issues/{pr_number}/comments \
-  -f body="[응답 내용]"
-```
+각 ACCEPT 항목 중 implementation result PASS와 Node verify를 모두 통과한
+항목에 대해서만 해당 코멘트에 답글한다. Main은 response body를 private
+UTF-8 file로 쓰고 `respond-runtime.mjs post-pr-response`에 전달한다.
+Runtime은 inline reply와 issue comment endpoint를 구분하고 body를 JSON stdin
+data로 전송한다.
 
 REJECT 항목은 구현이 필요 없으므로 Phase 5(RESPOND) 결정 직후 바로 게시 가능.
 

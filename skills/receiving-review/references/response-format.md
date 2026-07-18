@@ -9,11 +9,12 @@
 
 ## 디렉토리
 
-`.deep-review/responses/`는 `--respond` 최초 실행 시 자동 생성:
-
-```bash
-mkdir -p .deep-review/responses
-```
+`.deep-review/responses/`와 최종 파일은
+`hooks/scripts/respond-runtime.mjs write-report`가 생성한다. Main은 완성된
+UTF-8 본문을 private content file로 전달하고, runtime이 충돌하지 않는
+이름으로 원자적으로 publish한 절대 경로를 사용한다. Runtime을 호출할 수
+없는 host는 direct host file-creation tool로 동일한 unique-create 의미론을
+보장한다. 기존 response 파일을 덮어쓰지 않는다.
 
 ## 구조
 

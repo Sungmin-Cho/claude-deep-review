@@ -8,7 +8,7 @@
 
 AI 코딩 에이전트를 위한 독립 Evaluator 플러그인 — Codex 연동 교차 모델 코드 리뷰와 Sprint Contract 지원.
 
-AI 코딩 에이전트에는 구조적 맹점이 있습니다: 자신이 작성한 코드를 스스로 리뷰합니다. 코드를 작성한 에이전트가 그것을 판단하므로 자기 승인 편향이 구조적으로 내재합니다. deep-review는 원본 세션 컨텍스트 — 코드 뒤의 추론·의도·가정 — 를 전혀 모르고 diff만 보는 **별도의 Opus 서브에이전트**를 생성하여 구조적으로 독립된 평가를 수행합니다. [Codex](https://github.com/openai/codex)(및 선택적으로 `agy` CLI)가 설치되어 있으면 리뷰가 병렬 교차 모델 검증으로 확장되고, 발견 사항은 신뢰도 수준에 따라 합성됩니다.
+AI 코딩 에이전트에는 구조적 맹점이 있습니다: 자신이 작성한 코드를 스스로 리뷰합니다. 코드를 작성한 에이전트가 그것을 판단하므로 자기 승인 편향이 구조적으로 내재합니다. deep-review는 원본 세션의 추론·의도·가정이 아니라 공유 리뷰 페이로드만 보는 **별도의 reviewer context**로 구조적으로 독립된 평가를 수행합니다. Claude Code는 Opus named agent를, Codex는 네이티브 generic 서브에이전트를 사용할 수 있으며, 선택적 Codex companion과 `agy` 역할이 병렬 교차 모델 검증을 확장합니다.
 
 ## deep-suite에서의 역할
 
@@ -33,13 +33,19 @@ codex plugin install deep-review
 
 추가 설정은 필요 없습니다. 첫 실행 시 기본 `config.yaml`과 함께 `.deep-review/`가 생성됩니다. 프로젝트별 `rules.yaml`을 생성하려면 `/deep-review init`을 실행합니다.
 
-## 커맨드
+지원 런타임은 macOS, Linux, 네이티브 Windows 11에서 동작하는 무의존성 Node.js 22와 Git 2.45 이상입니다. Git Bash는 필수 조건이 아닙니다.
+
+## 사용법
+
+Claude Code 슬래시 커맨드와 Codex 스킬은 동일한 라우트 문법을 위한 서로 다른 호스트 진입점입니다.
+
+### Claude Code
 
 | 커맨드 | 설명 |
 |---|---|
 | `/deep-review` | 독립 Opus 서브에이전트로 현재 변경사항 리뷰 (Codex/agy 존재 시 교차 모델) |
-| `/deep-review --ultracode [--codex]` | 멀티에이전트 Claude fan-out (하이브리드: Workflow 도구 가용 시 우선, 그 외 병렬 `code-reviewer` 에이전트) — 단일 "Claude(ultracode)" 보이스로 collapse + 선택적 Codex 2-way |
-| `/deep-review --codex-only` | 내부 Claude 리뷰어를 끄고 Codex 2-way 만 실행 (외부 `--ultracode` 세션과 역할분담) |
+| `/deep-review --ultracode [--codex]` | 6개 집중 Claude reviewer context를 단일 "Claude(ultracode)" 보이스로 collapse하고, 단일 브리지 fallback을 명시적으로 표시하며 선택적 Codex 역할 추가 |
+| `/deep-review --codex-only` | Claude 리뷰어를 끄고 사용 가능한 Codex 역할만 실행 |
 | `/deep-review --contract [SLICE-NNN]` | Sprint Contract 기반 구조적 검증 |
 | `/deep-review --entropy` | 엔트로피 스캔 (중복, 패턴 드리프트, 네이밍 불일치) |
 | `/deep-review --respond [REPORT_PATH]` | 증거 기반 프로토콜로 리뷰 피드백 대응 |
@@ -48,9 +54,17 @@ codex plugin install deep-review
 | `/deep-review-loop --ultracode --codex` | ultracode 1회(라운드 1) + codex 매 라운드 통합 루프 |
 | `/deep-review init` | 프로젝트별 리뷰 규칙 대화형 초기화 |
 
-**합성 리뷰어 플래그** (v1.10.0):
+### Codex
 
-- `--ultracode` — Claude 쪽 리뷰를 멀티에이전트 fan-out 으로 수행 (하이브리드: Workflow 도구 가용 시 우선, 그 외 병렬 `code-reviewer` 에이전트), 단일 "Claude(ultracode)" 보이스로 collapse.
+| 스킬 | 설명 |
+|---|---|
+| `$deep-review:deep-review` | `/deep-review`와 동일한 플래그·합성 규칙으로 현재 변경사항 리뷰 |
+| `$deep-review:deep-review --respond [REPORT_PATH]` | 증거 기반 대응 프로토콜 실행 |
+| `$deep-review:deep-review-loop [--max=N]` | 수렴할 때까지 리뷰와 대응 반복 |
+
+**합성 리뷰어 플래그**:
+
+- `--ultracode` — 6개 집중 Claude reviewer context를 단일 "Claude(ultracode)" 보이스로 collapse하며, fan-out 불가 시 하나의 네이티브 Claude 브리지로 명시적으로 degrade.
 - `--codex` / `--no-codex` / `--no-opus` / `--no-agy`, 슈가 `--codex-only`(= `--codex --no-opus --no-agy`).
 - `/deep-review-loop --ultracode --codex`: ultracode 1회(라운드 1) + codex 매 라운드.
 - 무플래그 시 기존 동작 100% 유지.
@@ -62,7 +76,7 @@ deep-review는 매 실행 시 4단계 파이프라인을 수행하며, 선택적
 ```
 Stage 1: Collect      — 환경 감지, diff 수집
 Stage 2: Contract     — Sprint Contract가 있으면 로드
-Stage 3: Deep Review  — Opus 서브에이전트 백그라운드 생성 (Codex / agy 가능 시 추가)
+Stage 3: Deep Review  — 사용 가능한 독립 리뷰어 역할 디스패치
 Stage 4: Verdict      — 결과 합성, APPROVE / CONCERN / REQUEST_CHANGES 판정
 Stage 5: Respond      — 증거 기반 피드백 대응 (--respond로 진입)
 ```
@@ -92,7 +106,7 @@ diff 제외 대상: 바이너리, `vendor/`, `node_modules/`, `dist/`, `build/`,
 
 ### Stage 3: Deep Review (심층 리뷰)
 
-독립 `code-reviewer` 에이전트가 `model: opus`, `run_in_background: true`로 생성됩니다. Codex / non-Claude 런타임에서는 동일 reviewer를 `claude -p --agent code-reviewer`로 실행합니다. spawn 전 실행될 리뷰어 구성(Opus 단독 또는 교차 모델)을 고지합니다. 에이전트는 diff, rules, contract만 받으며 — 원본 세션 컨텍스트는 절대 받지 않습니다 — 6가지 관점을 평가합니다:
+Claude Code는 capability가 있으면 독립 named `code-reviewer` 에이전트를 사용하고, 없으면 네이티브 Node Claude 브리지를 사용합니다. Codex는 표준 `codex-review` 역할에 generic 서브에이전트를 사용하며, Claude CLI가 설치된 경우 별도의 Claude-family 역할에 Node Claude 브리지를 사용할 수 있습니다. 디스패치 전에 실행될 리뷰어 구성을 고지합니다. 모든 리뷰어는 원본 세션 컨텍스트가 아닌 공유 페이로드만 받고 6가지 관점을 평가합니다:
 
 | # | 관점 | 검사 내용 |
 |---|---|---|
@@ -103,7 +117,7 @@ diff 제외 대상: 바이너리, `vendor/`, `node_modules/`, `dist/`, `build/`,
 | 5 | 가독성 | 다음 에이전트가 처음 읽을 때 이해 가능한가 |
 | 6 | 보안 | 입력 검증, 인증/인가 우회, 인젝션(prompt injection 포함), 비밀 노출, 위험한 연산 |
 
-v1.12.0부터 공유 리뷰어 페이로드(Opus 리뷰어, ultracode 샤드, agy가 사용)에 두 가지가 추가됩니다:
+공유 리뷰어 페이로드(Opus 리뷰어, ultracode 샤드, agy가 사용)는 다음을 포함합니다:
 
 - **`change_files` 매니페스트** — NUL-safe, capped 교차 파일 매니페스트(이름 변경/복사 감지, dirty 상태 untracked 유니온)로 리뷰어가 diff 하나가 아닌 전체 변경 집합을 봅니다. diff 자체는 instruction-attention을 위해 마지막에 배치되며, 위 Stage 1 제외 목록을 동일하게 따릅니다.
 - **FP-억제 독트린** — false-positive 억제 독트린과 conservative-balance 반대 가중치를 `review-criteria.md` 단일 출처에서 Opus 프롬프트, ultracode 샤드, agy 페이로드에 주입합니다. 표준 `codex review`와 Codex adversarial 패스는 공격성 보존을 위해 의도적으로 제외됩니다.
@@ -121,11 +135,11 @@ v1.12.0부터 공유 리뷰어 페이로드(Opus 리뷰어, ultracode 샤드, ag
 
 ### Codex 자동 노출 프로토콜
 
-git 리포지터리 + Codex 플러그인 설치 환경에서 `/deep-review`는 이번 세션에서 편집한 gitignored 파일 — 전형적으로 스펙, 리서치 노트, 플랜 문서 — 을 감지해 사용자 승인 하에 Codex에 임시 노출하여 교차 모델 리뷰를 수행합니다. 실행될 git 명령을 단일 프롬프트에 표시하고, atomic `mkdir` lock을 획득한 뒤 `--scope working-tree`로 리뷰를 실행하고, 상태를 원복합니다(리뷰 중 사용자가 실제로 staging한 것은 보존). 중간에 크래시된 세션은 다음 실행 시 자동 회수됩니다. 민감 패턴(`.env*`, credentials, SSH 키, GCP 서비스 계정, `.pgpass`, `.netrc`, `wrangler.toml`, JWT 등)을 대소문자 불문 스캔하며, 전원 민감 파일이면 프롬프트 없이 자동 skip합니다.
+eligible companion 프로세스가 gitignored 리뷰 입력을 필요로 할 때 `/deep-review`는 해당 경로를 감지하고 승인을 받은 뒤, 지속되는 Node 뮤테이션 프로토콜로 승인된 집합만 임시 노출합니다. 프로토콜은 불투명한 프로세스 간 토큰을 소유하고 정확한 인덱스 상태를 복원하며 중단된 작업을 자동 복구합니다. 네이티브 Codex generic 서브에이전트는 허용된 경로를 직접 읽으므로 Codex 호스트라는 이유만으로 인덱스 뮤테이션을 실행하지 않습니다. 민감 패턴(`.env*`, credentials, SSH 키, GCP 서비스 계정, `.pgpass`, `.netrc`, `wrangler.toml`, JWT 등)은 대소문자 불문으로 스캔하며 fail-closed 처리합니다.
 
 ## 교차 모델 검증
 
-Codex가 설치되어 있고 git 커밋이 있는 경우, 리뷰는 병렬로 실행되어 신뢰도 수준에 따라 합성됩니다:
+여러 reviewer 역할을 사용할 수 있으면 리뷰가 병렬로 실행되고 신뢰할 수 있는 결과를 신뢰도 수준에 따라 합성합니다:
 
 ```
               ┌──────────────────┼──────────────────┐
@@ -145,13 +159,13 @@ Codex가 설치되어 있고 git 커밋이 있는 경우, 리뷰는 병렬로 �
                     └────────────────────────┘
 ```
 
-`agy`(Google Antigravity) CLI가 감지되면 cross-vendor-family 4번째 리뷰어로 합류합니다. Codex가 미설치면 deep-review는 1회 알림 후 Opus 단독으로 진행합니다. 리뷰어가 실패하면(인증 오류, 타임아웃) graceful하게 fallback하고 해당 리뷰어를 "미수행"으로 표시합니다.
+`agy`(Google Antigravity) CLI가 감지되면 cross-vendor-family 4번째 리뷰어로 합류합니다. Codex 리뷰어 역할을 사용할 수 없으면 deep-review는 1회 알림 후 사용 가능한 역할로 계속 진행합니다. 리뷰어가 실패하면(인증 오류, 타임아웃) graceful하게 fallback하고 해당 리뷰어를 "미수행"으로 표시합니다.
 
 `staged`, `unstaged`, `mixed` 상태에서는 교차 모델 검증이 실제 커밋 베이스에 대해 실행되도록 WIP 커밋 생성을 제안합니다. 제안은 파일 목록을 미리 보여주고 민감 패턴을 경고하며 `git add -A`를 사용하지 않습니다; `git reset --soft HEAD~1`로 원복합니다. shallow clone은 감지되어 `git fetch --unshallow` 권장이 표시됩니다.
 
 ## Receiving Review (Stage 5)
 
-Stage 4가 `REQUEST_CHANGES`를 반환하면 deep-review는 증거 기반 대응(`/deep-review --respond`), `codex:rescue` 위임(Codex 설치 시), 수동 처리를 제공합니다. `--respond` 플래그가 6단계 프로토콜을 활성화합니다:
+Stage 4가 `REQUEST_CHANGES`를 반환하면 deep-review는 증거 기반 대응(`/deep-review --respond`) 또는 수동 처리를 제공합니다. `--respond` 플래그가 6단계 프로토콜을 활성화합니다:
 
 | 단계 | 행동 |
 |---|---|
@@ -204,6 +218,8 @@ deep-review는 `.deep-review/` 아래 여러 파일을 읽습니다:
 - **`recurring-findings.json`** — 매 리뷰 후 반복 패턴을 7개 taxonomy(`error-handling`, `naming-convention`, `type-safety`, `test-coverage`, `security`, `performance`, `architecture`)로 분류하고 M3 cross-plugin envelope으로 emit하며, deep-evolve가 소비하여 실험 방향을 조향합니다.
 
 **팀 공유**: `rules.yaml`, `contracts/`, `journeys/`는 프로젝트 지식이므로 커밋해야 하며, `config.yaml`, `reports/`, `responses/`, `entropy-log.jsonl`, `recurring-findings.json`은 머신별 런타임 상태입니다. `/deep-review init`이 이 구분을 `.gitignore`에 반영합니다.
+
+`review_model`은 비어 있지 않은 설치된 Claude 모델 alias를 그대로 전달합니다. 예: `review_model: fable`.
 
 ## 링크
 

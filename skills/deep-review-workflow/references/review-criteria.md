@@ -75,7 +75,7 @@ rules.yaml이 있으면 해당 규칙 기준, 없으면 일반 원칙:
 
 ## 지적하지 말 것 (억제 규칙)
 
-> **불변(v1.12.0)**: 이 블록(`fp-doctrine`)과 `fp-conservative` 블록은 모든 리뷰어(Opus 프롬프트·ultracode 샤드·agy 페이로드) 페이로드에 `extract-fp-doctrine.sh`로 주입된다. 표준 `codex review`·Codex adversarial 에는 주입하지 않는다.
+> **불변**: `build-reviewer-payload.mjs` is the doctrine injector for all supported runtimes and reviewer roles. `extract-fp-doctrine.sh` remains only a Unix parity oracle. The anchor bodies below are byte-stable authority.
 
 신호 대 잡음비를 위해 다음은 finding으로 올리지 않거나 강등한다:
 <!-- fp-doctrine:start -->

@@ -4,6 +4,20 @@
 
 All notable changes to deep-review are documented here. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] — 2026-07-11
+
+### Added
+
+- Native Codex review/respond skills and host-aware reviewer and Phase 6 subagent dispatch now provide the public workflows on both Claude Code and Codex.
+
+### Changed
+
+- Supported review, loop, mutation, reviewer bridges, Stage 5.5 recurring export, and response verification now run on the zero-dependency Node 22 runtime across macOS, Linux, and Windows 11.
+
+### Fixed
+
+- Codex default-hook validation, cross-process mutation recovery, Stage 5.5 zsh shopt noise, Windows path and timeout behavior, and fail-closed reviewer mutation handling.
+
 ## [1.12.3] — 2026-07-07
 
 ### Fixed

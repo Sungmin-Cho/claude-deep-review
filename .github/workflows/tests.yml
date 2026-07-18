@@ -5,16 +5,23 @@ on:
     branches: [main]
   pull_request:
     paths:
-      - 'hooks/scripts/**'
-      - 'hooks/hooks.json'
+      - 'docs/**'
+      - 'README.md'
+      - 'README.ko.md'
+      - 'CHANGELOG.md'
+      - 'CHANGELOG.ko.md'
+      - 'CLAUDE.md'
+      - 'AGENTS.md'
+      - 'hooks/**'
+      - 'hooks/scripts/test/**'
+      - 'scripts/**'
       - 'commands/**'
       - 'skills/**'
       - 'agents/**'
       - '.claude-plugin/**'
       - '.codex-plugin/**'
-      - 'tests/**'
-      - 'scripts/**'
       - 'package.json'
+      - 'tests/**'
       - '.github/workflows/**'
 
 permissions:
@@ -27,56 +34,78 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    name: tests (${{ matrix.os }})
+    name: native tests (${{ matrix.os }})
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
-      - name: Show bash version (M5.5 #4 — bash 3.2 visibility)
-        run: bash --version
-
-      - name: Run envelope tests
+      - name: Run native tests
         run: npm test
 
-      - name: Run mutation-protocol bash regression (M5.5 #5 + stat cross-platform fix)
-        run: bash hooks/scripts/test/test-mutation-protocol.sh
+  windows-test-shards:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - non-mutation
+          - groups-01-06
+          - group-07
+          - groups-08-12
+          - groups-13-18
+          - groups-19-23
+          - r1-r2-core
+          - r2-c3
+          - r3-core
+          - r3-c3-r4
+          - r5-c1-c2
+          - r5-c3-c4
+          - r6
+    runs-on: windows-latest
+    timeout-minutes: ${{ matrix.shard == 'group-07' && 60 || 30 }}
+    name: Windows native shard (${{ matrix.shard }})
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Run sensitive-patterns library tests
-        run: bash hooks/scripts/test/test-sensitive-patterns-lib.sh
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
-      - name: detect-environment smoke test
-        run: bash hooks/scripts/test/test-detect-environment.sh
+      - name: Run native test shard
+        run: node scripts/run-windows-native-shard.mjs "${{ matrix.shard }}"
 
-      - name: run-agy-reviewer bridge test
-        run: bash hooks/scripts/test/test-run-agy-reviewer.sh
+  windows-tests:
+    if: ${{ always() }}
+    needs: windows-test-shards
+    runs-on: ubuntu-latest
+    name: native tests (windows-latest)
+    steps:
+      - name: Require every Windows shard
+        env:
+          SHARD_RESULT: ${{ needs.windows-test-shards.result }}
+        run: test "$SHARD_RESULT" = success
 
-      - name: ultracode/codex flags structural test
-        run: bash hooks/scripts/test/test-ultracode-flags.sh
+  legacy-unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    name: legacy Unix oracle (${{ matrix.os }})
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: extract-fp-doctrine
-        run: bash hooks/scripts/test/test-extract-fp-doctrine.sh
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
-      - name: build-change-files
-        run: bash hooks/scripts/test/test-build-change-files.sh
-
-      - name: build-reviewer-payload
-        run: bash hooks/scripts/test/test-build-reviewer-payload.sh
-
-      - name: payload-ordering
-        run: bash hooks/scripts/test/test-payload-ordering.sh
-
-      - name: extract-anchor contract test
-        run: bash hooks/scripts/test/test-extract-anchor.sh
-
-      - name: test CI-enrollment drift guard
+      - name: Check recursive legacy enrollment
         run: bash scripts/check-test-ci-enrollment.sh
 
-      - name: CI-enrollment guard unit test
-        run: bash hooks/scripts/test/test-check-test-ci-enrollment.sh
-
-      - name: verdict-synthesis SSOT structural test
-        run: bash hooks/scripts/test/test-verdict-synthesis-ssot.sh
+      - name: Run recursive legacy oracle
+        run: npm run test:legacy

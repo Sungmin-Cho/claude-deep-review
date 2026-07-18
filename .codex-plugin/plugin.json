@@ -1,6 +1,6 @@
 {
   "name": "deep-review",
-  "version": "1.12.3",
+  "version": "1.13.0",
   "description": "Independent Evaluator for AI coding agents with cross-model review workflows",
   "author": {
     "name": "Sungmin-Cho"
@@ -14,7 +14,6 @@
     "quality"
   ],
   "skills": "./skills/",
-  "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "Deep Review",
     "shortDescription": "Independent code review workflow",
@@ -27,9 +26,8 @@
       "Write"
     ],
     "defaultPrompt": [
-      "$deep-review:deep-review-workflow",
-      "$deep-review:deep-review-loop",
-      "$deep-review:receiving-review"
+      "$deep-review:deep-review",
+      "$deep-review:deep-review-loop"
     ],
     "brandColor": "#111827",
     "screenshots": []

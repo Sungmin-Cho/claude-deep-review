@@ -1,30 +1,47 @@
 # deep-review - Codex Project Guide
 
-Independent Evaluator for AI coding agents. This repo keeps the Claude Code
-plugin surface and exposes Codex-native plugin metadata and skill entrypoints.
+Independent Evaluator for AI coding agents. This repository exposes native
+Codex skills alongside the Claude Code adapter and a shared zero-dependency
+Node runtime.
 
-To check the current version: `jq -r .version .codex-plugin/plugin.json`
+Read the current version with:
 
-> 📄 Documentation in this repo follows `docs/DOCS_RULE.md` (local maintainer guide — single-source-of-truth rules for README / CHANGELOG / this file).
+```bash
+node -p "require('./package.json').version"
+```
 
-## Runtime Surfaces
+> 📄 Documentation in this repo follows `docs/DOCS_RULE.md` (local maintainer
+> guide — single-source-of-truth rules for README, CHANGELOG, and agent guides).
+
+## Runtime surfaces
 
 - Codex manifest: `.codex-plugin/plugin.json`
-- Claude Code manifest: `.claude-plugin/plugin.json`
-- User-invocable skills: `skills/deep-review-*/` and `skills/receiving-review/`
-- Legacy command reference: `commands/deep-review.md`
-- Hooks: `hooks/hooks.json` and `hooks/scripts/`
-- Agents: `agents/`
+- Claude manifest: `.claude-plugin/plugin.json`
+- Public skills: `skills/deep-review/SKILL.md` and
+  `skills/deep-review-loop/SKILL.md`
+- Claude adapter: `commands/deep-review.md`
+- Shared runtime: `hooks/scripts/*.mjs` and `hooks/scripts/lib/*.mjs`
+- Legacy Unix oracles: `hooks/scripts/test/test-*.sh`
 
-Review output under `.deep-review/` is runtime state and should not be committed
-unless explicitly requested as an artifact.
+Review output under `.deep-review/` is runtime state and should not be
+committed unless explicitly requested.
+
+## Release invariants
+
+- Node 22 supports macOS, Linux, and native Windows 11 without Git Bash.
+- Keep supported runtime references shell-free and capability-routed.
+- Keep versions synchronized across both manifests and `package.json`.
+- Never add official Codex `hooks` or `mcpServers` manifest keys.
+- Preserve N_actual=0 fail-closed behavior, read-only fingerprints, mutation
+  ownership, and Phase 6 verification before commit.
+- Keep README and CHANGELOG pairs structurally bilingual and evergreen.
 
 ## Verification
 
 ```bash
-node -e "JSON.parse(require('fs').readFileSync('.codex-plugin/plugin.json','utf8'))"
 npm test
+npm run test:legacy
+node --test tests/plugin-contract.test.js tests/skill-runtime-contract.test.js tests/native-release-smoke.test.js
+python3 /Users/sungmin/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py .
+git diff --check
 ```
-
-After a release, update both suite marketplace manifests in
-`/Users/sungmin/Dev/claude-plugins/deep-suite/`.

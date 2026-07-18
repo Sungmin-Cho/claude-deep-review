@@ -1,0 +1,389 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+
+const root = path.resolve(__dirname, '..');
+const loopState = path.join(root, 'hooks', 'scripts', 'loop-state.mjs');
+
+function read(relativePath) {
+  return fs.readFileSync(path.join(root, relativePath), 'utf8');
+}
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function anchoredBody(source, name) {
+  const normalized = source.replace(/\r\n|\r/gu, '\n');
+  const start = `<!-- ${name}:start -->`;
+  const end = `<!-- ${name}:end -->`;
+  assert.notEqual(normalized.indexOf(start), -1, `${name} start marker missing`);
+  assert.notEqual(normalized.indexOf(end), -1, `${name} end marker missing`);
+  return normalized.slice(
+    normalized.indexOf(start) + start.length,
+    normalized.indexOf(end),
+  );
+}
+
+function runLoop(args) {
+  const result = spawnSync(process.execPath, [loopState, ...args], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  let json;
+  try {
+    json = JSON.parse(result.stdout);
+  } catch {
+    json = null;
+  }
+  return { ...result, json };
+}
+
+test('public skill owns the route-first grammar and Claude command is a thin same-args shim', () => {
+  const publicSkill = read('skills/deep-review/SKILL.md');
+  assert.match(publicSkill, /^name: deep-review$/m);
+  assert.match(publicSkill, /^user-invocable: true$/m);
+  assert.match(publicSkill, /--contract \[SLICE-NNN\]/);
+  assert.match(publicSkill, /--respond \(REPORT_PATH \| --source=pr/);
+  assert.match(publicSkill, /--ultracode/);
+  assert.match(publicSkill, /--codex-only/);
+  assert.match(publicSkill, /public-route\.mjs --entry review/);
+  for (const route of ['init', '--respond', '--qa', 'review']) {
+    assert.match(
+      publicSkill,
+      new RegExp(`(?:${escapeRegex(route)}).{0,160}(?:terminal|종료)`, 'isu'),
+      `${route} must be terminal`,
+    );
+  }
+
+  const command = read('commands/deep-review.md');
+  assert.match(command, /skills\/deep-review\/SKILL\.md/);
+  assert.match(command, /\$ARGUMENTS/);
+  assert.doesNotMatch(command, /deep-review-workflow\/SKILL\.md/);
+  assert.doesNotMatch(command, /review-execution\.md/);
+  assert.ok(command.split(/\r?\n/).length <= 35, 'Claude shim duplicated the public pipeline');
+});
+
+test('production route and synthesis helpers own parsing and fail-closed reviewer admission', () => {
+  const publicSkill = read('skills/deep-review/SKILL.md');
+  const loop = read('skills/deep-review-loop/SKILL.md');
+  const review = read('skills/deep-review-workflow/references/review-execution.md');
+  assert.match(publicSkill, /returned JSON.{0,120}executable route authority/is);
+  assert.match(loop, /public-route\.mjs --entry loop/);
+  assert.match(review, /review-synthesis\.mjs --input/);
+  assert.match(review, /phase6_allowed/);
+  assert.match(review, /operational_failure.{0,160}no later response or Phase 6 commit/is);
+});
+
+test('Codex manifest exposes only the two public entrypoints and keeps hooks/MCP empty', () => {
+  const manifest = JSON.parse(read('.codex-plugin/plugin.json'));
+  assert.deepEqual(manifest.interface.defaultPrompt, [
+    '$deep-review:deep-review',
+    '$deep-review:deep-review-loop',
+  ]);
+  assert.equal(Object.hasOwn(manifest, 'hooks'), false);
+  assert.equal(Object.hasOwn(manifest, 'mcpServers'), false);
+  assert.deepEqual(JSON.parse(read('hooks/hooks.json')).hooks, {});
+});
+
+test('release documentation keeps Claude and Codex public route examples distinct', () => {
+  const publicSkill = read('skills/deep-review/SKILL.md');
+  const loopSkill = read('skills/deep-review-loop/SKILL.md');
+  const command = read('commands/deep-review.md');
+  const readmes = [read('README.md'), read('README.ko.md')];
+
+  assert.match(publicSkill, /\$deep-review:deep-review/u);
+  assert.match(publicSkill, /\/deep-review/u);
+  assert.match(loopSkill, /\$deep-review:deep-review-loop/u);
+  assert.match(loopSkill, /\/deep-review-loop/u);
+  assert.match(command, /same argument|same arguments|동일한 인자/iu);
+
+  for (const source of readmes) {
+    assert.match(source, /Claude Code/u);
+    assert.match(source, /Codex/u);
+    assert.equal(source.includes('/deep-review'), true);
+    assert.equal(source.includes('/deep-review --respond'), true);
+    assert.equal(source.includes('/deep-review-loop'), true);
+    assert.equal(source.includes('$deep-review:deep-review'), true);
+    assert.equal(source.includes('$deep-review:deep-review-loop'), true);
+    assert.match(source, /Node(?:\.js)? 22/u);
+    assert.match(source, /Windows 11/u);
+    assert.match(source, /Git Bash/u);
+  }
+});
+
+test('runtime dispatch SSOT is capability-based and defines the exact role matrix', () => {
+  const dispatch = read('skills/deep-review-workflow/references/runtime-dispatch.md');
+  const rows = [
+    ['public review/respond entry', '/deep-review', '$deep-review:deep-review'],
+    ['loop entry', '/deep-review-loop', '$deep-review:deep-review-loop'],
+    ['independent Claude reviewer', 'Agent(code-reviewer)', 'Node Claude bridge when CLI exists'],
+    ['Codex standard reviewer', 'Node Codex bridge', 'generic subagent'],
+    ['Codex adversarial reviewer', 'Node Codex bridge', 'Node Codex bridge'],
+    ['agy reviewer', 'Node agy bridge', 'Node agy bridge'],
+  ];
+  for (const row of rows) {
+    for (const cell of row) assert.match(dispatch, new RegExp(escapeRegex(cell)));
+  }
+  assert.match(dispatch, /tool capability/i);
+  assert.match(dispatch, /runtime_host.{0,100}(?:never|아니|금지)/is);
+  assert.match(dispatch, /codex-review/);
+  assert.match(dispatch, /codex-adversarial/);
+  assert.match(dispatch, /claude-opus/);
+  assert.match(dispatch, /--no-codex.{0,120}(?:both|둘 다)/is);
+  assert.match(dispatch, /pre.{0,20}post.{0,80}fingerprint/is);
+  assert.match(dispatch, /untrusted.{0,80}excluded/is);
+});
+
+test('supported runtime references use Node/direct tools and the runtime-root contract', () => {
+  const runtimeReferences = [
+    'skills/deep-review-workflow/SKILL.md',
+    'skills/deep-review-loop/SKILL.md',
+    'skills/deep-review-workflow/references/runtime-dispatch.md',
+    'skills/deep-review-workflow/references/review-execution.md',
+    'skills/deep-review-workflow/references/codex-integration.md',
+    'skills/deep-review-workflow/references/agy-integration.md',
+    'skills/deep-review-workflow/references/ultracode-integration.md',
+    'skills/deep-review-workflow/references/recurring-findings-export.md',
+    'skills/deep-review-workflow/references/init-setup.md',
+  ];
+  const forbidden = /(?:\.sh\b|\bbash\b|\bpython3\b|\bperl\b|\bmktemp\b|\bshopt\b|\bfind\b|\bawk\b|\bsed\b|\bxargs\b|<\(|\bcomm\b|\brealpath\b|_timeout)/i;
+  for (const relativePath of runtimeReferences) {
+    const source = read(relativePath);
+    assert.doesNotMatch(source, forbidden, `${relativePath} retains a host-only executable path`);
+    assert.doesNotMatch(source, /\$\{CLAUDE_PLUGIN_ROOT(?::[^}]*)?\}/, `${relativePath} bypasses runtime root`);
+  }
+  const combined = runtimeReferences.map(read).join('\n');
+  for (const helper of [
+    'detect-environment.mjs',
+    'build-reviewer-payload.mjs',
+    'mutation-protocol.mjs',
+    'agy-privacy-preflight.mjs',
+    'run-claude-reviewer.mjs',
+    'run-codex-reviewer.mjs',
+    'run-agy-reviewer.mjs',
+    'loop-state.mjs',
+  ]) assert.match(combined, new RegExp(helper.replace('.', '\\.')));
+  assert.match(combined, /plugin_root.{0,160}PLUGIN_ROOT.{0,160}CLAUDE_PLUGIN_ROOT/is);
+});
+
+test('respond references are shell-free and route every stateful operation through Node helpers', () => {
+  const respondReferences = [
+    'skills/deep-review/SKILL.md',
+    'skills/receiving-review/SKILL.md',
+    'skills/receiving-review/references/respond-execution.md',
+    'skills/receiving-review/references/response-protocol.md',
+    'skills/receiving-review/references/response-format.md',
+    'skills/receiving-review/references/phase6-delegation-spec.md',
+    'skills/receiving-review/references/phase6-prompt-contract.md',
+    'agents/phase6-implementer.md',
+  ];
+  const forbidden = /```(?:bash|sh|shell)|\bbash\s+-c\b|\btee\b|\bls\s+-[^\n]*t\b|\bmkdir\s+-p\b|\bcompgen\b|\b(?:awk|sed)\b|<\(|\$log_path|\$\{(?:severity|CLAUDE_PLUGIN_ROOT)|'\\''/iu;
+  for (const relativePath of respondReferences) {
+    assert.doesNotMatch(
+      read(relativePath),
+      forbidden,
+      `${relativePath} retains an executable shell-only respond recipe`,
+    );
+  }
+
+  const respond = read('skills/receiving-review/references/respond-execution.md');
+  assert.match(respond, /mutation-protocol\.mjs.{0,180}auto-recover/is);
+  assert.match(respond, /phase6-protocol\.mjs.{0,100}rotate/is);
+  for (const subcommand of ['list-reports', 'fetch-pr', 'write-report', 'post-pr-response']) {
+    assert.match(respond, new RegExp(`respond-runtime\\.mjs.{0,180}${subcommand}`, 'is'));
+  }
+  assert.match(respond, /fs\.stat|statSync/);
+  assert.match(respond, /(?:explicit|지정).{0,120}(?:unchanged|그대로)/is);
+  assert.match(respond, /exact.{0,80}\*-review\.md|\*-review\.md.{0,80}exact/is);
+});
+
+test('Claude and Codex Phase 6 dispatch reuse one accepted-items prompt and one Node protocol', () => {
+  const respond = read('skills/receiving-review/references/respond-execution.md');
+  const prompt = read('skills/receiving-review/references/phase6-prompt-contract.md');
+  const delegation = read('skills/receiving-review/references/phase6-delegation-spec.md');
+  const agent = read('agents/phase6-implementer.md');
+  const combined = [respond, prompt, delegation, agent].join('\n');
+
+  assert.match(respond, /Agent\(\{\s*subagent_type:\s*["']deep-review:phase6-implementer["']/s);
+  assert.match(respond, /Agent\(\{\s*subagent_type:\s*["']phase6-implementer["']/s);
+  assert.match(respond, /spawn_agent/);
+  assert.match(respond, /one generic subagent per severity group|심각도 그룹마다 하나의 generic subagent/i);
+  assert.match(respond, /first action.{0,200}absolute.{0,120}agents\/phase6-implementer\.md/is);
+  assert.match(respond, /nested dispatch.{0,80}(?:forbid|금지)/is);
+  assert.match(combined, /same serialized.{0,120}Accepted Items|Accepted Items.{0,120}byte-identical/is);
+  assert.match(combined, /snapshot_path.{0,160}allowed paths/is);
+
+  for (const subcommand of ['snapshot', 'run-test', 'verify', 'recover', 'commit']) {
+    assert.match(combined, new RegExp(`phase6-protocol\\.mjs.{0,180}${subcommand}`, 'is'));
+  }
+  assert.match(agent, /JSON argv file/i);
+  assert.match(agent, /JSON-escaped string token/i);
+  assert.match(agent, /(?:Agent|subagent).{0,100}(?:forbidden|금지)/is);
+  assert.match(respond, /always.{0,100}verify|verify.{0,100}(?:always|항상)/is);
+  assert.match(respond, /malformed.{0,180}execution_status.{0,40}error/is);
+  assert.match(respond, /requires_user_confirmation/);
+  assert.match(respond, /explicit affirmative|명시적 긍정/);
+  assert.match(respond, /decline|defer/i);
+  assert.match(respond, /DEEP_REVIEW_FORCE_FALLBACK=1/);
+  assert.match(respond, /zero-item|0건.{0,80}skip/is);
+  for (const executionPath of ['subagent', 'main_fallback', 'mixed', 'n/a']) {
+    assert.match(respond, new RegExp(escapeRegex(executionPath)));
+  }
+});
+
+test('review loop delegates Respond to the public branch and keeps defer and stop semantics', () => {
+  const loop = read('skills/deep-review-loop/SKILL.md');
+  assert.match(loop, /public `--respond` branch/);
+  assert.match(loop, /exact absolute.{0,80}round_review_report_path/is);
+  assert.match(loop, /DEFER-and-stop/);
+  assert.match(loop, /response halted/);
+});
+
+test('model and reviewer dispatch documentation preserves aliases and Codex generic independence', () => {
+  const combined = [
+    read('skills/deep-review-workflow/SKILL.md'),
+    read('skills/deep-review-workflow/references/review-execution.md'),
+    read('skills/deep-review-workflow/references/runtime-dispatch.md'),
+  ].join('\n');
+  assert.match(combined, /review_model.{0,140}non-empty installed Claude model alias/is);
+  assert.match(combined, /review_model.{0,140}fable/is);
+  assert.doesNotMatch(combined, /opus\s*\|\s*sonnet/i);
+  assert.match(combined, /Agent\(code-reviewer\)/);
+  assert.match(combined, /spawn_agent/);
+  assert.match(combined, /absolute.{0,80}agents\/code-reviewer\.md.{0,160}shared payload/is);
+  assert.match(combined, /read-only/i);
+  assert.match(combined, /report contract/i);
+  assert.match(combined, /codex-review.{0,160}replace.{0,120}(?:companion|standard)/is);
+  assert.match(combined, /generic subagent.{0,180}(?:without|없어도).{0,100}companion/is);
+});
+
+test('agy route resolves flags before preflight and no-agy/codex-only are mutation-free', () => {
+  const source = read('skills/deep-review-workflow/references/review-execution.md');
+  const flagOffset = source.indexOf('resolve reviewer flags');
+  const preflightOffset = source.indexOf('agy-privacy-preflight.mjs');
+  assert.ok(flagOffset >= 0 && preflightOffset > flagOffset);
+  assert.match(source, /needs_approval.{0,220}(?:approval|승인)/is);
+  assert.match(source, /auto_ack.{0,160}(?:patch|config)/is);
+  assert.match(source, /--no-agy.{0,220}(?:scan|preflight).{0,140}(?:state|config).{0,80}(?:no-op|않)/is);
+  assert.match(source, /--codex-only.{0,220}(?:scan|preflight).{0,140}(?:state|config).{0,80}(?:no-op|않)/is);
+});
+
+test('init is shell-free and doctrine anchors remain byte-identical under the Node injector', () => {
+  const init = read('skills/deep-review-workflow/references/init-setup.md');
+  assert.match(init, /Node CLI|host file-creation tool/i);
+  assert.doesNotMatch(init, /```(?:sh|shell)|mkdir -p/i);
+
+  const criteria = read('skills/deep-review-workflow/references/review-criteria.md');
+  assert.match(criteria, /build-reviewer-payload\.mjs.{0,160}all supported runtimes/is);
+  assert.match(criteria, /extract-fp-doctrine\.sh.{0,120}Unix parity oracle/is);
+  assert.doesNotMatch(criteria, /extract-fp-doctrine\.sh.{0,120}(?:inject|주입)/is);
+  const doctrineLf = anchoredBody(criteria, 'fp-doctrine');
+  const doctrineCrlf = anchoredBody(criteria.replace(/\r\n|\n|\r/gu, '\r\n'), 'fp-doctrine');
+  assert.equal(doctrineCrlf, doctrineLf);
+  assert.equal(sha256(doctrineLf), '1cfa74f3e6af65b7d778a476a3faf18d4e780392393ab0251bd1851b4cbf2dbe');
+  const conservativeLf = anchoredBody(criteria, 'fp-conservative');
+  const conservativeCrlf = anchoredBody(criteria.replace(/\r\n|\n|\r/gu, '\r\n'), 'fp-conservative');
+  assert.equal(conservativeCrlf, conservativeLf);
+  assert.equal(sha256(conservativeLf), '14a3f66dc8637dc14bc7a39c349dcc606a208f50c29ba8a934b8e6696ef1ba08');
+});
+
+test('loop-state snapshots sets, enforces one-report delta, compares paths, and emits metrics JSON', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep review loop Ω-'));
+  const reports = path.join(repo, '.deep-review', 'reports');
+  const responses = path.join(repo, '.deep-review', 'responses');
+  const snapshot = path.join(repo, '.deep-review', 'tmp', 'round-1.json');
+  fs.mkdirSync(reports, { recursive: true });
+  fs.mkdirSync(responses, { recursive: true });
+  fs.writeFileSync(path.join(reports, '2026-07-13-100000-review.md'), '# old\n');
+
+  const before = runLoop(['snapshot-reports', '--reports-dir', reports, '--output', snapshot]);
+  assert.equal(before.status, 0, before.stderr);
+  assert.equal(before.json.ok, true);
+  assert.deepEqual(before.json.reports, [path.resolve(reports, '2026-07-13-100000-review.md')]);
+
+  const newReport = path.join(reports, '2026-07-13-100001-review.md');
+  fs.writeFileSync(newReport, [
+    '# Deep Review Report',
+    '## Summary',
+    '- **Verdict**: REQUEST_CHANGES',
+    '- **Issues**: 🔴 1건, 🟡 2건, ℹ️ 3건',
+    '### 🔴 Critical',
+    '- unsafe edge at `src/a.js:14`',
+    '### 🟡 Warning',
+    '- missing test at `src/b.js:21`',
+    '- path-safe issue at `src/space name Ω.js:28`',
+  ].join('\n'));
+
+  const resolved = runLoop(['resolve-round-report', '--reports-dir', reports, '--snapshot-file', snapshot]);
+  assert.equal(resolved.status, 0, resolved.stderr);
+  assert.equal(resolved.json.report_path, path.resolve(newReport));
+
+  const same = runLoop(['assert-same-path', '--expected', newReport, '--actual', path.join(reports, '.', path.basename(newReport))]);
+  assert.equal(same.status, 0, same.stderr);
+  assert.equal(same.json.same, true);
+  const different = runLoop(['assert-same-path', '--expected', newReport, '--actual', path.join(reports, 'other.md')]);
+  assert.notEqual(different.status, 0);
+  assert.equal(different.json.same, false);
+
+  const response = path.join(responses, '2026-07-13-100002-response.md');
+  fs.writeFileSync(response, [
+    '# Response Report',
+    '## Summary',
+    '- **Items**: 수락 2건, 반박 1건, 보류 0건',
+    '- **execution_path**: subagent',
+    '- **implemented_count**: 2',
+    '- **halted**: false',
+  ].join('\n'));
+  const metrics = runLoop([
+    'collect-metrics', '--round-number', '1', '--review-report', newReport,
+    '--response-report', response,
+  ]);
+  assert.equal(metrics.status, 0, metrics.stderr);
+  assert.deepEqual(
+    {
+      verdict: metrics.json.verdict,
+      red: metrics.json.count_red,
+      yellow: metrics.json.count_yellow,
+      info: metrics.json.count_info,
+      accepted: metrics.json.accepted_count,
+      rejected: metrics.json.rejected_count,
+      deferred: metrics.json.deferred_count,
+      implemented: metrics.json.implemented_count,
+      halted: metrics.json.halted,
+      execution: metrics.json.execution_path,
+    },
+    {
+      verdict: 'REQUEST_CHANGES', red: 1, yellow: 2, info: 3,
+      accepted: 2, rejected: 1, deferred: 0, implemented: 2,
+      halted: false, execution: 'subagent',
+    },
+  );
+  assert.ok(metrics.json.findings_signature.includes('critical:src/a.js:2:untagged'));
+  assert.ok(metrics.json.findings_signature.includes('warning:src/b.js:3:untagged'));
+  assert.ok(metrics.json.findings_signature.includes('warning:src/space name Ω.js:4:untagged'));
+
+  fs.writeFileSync(path.join(reports, '2026-07-13-100003-review.md'), '# second new\n');
+  const ambiguous = runLoop(['resolve-round-report', '--reports-dir', reports, '--snapshot-file', snapshot]);
+  assert.notEqual(ambiguous.status, 0);
+  assert.equal(ambiguous.json.error.code, 'REPORT_DELTA_COUNT');
+});
+
+test('loop metrics rejects a report that omits the required Issues summary', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-loop-malformed-'));
+  const report = path.join(repo, 'bad-review.md');
+  fs.writeFileSync(report, '# Review\n- **Verdict**: APPROVE\n');
+  const result = runLoop(['collect-metrics', '--round-number', '1', '--review-report', report]);
+  assert.notEqual(result.status, 0);
+  assert.equal(result.json.error.code, 'INVALID_REPORT');
+});

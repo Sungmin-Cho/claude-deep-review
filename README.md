@@ -8,7 +8,7 @@
 
 An independent Evaluator plugin for AI coding agents — cross-model code review with Codex integration and Sprint Contract support.
 
-AI coding agents have a structural blind spot: they review their own work. The agent that wrote the code also judges it, so self-approval bias is built in. deep-review spawns a **separate Opus subagent** that sees only the diff — not the reasoning, intentions, or assumptions behind the code — for a structurally independent evaluation. When [Codex](https://github.com/openai/codex) (and optionally the `agy` CLI) is installed, the review escalates to parallel cross-model verification and synthesizes findings by confidence level.
+AI coding agents have a structural blind spot: they review their own work. The agent that wrote the code also judges it, so self-approval bias is built in. deep-review runs a **separate reviewer context** that sees the shared review payload — not the reasoning, intentions, or assumptions behind the code — for a structurally independent evaluation. Claude Code can use an Opus named agent, while Codex can use its native generic subagent; optional Codex companion and `agy` roles extend this into parallel cross-model verification.
 
 ## Role in deep-suite
 
@@ -33,13 +33,19 @@ codex plugin install deep-review
 
 No additional configuration is required. On first run, `.deep-review/` is created with a default `config.yaml`. Run `/deep-review init` to generate a project-specific `rules.yaml`.
 
-## Commands
+The supported runtime is zero-dependency Node.js 22 with Git 2.45 or newer on macOS, Linux, and native Windows 11. Git Bash is not a prerequisite.
+
+## Usage
+
+Claude Code slash commands and Codex skills are distinct host entrypoints for the same route grammar.
+
+### Claude Code
 
 | Command | Description |
 |---|---|
 | `/deep-review` | Review current changes with an independent Opus subagent (cross-model when Codex/agy are present) |
-| `/deep-review --ultracode [--codex]` | Multi-agent Claude fan-out (hybrid: Workflow tool when available, else parallel `code-reviewer` agents), collapsed into one "Claude(ultracode)" voice + optional Codex 2-way |
-| `/deep-review --codex-only` | Disable internal Claude reviewer, run Codex 2-way only (pairs with an external `--ultracode` session for role separation) |
+| `/deep-review --ultracode [--codex]` | Six focused Claude reviewer contexts collapsed into one "Claude(ultracode)" voice, with a visible single-bridge fallback and optional Codex roles |
+| `/deep-review --codex-only` | Disable the Claude reviewer and run only the available Codex roles |
 | `/deep-review --contract [SLICE-NNN]` | Sprint Contract-based structural verification |
 | `/deep-review --entropy` | Entropy scan (duplicates, pattern drift, naming mismatches) |
 | `/deep-review --respond [REPORT_PATH]` | Respond to review findings with the evidence-based protocol |
@@ -48,9 +54,17 @@ No additional configuration is required. On first run, `.deep-review/` is create
 | `/deep-review-loop --ultracode --codex` | ultracode once (round 1) + codex every round integrated loop |
 | `/deep-review init` | Initialize per-project review rules interactively |
 
-**Composable reviewer flags** (v1.10.0):
+### Codex
 
-- `--ultracode` — Claude-side review as a multi-agent fan-out (hybrid: Workflow tool when available, else parallel `code-reviewer` agents), collapsed into one "Claude(ultracode)" voice.
+| Skill | Description |
+|---|---|
+| `$deep-review:deep-review` | Review current changes with the same flags and synthesis rules as `/deep-review` |
+| `$deep-review:deep-review --respond [REPORT_PATH]` | Run the evidence-based response protocol |
+| `$deep-review:deep-review-loop [--max=N]` | Alternate review and response until convergence |
+
+**Composable reviewer flags**:
+
+- `--ultracode` — six focused Claude reviewer contexts collapsed into one "Claude(ultracode)" voice; an unavailable fan-out degrades visibly to one native Claude bridge.
 - `--codex` / `--no-codex` / `--no-opus` / `--no-agy`, and `--codex-only` (= `--codex --no-opus --no-agy`).
 - `/deep-review-loop --ultracode --codex`: ultracode once (round 1) + codex every round.
 - No-flag behavior is 100% unchanged.
@@ -62,7 +76,7 @@ deep-review runs a 4-stage pipeline on every invocation, with an optional Stage 
 ```
 Stage 1: Collect      — Detect environment, gather diff
 Stage 2: Contract     — Load Sprint Contract if present
-Stage 3: Deep Review  — Spawn Opus subagent in background (+ Codex / agy if available)
+Stage 3: Deep Review  — Dispatch the available independent reviewer roles
 Stage 4: Verdict      — Synthesize findings, emit APPROVE / CONCERN / REQUEST_CHANGES
 Stage 5: Respond      — Evidence-based response to findings (via --respond)
 ```
@@ -92,7 +106,7 @@ Each criterion is verified against the actual code changes.
 
 ### Stage 3: Deep Review
 
-An independent `code-reviewer` agent is spawned with `model: opus` and `run_in_background: true`. In Codex / non-Claude runtimes the same reviewer is invoked through `claude -p --agent code-reviewer`. Before spawning, you are told which reviewers will run (Opus-only or cross-model). The agent receives only the diff, rules, and contract — never the originating session context — and evaluates 6 criteria:
+Claude Code uses an independent named `code-reviewer` agent when that capability is available and otherwise uses the native Node Claude bridge. Codex uses a generic subagent for its standard `codex-review` role and may use the Node Claude bridge for a separate Claude-family role when the Claude CLI is installed. Before dispatch, you are told which reviewers will run. Every reviewer receives only the shared payload — never the originating session context — and evaluates 6 criteria:
 
 | # | Criterion | Checks |
 |---|---|---|
@@ -103,7 +117,7 @@ An independent `code-reviewer` agent is spawned with `model: opus` and `run_in_b
 | 5 | Readability | Will the next agent understand this on first read? |
 | 6 | Security | Input validation, authz bypass, injection (incl. prompt injection), secret exposure, unsafe ops |
 
-Since v1.12.0 the shared reviewer payload — used by the Opus reviewer, ultracode shards, and agy — carries two additions:
+The shared reviewer payload — used by the Opus reviewer, ultracode shards, and agy — includes:
 
 - **`change_files` manifest** — a NUL-safe, capped cross-file manifest (rename/copy detection, dirty-state untracked union) so reviewers see the whole changeset, not just one diff; the diff itself is ordered last for instruction-attention. It honors the same Stage 1 exclusions as the diff.
 - **FP-suppression doctrine** — a false-positive-suppression doctrine plus a conservative-balance counterweight, single-sourced from `review-criteria.md` and injected into the Opus prompt, ultracode shards, and the agy payload. The standard `codex review` and Codex adversarial passes are intentionally excluded, preserving their aggression.
@@ -121,11 +135,11 @@ The report is saved to `.deep-review/reports/{YYYY-MM-DD}-{HHmmss}-review.md`.
 
 ### Codex auto-exposure protocol
 
-In a git repo with the Codex plugin installed, `/deep-review` detects gitignored files you have been editing this session — typically specs, research notes, or planning docs — and offers to temporarily expose them to Codex for cross-model review. It presents the exact `git` commands in a single prompt, acquires an atomic `mkdir` lock, runs the review against `--scope working-tree`, then restores state (preserving anything you staged for real during the review). Sessions that crash mid-mutation are auto-recovered on the next invocation. Sensitive patterns (`.env*`, credentials, SSH keys, GCP service accounts, `.pgpass`, `.netrc`, `wrangler.toml`, JWT, and more) are scanned case-insensitively; an all-sensitive set is auto-skipped without prompting.
+When an eligible companion process needs gitignored review inputs, `/deep-review` detects those paths, requests approval, and temporarily exposes only the approved set through the persisted Node mutation protocol. The protocol owns an opaque cross-process token, restores the exact index state, and auto-recovers interrupted operations. Native Codex generic subagents read allowed paths directly and never trigger index mutation merely because Codex is the host. Sensitive patterns (`.env*`, credentials, SSH keys, GCP service accounts, `.pgpass`, `.netrc`, `wrangler.toml`, JWT, and more) are scanned case-insensitively and fail closed.
 
 ## Cross-model verification
 
-When Codex is installed and git commits are available, review runs in parallel and synthesizes by confidence level:
+When multiple reviewer roles are available, review runs in parallel and synthesizes trusted results by confidence level:
 
 ```
               ┌──────────────────┼──────────────────┐
@@ -147,13 +161,13 @@ When Codex is installed and git commits are available, review runs in parallel a
                     └────────────────────────┘
 ```
 
-The `agy` (Google Antigravity) CLI joins as a 4th, cross-vendor-family reviewer when detected. If Codex is not installed, deep-review notifies once and proceeds with Opus solo. If a reviewer fails (auth error, timeout), it falls back gracefully and marks that reviewer as "not performed."
+The `agy` (Google Antigravity) CLI joins as a 4th, cross-vendor-family reviewer when detected. If no Codex reviewer role is available, deep-review notifies once and continues with the available roles. If a reviewer fails (auth error, timeout), it falls back gracefully and marks that reviewer as "not performed."
 
 For `staged`, `unstaged`, and `mixed` states, deep-review offers to create a WIP commit so cross-model verification can run against a real commit base. The prompt previews the file list, warns about sensitive patterns, and never uses `git add -A`; undo with `git reset --soft HEAD~1`. Shallow clones are detected with a `git fetch --unshallow` recommendation.
 
 ## Receiving review (Stage 5)
 
-When Stage 4 returns `REQUEST_CHANGES`, deep-review offers an evidence-based response (`/deep-review --respond`), delegation to `codex:rescue` (when Codex is installed), or manual handling. The `--respond` flag activates a 6-phase protocol:
+When Stage 4 returns `REQUEST_CHANGES`, deep-review offers an evidence-based response (`/deep-review --respond`) or manual handling. The `--respond` flag activates a 6-phase protocol:
 
 | Phase | Action |
 |---|---|
@@ -206,6 +220,8 @@ deep-review reads several files under `.deep-review/`:
 - **`recurring-findings.json`** — after each review, recurring patterns are classified into a 7-category taxonomy (`error-handling`, `naming-convention`, `type-safety`, `test-coverage`, `security`, `performance`, `architecture`) and emitted as an M3 cross-plugin envelope, consumed by deep-evolve to steer experiment direction.
 
 **Team sharing**: `rules.yaml`, `contracts/`, and `journeys/` encode project knowledge and should be committed; `config.yaml`, `reports/`, `responses/`, `entropy-log.jsonl`, and `recurring-findings.json` are per-machine runtime state. `/deep-review init` configures your `.gitignore` to enforce this split.
+
+`review_model` accepts any non-empty installed Claude model alias and forwards it unchanged; for example, `review_model: fable`.
 
 ## Links
 

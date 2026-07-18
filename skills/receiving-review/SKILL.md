@@ -9,15 +9,20 @@ user-invocable: false
 
 # Receiving Review Protocol
 
-이 스킬은 `/deep-review --respond`에서 로드되어 리뷰 피드백 대응 프로세스를 가이드합니다.
+이 private 스킬은 Claude `/deep-review --respond`와 Codex
+`$deep-review:deep-review --respond`가 같은 absolute path로 읽어 리뷰 피드백
+대응 프로세스를 실행합니다. Hook 또는 MCP server가 필요하지 않습니다.
 
 ## 참조 문서 (on-demand Read)
 
 - `references/response-protocol.md` — 6단계 대응 프로토콜 상세
 - `references/forbidden-patterns.md` — 금지 표현 + 합리화 차단 테이블
 - `references/response-format.md` — Response 리포트 형식
-- `references/phase6-prompt-contract.md` — **Phase 6 진입 시 반드시 참조**. Main이 `phase6-implementer` 서브에이전트에 전달할 입력 prompt 조립 + 반환 메시지 검증을 위한 정식 계약(입력/출력 예시, 필드 정의, edge case). Phase 5 완료 직후 `implementation_guide`를 작성할 때와 Phase 6 dispatch 로직 실행 시 이 파일을 Read.
-- `references/phase6-delegation-spec.md` — Phase 6 dispatch 설계 배경. 결정 사항, 아키텍처, 트레이드오프, edge cases. 디버깅·구조 변경 시 참조 (운영 흐름은 `phase6-prompt-contract.md` + `references/respond-execution.md` Step 2.5).
+- `references/phase6-prompt-contract.md` — **Phase 6 진입 시 반드시 참조**.
+  Claude named/fallback과 Codex generic subagent가 byte-identical Accepted Items를
+  공유하는 prompt/result 정식 계약.
+- `references/phase6-delegation-spec.md` — capability-based host dispatch,
+  Node snapshot/verify/recover/confirmation 설계 배경과 edge cases.
 - `references/respond-execution.md` — `--respond` 전체 실행 절차 SSOT. `commands/deep-review.md` 의 `--respond` 분기에서 on-demand Read 되어 수행된다.
 
 ## 대응 원칙
@@ -66,8 +71,12 @@ Source별 신뢰도 매트릭스에 따라 판단. Cross-model disagreement 처�
 ### Phase 5: RESPOND — 수락 또는 반박
 수락 시 간결하게, 반박 시 evidence 필수. 반박 철회 시 사과 없이 인정.
 
-### Phase 6: IMPLEMENT — 서브에이전트에 그룹 dispatch
-심각도 그룹(🔴 → 🟡 → ℹ️)별로 `phase6-implementer` 서브에이전트에 dispatch. 기존 구현 원칙(한 항목씩, 매번 테스트, 회귀 시 중단)은 서브에이전트 정의(`agents/phase6-implementer.md`)로 이동했다. Main은 결과 검증 + response.md 작성 + 그룹 커밋을 담당. 상세는 `references/response-protocol.md` Phase 6 "구현 규칙 — 그룹 dispatch" 참조.
+### Phase 6: IMPLEMENT — capability-based 그룹 dispatch
+심각도 그룹(🔴 → 🟡 → ℹ️)별로 Claude는 named agent, Codex는 shipped
+agent contract를 먼저 읽는 generic subagent를 사용한다. 두 host는 같은
+Accepted Items prompt와 `phase6-protocol.mjs` snapshot/run-test/verify/recover/
+commit을 사용한다. Main은 Node verify를 항상 실행하고 error 또는 회귀에서
+다음 그룹을 중단한다. 상세는 `references/respond-execution.md` 참조.
 
 ## 구현 우선순위 (Verdict 연동)
 

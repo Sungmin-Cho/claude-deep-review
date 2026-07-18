@@ -80,15 +80,28 @@ fi
 for doc in \
   "$REPO_ROOT/skills/deep-review-workflow/references/review-execution.md" \
   "$REPO_ROOT/skills/deep-review-workflow/SKILL.md" \
-  "$REPO_ROOT/skills/deep-review-workflow/references/codex-integration.md"
+  "$REPO_ROOT/skills/deep-review-workflow/references/runtime-dispatch.md"
 do
   TEST_COUNT=$((TEST_COUNT + 1))
-  if grep -q "run-claude-reviewer.sh" "$doc"; then
-    echo "  PASS $(basename "$doc") documents Codex Claude reviewer bridge"
+  if grep -q "run-claude-reviewer.mjs" "$doc"; then
+    echo "  PASS $(basename "$doc") documents native Claude reviewer bridge"
   else
     TEST_FAILURES=$((TEST_FAILURES + 1))
-    echo "  FAIL $(basename "$doc") must document run-claude-reviewer.sh"
+    echo "  FAIL $(basename "$doc") must document run-claude-reviewer.mjs"
   fi
+  assert_failure "grep -q 'run-claude-reviewer.sh' '$doc'" \
+    "$(basename "$doc") rejects shell-era bridge on supported paths"
 done
+
+# Decisive mutant: a supported reference reverted to the shell bridge must
+# lose the native positive marker and trip the negative guard above.
+mutant=$(mktemp)
+sed 's/run-claude-reviewer\.mjs/run-claude-reviewer.sh/g' \
+  "$REPO_ROOT/skills/deep-review-workflow/references/runtime-dispatch.md" > "$mutant"
+assert_failure "grep -q 'run-claude-reviewer.mjs' '$mutant'" \
+  "shell-bridge mutant loses native bridge authority"
+assert_success "grep -q 'run-claude-reviewer.sh' '$mutant'" \
+  "shell-bridge mutant is detected"
+rm -f "$mutant"
 
 test_summary
