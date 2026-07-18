@@ -5,6 +5,7 @@ import {
   statSync,
 } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import {
   delimiter,
   extname,
@@ -362,4 +363,46 @@ export function runProcess(command, args = [], options = {}) {
     if (options.input === undefined) child.stdin.end();
     else child.stdin.end(options.input);
   });
+}
+
+export function runProcessSync(command, args = [], options = {}) {
+  if (typeof command !== 'string' || command.length === 0) {
+    throw new TypeError('command must be a non-empty string');
+  }
+  if (!Array.isArray(args)) throw new TypeError('args must be an array');
+
+  const env = options.env ?? process.env;
+  const prepared = prepareSpawn(command, args.map(String), env);
+  if (prepared.rejectedReason) {
+    return {
+      code: 2,
+      signal: undefined,
+      timedOut: false,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.from(prepared.rejectedReason),
+    };
+  }
+  const result = spawnSync(prepared.command, prepared.args, {
+    cwd: options.cwd,
+    env: prepared.env || env,
+    input: options.input,
+    encoding: null,
+    maxBuffer: options.maxBuffer,
+    shell: false,
+    timeout: options.timeoutMs,
+    windowsHide: true,
+    windowsVerbatimArguments: prepared.windowsVerbatimArguments,
+  });
+  const timedOut = result.error?.code === 'ETIMEDOUT';
+  const spawnError = result.error && !timedOut;
+  return {
+    code: timedOut ? 124 : (spawnError ? 127 : (result.status ?? 127)),
+    signal: result.signal,
+    timedOut,
+    stdout: Buffer.from(result.stdout ?? []),
+    stderr: Buffer.concat([
+      Buffer.from(result.stderr ?? []),
+      spawnError ? Buffer.from(`${result.error.message}\n`) : Buffer.alloc(0),
+    ]),
+  };
 }

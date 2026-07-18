@@ -9,12 +9,23 @@ permissions:
   contents: read
 
 jobs:
-  group-22:
+  targeted:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: r2-w3-sync-git
+            pattern: '^\\[R2 W3\\]'
+          - name: r2-c3-liveness
+            pattern: '^\\[R2 C3 group 19\\]'
+          - name: r2-c3-literal-matrix
+            pattern: '^\\[R2 C3 groups 2,3,9,10,12,14,20,21,22\\]'
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
+    name: Windows diagnostic (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node --test --test-name-pattern '^\[group 22\]' tests/mutation-protocol.test.js
+      - run: node --test --test-name-pattern '${{ matrix.pattern }}' tests/mutation-protocol.test.js
