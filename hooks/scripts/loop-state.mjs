@@ -179,24 +179,21 @@ function categoryFor(findings, file, line) {
   return 'untagged';
 }
 
+/**
+ * Vestigial display/back-compat `findings_signature` set for `collectMetrics`.
+ * Reuses the shared `extractFindings` parser (finding-identity.mjs) — the same
+ * parser `record-round` uses — so a multi-range citation such as
+ * `src/a.js:1-2, 83-100` resolves to the identical first-range start location
+ * in both paths, instead of the old single-token matcher's bogus capture.
+ * Each entry buckets the line into a 7-line window and tags it with the
+ * recurring-findings category; the set is deterministically sorted.
+ */
 function signatures(review, recurringFindings) {
   const result = new Set();
-  let severity = '';
-  for (const lineText of review.split(/\r?\n/u)) {
-    if (/^###\s+🔴\s+Critical/iu.test(lineText)) severity = 'critical';
-    else if (/^###\s+🟡\s+Warning/iu.test(lineText)) severity = 'warning';
-    else if (/^###\s+/u.test(lineText)) severity = '';
-    if (!severity) continue;
-    const matches = [...lineText.matchAll(/`([^`\r\n]+):(\d+)`/gu)];
-    const withoutQuotedPaths = lineText.replace(/`[^`\r\n]+:\d+`/gu, ' ');
-    matches.push(...withoutQuotedPaths.matchAll(
-      /(?:^|[\s(])((?:[A-Za-z0-9_.-]+[\\/])*[A-Za-z0-9_.-]+):(\d+)(?=$|[\s,.)])/gu,
-    ));
-    for (const match of matches) {
-      const file = match[1];
-      const line = Number(match[2]);
-      result.add(`${severity}:${file}:${Math.floor(line / 7)}:${categoryFor(recurringFindings, file, line)}`);
-    }
+  for (const finding of extractFindings(review)) {
+    const bucket = Math.floor(finding.line / 7);
+    const category = categoryFor(recurringFindings, finding.path, finding.line);
+    result.add(`${finding.severity}:${finding.path}:${bucket}:${category}`);
   }
   return [...result].sort(utf8Compare);
 }
@@ -298,26 +295,71 @@ function parseRejectedItems(response, { repoRoot } = {}) {
   return { rejected, skippedRejects };
 }
 
+function parseDurablePid(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!/^[1-9][0-9]*$/u.test(trimmed)) return null;
+  const pid = Number(trimmed);
+  // Reject pid <= 1 (init/launchd) so a probe never signals the process group.
+  return Number.isSafeInteger(pid) && pid > 1 ? pid : null;
+}
+
+function nonEmptyEnv(value) {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
 /**
- * Stamp the round state with the host *session* process that drives this loop
- * across rounds — this CLI's parent, which stays alive between idle rounds and
- * dies when the loop's session ends — rather than this ephemeral node
- * invocation (already dead by the time a sibling loop inspects the residue).
- * `cleanupResidue` consults it via mutation-protocol.mjs `classifyLiveness` to
- * distinguish a live-but-idle concurrent loop from crashed residue. This is
- * never a mutation owner and gates only tmp-residue removal.
+ * Resolve a DURABLE session identity for residue ownership: the long-lived host
+ * session process that drives this loop across every round and idle gap — NOT
+ * this ephemeral `node loop-state.mjs` invocation, whose direct parent is the
+ * transient per-command shell the tool spawns and which is already dead by the
+ * time a sibling `cleanup-residue` inspects the residue.
+ *
+ * - Claude Code: `CLAUDE_PID` (=== `CMUX_CLAUDE_PID`) is the top-level `claude`
+ *   process, alive across rounds/idle and gone when the session ends;
+ *   `CLAUDE_CODE_SESSION_ID` is that session's UUID.
+ * - Codex: `CODEX_COMPANION_SESSION_ID` is a session id only (no durable pid).
+ *
+ * Returns `{ pid, session_id }` (pid may be null for a session-id-only anchor)
+ * or null when nothing durable is resolvable, so callers stay keep-biased.
  */
-function buildOwnerStamp() {
-  const parentPid = Number.isInteger(process.ppid) && process.ppid > 0
-    ? process.ppid
-    : process.pid;
+function durableSessionAnchor(env) {
+  const durablePid = parseDurablePid(env.CLAUDE_PID ?? env.CMUX_CLAUDE_PID);
+  const sessionId = nonEmptyEnv(env.CLAUDE_CODE_SESSION_ID) ?? nonEmptyEnv(env.CODEX_COMPANION_SESSION_ID);
+  if (durablePid !== null) return { pid: durablePid, session_id: sessionId };
+  if (sessionId !== null) return { pid: null, session_id: sessionId };
+  return null;
+}
+
+/**
+ * Stamp the round state with the DURABLE session owner resolved above, so
+ * `cleanupResidue` (via mutation-protocol.mjs `classifyLiveness`) tells a
+ * live-but-idle concurrent loop from crashed residue by probing a process that
+ * is actually still alive between rounds. Never a mutation owner; gates only
+ * tmp-residue removal.
+ *
+ * - Durable pid available (Claude Code): stamp pid + host + session_id.
+ *   `process_start_ms` is a timeline-consistency anchor only — `classifyLiveness`
+ *   cross-checks `start_ms` solely on a SELF probe (the default probe returns a
+ *   start time only for the calling process), and the durable pid is by
+ *   construction never this node child, so liveness rests on probing the durable
+ *   pid's existence: live/uncertain/foreign/timeline-inconsistent → keep, and
+ *   only a probed-departed pid past the stale window is deleted. A reused pid
+ *   probes live → keep (fail-safe over-retention).
+ * - Session-id only (e.g. Codex, no durable pid): stamp host + session_id with a
+ *   null pid; `residueOwnerDisposition` keeps it unprobed (liveness unknowable).
+ * - No durable identity: return null → the round state carries `owner: null`,
+ *   never a transient pid → `classifyLiveness` = 'manual' → keep. Strictly no
+ *   more aggressive than the age-only baseline this replaced.
+ */
+function buildOwnerStamp(env = process.env) {
+  const anchor = durableSessionAnchor(env);
+  if (!anchor) return null;
   return {
     host_hash: currentHostHash(),
-    pid: String(parentPid),
-    // A monotonic lower bound (>= the parent's true start): classifyLiveness
-    // never cross-checks start_ms for a non-self pid, so this feeds only
-    // owner-timeline consistency, never process identity.
-    process_start_ms: String(processStartMs()),
+    pid: anchor.pid === null ? null : String(anchor.pid),
+    process_start_ms: anchor.pid === null ? null : String(processStartMs()),
+    session_id: anchor.session_id,
     started_at: new Date().toISOString(),
   };
 }
@@ -371,7 +413,7 @@ export function recordRound(options = {}) {
     findings,
     rejected,
     skipped_rejects: skippedRejects,
-    owner: buildOwnerStamp(),
+    owner: buildOwnerStamp(options.env || process.env),
   };
   atomicJson(stateFile, state);
   return { loop_id: loopId, state_file: stateFile };
@@ -527,6 +569,9 @@ function readResidueOwner(filePath, loopId) {
  * foreign, timeline-inconsistent, or absent) is kept.
  */
 function residueOwnerDisposition(owner, { now, processProbe, staleMs }) {
+  // A durable session id with no resolvable pid (e.g. Codex) can never be
+  // probed for liveness → keep unprobed. Never delete on an unprobeable owner.
+  if (owner && owner.pid == null) return { action: 'keep', reason: 'session-id-only' };
   const liveness = classifyLiveness(owner, { now, processProbe });
   if (liveness !== 'departed') return { action: 'keep', reason: liveness };
   const startedAtMs = owner && typeof owner.started_at === 'string'
@@ -603,12 +648,24 @@ export function cleanupResidue(options = {}) {
   const context = { now, processProbe: options.processProbe, staleMs };
   const deleted = [];
   const kept = [];
+  const errors = [];
   for (const group of loops.values()) {
     const decision = decideLoopResidue(group, context);
     if (decision.action === 'delete') {
       for (const file of group.files) {
-        rmSync(file, { force: true });
-        deleted.push(file);
+        try {
+          rmSync(file, { force: true });
+          deleted.push(file);
+        } catch (error) {
+          // A per-file removal failure (e.g. EPERM/EBUSY on Windows, force
+          // already swallows ENOENT) must not abort the whole scan or drop the
+          // JSON summary: record it and keep going.
+          errors.push({
+            path: file,
+            code: error?.code || 'RESIDUE_RM_FAILED',
+            message: error?.message || String(error),
+          });
+        }
       }
     } else {
       for (const file of group.files) kept.push({ path: file, reason: decision.reason });
@@ -616,7 +673,8 @@ export function cleanupResidue(options = {}) {
   }
   deleted.sort(utf8Compare);
   kept.sort((left, right) => utf8Compare(left.path, right.path));
-  return { scanned: deleted.length + kept.length, deleted, kept };
+  errors.sort((left, right) => utf8Compare(left.path, right.path));
+  return { scanned: deleted.length + kept.length + errors.length, deleted, kept, errors };
 }
 
 function parseFlags(argv) {

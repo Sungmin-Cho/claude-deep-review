@@ -44,20 +44,27 @@ node {plugin_root}/hooks/scripts/loop-state.mjs cleanup-residue --tmp-dir .deep-
 ```
 
 `cleanup-residue` removes a loop's residue only when it is *provably not live* —
-every recorded round's stamped owner (the host session process that drove that
-loop, from `record-round` in §4) probes as departed **and** its most-recent
-activity predates the staleness grace window. Any owner that is live,
-permission-blocked, on a foreign host, timeline-inconsistent, or absent (legacy
-state with no owner stamp), and any orphan `.prior.md` with no state file, is
-left untouched. This mirrors the owner-token + liveness model in
-`mutation-protocol.mjs` (`classifyLiveness`): a concurrent loop that is merely
-idle — waiting on reviewers or human input, even for hours — keeps its live
-round state and pending prior-context, because its session process is still
-alive. Session-only, advisory-only REJECT memory therefore never leaks across
-loop instances, and a live sibling loop is never disrupted. Round 1's
-`record-round` (§4) mints a fresh `loop_id` and echoes it; store that value
-and reuse it via `--loop-id` on every later round in this session — never
-re-mint mid-session.
+every recorded round's stamped owner probes as departed **and** its most-recent
+activity predates the staleness grace window. The owner is bound to the loop's
+**durable session process**, not this ephemeral CLI (whose transient
+per-command shell parent dies immediately): on Claude Code the top-level
+`claude` process (`CLAUDE_PID`, alive across every round and idle gap), carrying
+the session UUID (`CLAUDE_CODE_SESSION_ID`); on Codex the session id
+(`CODEX_COMPANION_SESSION_ID`) with no durable pid. Any owner that is live,
+permission-blocked, on a foreign host, timeline-inconsistent, session-id-only
+(no probeable pid), or absent (legacy state, or no durable identity was
+resolvable), and any orphan `.prior.md` with no state file, is left untouched.
+This mirrors the owner + liveness model in `mutation-protocol.mjs`
+(`classifyLiveness`): a concurrent loop that is merely idle — waiting on
+reviewers or human input, even for hours — keeps its live round state and
+pending prior-context, because its durable session process is still alive and
+probes live. When no durable identity can be resolved, `record-round` stamps no
+owner at all — keep-biased, never more aggressive than an age-only sweep — so
+deletion never fires on an unknowable owner. Session-only, advisory-only REJECT
+memory therefore never leaks across loop instances, and a live sibling loop is
+never disrupted. Round 1's `record-round` (§4) mints a fresh `loop_id` and
+echoes it; store that value and reuse it via `--loop-id` on every later round in
+this session — never re-mint mid-session.
 
 - Round 1 forwards the user's review, contract, entropy, and reviewer flags.
 - If round 1 requested `--ultracode`, mark `ultracode_consumed=true` after that
@@ -173,8 +180,11 @@ for every later round in this session (pass the same `loop_id` back via
 repo-relative identity — without it absolute path citations stay absolute and
 `compare-rounds` misreads an unchanged finding as resolved+added instead of
 repeated, defeating stall detection. `record-round` also stamps the round state
-with this loop's host-session liveness owner, which §1's `cleanup-residue`
-consults to tell a crashed loop's residue from a live sibling's.
+with this loop's **durable session** liveness owner (the top-level `claude`
+process on Claude Code, the session id on Codex, or none when neither is
+resolvable), which §1's `cleanup-residue` consults to tell a crashed loop's
+residue from a live sibling's — the live sibling's durable session process is
+still probeable, so its residue is kept.
 
 ## 5. Stop or continue
 

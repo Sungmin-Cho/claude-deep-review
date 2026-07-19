@@ -730,9 +730,31 @@ test('cleanup-residue CLI is registered and returns a JSON summary (missing tmp 
   assert.deepEqual(result.json.deleted, []);
 });
 
-test('recordRound stamps a same-host owner (host_hash/pid/process_start_ms/started_at) for cleanup liveness', async () => {
+test('recordRound stamps a DURABLE session owner (pid=CLAUDE_PID + session_id), not the transient node parent', async () => {
   const { recordRound } = await loadLoopState();
   const { currentHostHash } = await loadMutation();
+  const root = temporaryDirectory();
+  const { reviewPath, tmpDir } = writeFixtures(root);
+  const sessionId = 'bcb554a2-0925-4f5e-8d18-10c89d9b8567';
+  const result = recordRound({
+    roundNumber: 1,
+    reviewReport: reviewPath,
+    baseCommit: 'deadbeef',
+    stateDir: tmpDir,
+    env: { CLAUDE_PID: '28048', CLAUDE_CODE_SESSION_ID: sessionId },
+  });
+  const persisted = JSON.parse(readFileSync(result.state_file, 'utf8'));
+  assert.equal(typeof persisted.owner, 'object');
+  assert.equal(persisted.owner.host_hash, currentHostHash());
+  // The durable session pid (CLAUDE_PID), NOT this ephemeral node's ppid.
+  assert.equal(persisted.owner.pid, '28048');
+  assert.match(persisted.owner.process_start_ms, /^[0-9]+$/u);
+  assert.equal(persisted.owner.session_id, sessionId);
+  assert.equal(new Date(persisted.owner.started_at).toISOString(), persisted.owner.started_at);
+});
+
+test('recordRound falls keep-biased (owner=null) when NO durable session identity is resolvable, so cleanup never deletes it even when stale', async () => {
+  const { recordRound, cleanupResidue } = await loadLoopState();
   const root = temporaryDirectory();
   const { reviewPath, tmpDir } = writeFixtures(root);
   const result = recordRound({
@@ -740,11 +762,105 @@ test('recordRound stamps a same-host owner (host_hash/pid/process_start_ms/start
     reviewReport: reviewPath,
     baseCommit: 'deadbeef',
     stateDir: tmpDir,
+    env: {}, // neither CLAUDE_PID nor any session id → no durable anchor
   });
   const persisted = JSON.parse(readFileSync(result.state_file, 'utf8'));
-  assert.equal(typeof persisted.owner, 'object');
+  assert.equal(persisted.owner, null);
+  // A null owner classifies as `manual` (keep). Age-only would have deleted a
+  // provably-dead, hours-stale residue; the fallback is strictly less aggressive.
+  const cleaned = cleanupResidue({
+    tmpDir,
+    now: Date.parse(persisted.owner?.started_at ?? new Date().toISOString()) + 5 * HOUR_MS,
+    staleMs: HOUR_MS,
+    processProbe: () => ({ status: 'dead' }),
+  });
+  assert.deepEqual(cleaned.deleted, []);
+  assert.equal(existsSync(result.state_file), true);
+});
+
+test('recordRound with a session-id-only anchor (Codex, no durable pid) stamps pid=null and cleanup keeps it unprobed', async () => {
+  const { recordRound, cleanupResidue } = await loadLoopState();
+  const { currentHostHash } = await loadMutation();
+  const root = temporaryDirectory();
+  const { reviewPath, tmpDir } = writeFixtures(root);
+  const sessionId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const result = recordRound({
+    roundNumber: 1,
+    reviewReport: reviewPath,
+    baseCommit: 'deadbeef',
+    stateDir: tmpDir,
+    env: { CODEX_COMPANION_SESSION_ID: sessionId }, // session id, no durable pid
+  });
+  const persisted = JSON.parse(readFileSync(result.state_file, 'utf8'));
   assert.equal(persisted.owner.host_hash, currentHostHash());
-  assert.match(persisted.owner.pid, /^[0-9]+$/u);
-  assert.match(persisted.owner.process_start_ms, /^[0-9]+$/u);
-  assert.equal(new Date(persisted.owner.started_at).toISOString(), persisted.owner.started_at);
+  assert.equal(persisted.owner.pid, null);
+  assert.equal(persisted.owner.session_id, sessionId);
+  // Unprobeable liveness → keep, even with a stale age and a dead probe.
+  const cleaned = cleanupResidue({
+    tmpDir,
+    now: Date.now() + 5 * HOUR_MS,
+    staleMs: HOUR_MS,
+    processProbe: () => ({ status: 'dead' }),
+  });
+  assert.deepEqual(cleaned.deleted, []);
+  assert.equal(existsSync(result.state_file), true);
+  assert.equal(cleaned.kept.some((entry) => entry.reason === 'session-id-only'), true);
+});
+
+test('a durable-pid owner recorded by record-round is deleted only once that pid probes departed AND stale (live probe keeps it)', async () => {
+  const { recordRound, cleanupResidue } = await loadLoopState();
+  const root = temporaryDirectory();
+  const { reviewPath, tmpDir } = writeFixtures(root);
+  const record = () => recordRound({
+    roundNumber: 1,
+    reviewReport: reviewPath,
+    baseCommit: 'deadbeef',
+    stateDir: tmpDir,
+    loopId: 'durable-loop',
+    env: { CLAUDE_PID: '28048', CLAUDE_CODE_SESSION_ID: 'bcb554a2-0925-4f5e-8d18-10c89d9b8567' },
+  });
+  const first = record();
+  const staleNow = Date.now() + 5 * HOUR_MS;
+  // Durable pid still live (loop merely idle) → keep despite hours-old state.
+  const keptLive = cleanupResidue({
+    tmpDir, now: staleNow, staleMs: HOUR_MS, processProbe: () => ({ status: 'live' }),
+  });
+  assert.deepEqual(keptLive.deleted, []);
+  assert.equal(existsSync(first.state_file), true);
+  // Durable pid departed AND stale → reclaimed.
+  const deleted = cleanupResidue({
+    tmpDir, now: staleNow, staleMs: HOUR_MS, processProbe: () => ({ status: 'dead' }),
+  });
+  assert.equal(deleted.deleted.includes(first.state_file), true);
+  assert.equal(existsSync(first.state_file), false);
+});
+
+test('collect-metrics findings_signature agrees with record-round on a MULTI-range citation (first-range start line), not the old single-token line', async () => {
+  const { recordRound, collectMetrics } = await loadLoopState();
+  const root = temporaryDirectory();
+  const reportsDir = join(root, '.deep-review', 'reports');
+  const tmpDir = join(root, '.deep-review', 'tmp');
+  mkdirSync(reportsDir, { recursive: true });
+  mkdirSync(tmpDir, { recursive: true });
+  const reviewPath = join(reportsDir, '2026-07-20-090000-review.md');
+  writeFileSync(reviewPath, [
+    '# Deep Review Report',
+    '## Summary',
+    '- **Verdict**: REQUEST_CHANGES',
+    '- **Issues**: \u{1F534} 0건, \u{1F7E1} 1건, ℹ️ 0건',
+    '### \u{1F7E1} Warning',
+    '- multi-range finding at `src/multi.js:1-2, 83-100`',
+  ].join('\n'));
+  // record-round anchors the finding at the FIRST range start line (1).
+  const recorded = recordRound({
+    roundNumber: 1, reviewReport: reviewPath, baseCommit: 'deadbeef', stateDir: tmpDir,
+  });
+  const persisted = JSON.parse(readFileSync(recorded.state_file, 'utf8'));
+  const finding = persisted.findings.find((entry) => entry.path === 'src/multi.js');
+  assert.equal(finding.line, 1);
+  // collectMetrics must emit the SAME location: bucket floor(1/7)=0, path src/multi.js.
+  const metrics = collectMetrics({ roundNumber: 1, reviewReport: reviewPath });
+  assert.equal(metrics.findings_signature.includes('warning:src/multi.js:0:untagged'), true);
+  // The old single-token matcher would have captured a bogus `...83-` path at line 100.
+  assert.equal(metrics.findings_signature.some((sig) => /83-/u.test(sig)), false);
 });
