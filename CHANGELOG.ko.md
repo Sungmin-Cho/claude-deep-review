@@ -4,6 +4,12 @@
 
 deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)와 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
+## [1.14.0] — 2026-07-19
+
+### 추가
+
+- **deep-review-loop 수렴화** — 라운드 간 finding 상태를 결정적으로 기록·비교합니다(`loop-state.mjs record-round` / `compare-rounds`) — 기존 자연어 기반 반복 판정을 대체합니다. 변경 사항이 반영되지 않은 채 정체된 라운드는 더 반복하지 않고 마지막으로 신뢰할 수 있는 verdict로 정지합니다. 루프에 종속되고 명시적으로 전달되는 `--prior-rounds-file` advisory 컨텍스트(파일 존재 여부로 키잉하지 않음)를 통해 각 라운드의 리뷰어가 이전 발견·반박 항목을 처음부터 다시 검토하지 않고도 재검증할 수 있습니다. 최종 루프 요약에는 이제 `rounds_saved` 지표가 포함됩니다.
+
 ## [1.13.0] — 2026-07-11
 
 ### 추가

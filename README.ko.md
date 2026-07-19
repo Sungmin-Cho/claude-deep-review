@@ -68,6 +68,9 @@ Claude Code 슬래시 커맨드와 Codex 스킬은 동일한 라우트 문법을
 - `--codex` / `--no-codex` / `--no-opus` / `--no-agy`, 슈가 `--codex-only`(= `--codex --no-opus --no-agy`).
 - `/deep-review-loop --ultracode --codex`: ultracode 1회(라운드 1) + codex 매 라운드.
 - 무플래그 시 기존 동작 100% 유지.
+- `/deep-review-loop` 수렴은 결정적입니다: 각 라운드의 finding을 `compare-rounds`로 비교하며(자연어 반복 판정이 아닌 identity 매칭), 정체된 라운드는 마지막으로 신뢰할 수 있는 verdict로 정지합니다.
+- 루프는 라운드 사이에 `--prior-rounds-file` advisory 컨텍스트를 명시적으로 전달합니다(파일 존재 여부로 자동 소비하지 않음) — 리뷰어가 이전 발견·반박 항목을 재검증할 수 있습니다.
+- 최종 루프 요약에는 `rounds_saved` 지표가 포함됩니다.
 
 ## 리뷰 파이프라인
 

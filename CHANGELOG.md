@@ -4,6 +4,12 @@
 
 All notable changes to deep-review are documented here. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.0] — 2026-07-19
+
+### Added
+
+- **deep-review-loop convergence** — round-to-round finding state is now recorded and compared deterministically (`loop-state.mjs record-round` / `compare-rounds`), replacing a natural-language repeat judgment; a stalled round with no implemented change stops with the last trusted verdict instead of cycling further. A loop-bound, explicitly-flagged `--prior-rounds-file` advisory context (never keyed on file existence) lets each round's reviewers re-verify prior findings and rejected items without re-litigating them from scratch. The final loop summary now reports a `rounds_saved` metric.
+
 ## [1.13.0] — 2026-07-11
 
 ### Added
