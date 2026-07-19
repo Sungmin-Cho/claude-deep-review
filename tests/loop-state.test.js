@@ -411,6 +411,24 @@ test('compare-rounds rejects a loop_id mismatch as STALE_STATE', () => {
   assert.equal(compared.json.error.code, 'STALE_STATE');
 });
 
+test('compare-rounds rejects a base_commit mismatch (same loop_id/schema_version) as STALE_STATE', () => {
+  const root = temporaryDirectory();
+  const { reviewPath, tmpDir } = writeFixtures(root);
+  const roundA = runCli([
+    'record-round', '--round-number', '1', '--review-report', reviewPath,
+    '--loop-id', 'loop-shared', '--base-commit', 'deadbeef', '--state-dir', tmpDir,
+  ]);
+  const roundB = runCli([
+    'record-round', '--round-number', '2', '--review-report', reviewPath,
+    '--loop-id', 'loop-shared', '--base-commit', 'cafebabe', '--state-dir', tmpDir,
+  ]);
+  const compared = runCli([
+    'compare-rounds', '--previous', roundA.json.state_file, '--current', roundB.json.state_file,
+  ]);
+  assert.notEqual(compared.status, 0);
+  assert.equal(compared.json.error.code, 'STALE_STATE');
+});
+
 test('compare-rounds treats an empty adjacent pair as stalled=false (larger_set_size=0)', () => {
   const root = temporaryDirectory();
   const { round1, round2 } = recordTwoRounds(root, EMPTY_APPROVE_REVIEW, EMPTY_APPROVE_REVIEW);

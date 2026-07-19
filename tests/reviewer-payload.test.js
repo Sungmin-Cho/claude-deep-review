@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -370,6 +371,29 @@ test('a directory (not a regular file) given as prior-rounds-file is skipped wit
   assert.equal(result.warnings.length, 1);
   assert.match(result.warnings[0], /not a regular file/);
   assert.doesNotMatch(readFileSync(result.promptFile, 'utf8'), /PRIOR ROUND CONTEXT/);
+});
+
+test('a prior-rounds-file that passes lstat as a regular file but errors on read is skipped with a warning naming the file (fail-soft, never throws)', {
+  skip: process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0),
+}, async () => {
+  const { buildReviewerPayload } = await loadPayload();
+  const root = temporaryDirectory('deep-review-prior-unreadable-');
+  const priorRoundsFile = writePriorRoundsFile(
+    root,
+    [PRIOR_CONTEXT_HEADER('loop-1', 'deadbeef', 1), 'body'].join('\n'),
+  );
+  chmodSync(priorRoundsFile, 0o000);
+  try {
+    const result = buildReviewerPayload({
+      pluginRoot, context: 'RULES', diff: 'DIFF BODY', priorRoundsFile, priorBase: 'deadbeef',
+    });
+    assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0], /became unreadable/);
+    assert.ok(result.warnings[0].includes(priorRoundsFile), 'warning must name the file');
+    assert.doesNotMatch(readFileSync(result.promptFile, 'utf8'), /PRIOR ROUND CONTEXT/);
+  } finally {
+    chmodSync(priorRoundsFile, 0o600);
+  }
 });
 
 test('CLI accepts --prior-rounds-file and --prior-base and injects the section', async () => {

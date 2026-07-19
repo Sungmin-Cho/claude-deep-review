@@ -1,5 +1,21 @@
-const BACKTICKED_LOCATION = /`([^`\r\n]+):(\d+)`/gu;
+// Ranged citation `path:START-END` is captured with only the START line
+// (mirrors loop-state.mjs `firstLocationToken`'s `-END` suffix support).
+const BACKTICKED_LOCATION = /`([^`\r\n]+):(\d+)(?:-\d+)?`/gu;
 const BARE_LOCATION = /(?:^|[\s(])((?:[A-Za-z0-9_.-]+[\\/])*[A-Za-z0-9_.-]+):(\d+)(?=$|[\s,.)])/gu;
+// Strips an already-captured backticked location (ranged suffix included) so
+// the bare pass never re-matches a quoted path's digits as prose.
+const QUOTED_LOCATION_STRIP = /`[^`\r\n]+:\d+(?:-\d+)?`/gu;
+
+/**
+ * A bare (non-backtick) `path:line` token is only a real location if the path
+ * component looks like a path: it must contain a directory separator or end
+ * in a filename-shaped extension. This rejects unquoted prose like
+ * 'backoff at 3:30' (path='3') from registering as a phantom finding.
+ */
+function isPathLikeToken(pathText) {
+  if (/[\\/]/u.test(pathText)) return true;
+  return /\.[A-Za-z][A-Za-z0-9]*$/u.test(pathText);
+}
 
 function assertNonEmptyString(value, label) {
   if (typeof value !== 'string' || value.length === 0) {
@@ -81,13 +97,14 @@ export function extractFindings(markdown, { repoRoot } = {}) {
     if (!severity) continue;
 
     const backticked = [...lineText.matchAll(BACKTICKED_LOCATION)];
-    const withoutQuotedPaths = lineText.replace(/`[^`\r\n]+:\d+`/gu, ' ');
-    const bare = [...withoutQuotedPaths.matchAll(BARE_LOCATION)];
+    const withoutQuotedPaths = lineText.replace(QUOTED_LOCATION_STRIP, ' ');
+    const bare = [...withoutQuotedPaths.matchAll(BARE_LOCATION)]
+      .filter((match) => isPathLikeToken(match[1]));
     const matches = [...backticked, ...bare];
     if (matches.length === 0) continue;
 
     const titleText = lineText
-      .replace(/`[^`\r\n]+:\d+`/gu, ' ')
+      .replace(QUOTED_LOCATION_STRIP, ' ')
       .replace(BARE_LOCATION, ' ')
       .replace(/^\s*[-*]\s*/u, '')
       .trim();

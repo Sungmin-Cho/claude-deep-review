@@ -121,7 +121,13 @@ export function ingestPriorRounds(options, warnings) {
     return '';
   }
 
-  const raw = readFileSync(filePath, 'utf8');
+  let raw;
+  try {
+    raw = readFileSync(filePath, 'utf8');
+  } catch {
+    warnings.push(`prior-rounds-file became unreadable (section skipped): ${filePath}`);
+    return '';
+  }
   const firstLine = raw.split(/\r?\n/u)[0] ?? '';
   const headerMatch = PRIOR_CONTEXT_HEADER_PATTERN.exec(firstLine);
   if (!headerMatch) {

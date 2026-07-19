@@ -105,6 +105,28 @@ test('extractFindings ignores lines outside a Critical/Warning section', async (
   ]);
 });
 
+test('extractFindings extracts a ranged backticked location `path:START-END` using the start line', async () => {
+  const { extractFindings } = await loadIdentity();
+  const markdown = [
+    '### \u{1F7E1} Warning',
+    '- ranged citation at `src/a.js:14-20`',
+  ].join('\n');
+  const findings = extractFindings(markdown, { repoRoot: '/repo' });
+  assert.deepEqual(findings.map((finding) => [finding.severity, finding.path, finding.line]), [
+    ['warning', 'src/a.js', 14],
+  ]);
+});
+
+test('extractFindings does not register unquoted numeric prose (e.g. "backoff at 3:30") as a finding', async () => {
+  const { extractFindings } = await loadIdentity();
+  const markdown = [
+    '### \u{1F7E1} Warning',
+    '- backoff at 3:30',
+  ].join('\n');
+  const findings = extractFindings(markdown, { repoRoot: '/repo' });
+  assert.deepEqual(findings, []);
+});
+
 test('matchFindings matches identical severity+path+line as repeated', async () => {
   const { matchFindings } = await loadIdentity();
   const previous = [{ severity: 'critical', path: 'src/a.js', line: 14, title_slug: 'unsafe-edge' }];

@@ -429,18 +429,24 @@ export function renderPriorContext(options = {}) {
  * Deterministic, code-owned convergence judgment between two adjacent round
  * state files (SKILL §5 condition 3's former natural-language "half of the
  * larger set repeats" rule, now this function's `stalled` output). Rejects a
- * `loop_id`/`schema_version` mismatch as `STALE_STATE` rather than comparing
- * unrelated loops. Only critical/warning findings ever appear in round state
- * (extractFindings never captures info-level items), so no extra filtering
- * is needed before matchFindings.
+ * `loop_id`/`schema_version`/`base_commit` mismatch as `STALE_STATE` rather
+ * than comparing unrelated loops. Only critical/warning findings ever appear
+ * in round state (extractFindings never captures info-level items), so no
+ * extra filtering is needed before matchFindings.
  */
 export function compareRounds(options = {}) {
   const previous = readRoundState(options.previous);
   const current = readRoundState(options.current);
-  if (previous.schema_version !== current.schema_version || previous.loop_id !== current.loop_id) {
+  if (
+    previous.schema_version !== current.schema_version
+    || previous.loop_id !== current.loop_id
+    || previous.base_commit !== current.base_commit
+  ) {
     throw new LoopStateError('previous/current round state is from a different loop or schema', 'STALE_STATE', {
       previous_loop_id: previous.loop_id,
       current_loop_id: current.loop_id,
+      previous_base_commit: previous.base_commit,
+      current_base_commit: current.base_commit,
     });
   }
 
