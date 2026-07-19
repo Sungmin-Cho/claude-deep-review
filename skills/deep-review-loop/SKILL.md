@@ -35,13 +35,26 @@ issues, and progress.
 
 Never forward `--max`, `--respond`, `init`, or `--qa` to Review.
 
-At round 1 start, clean only *stale* `.deep-review/tmp/loop-*-round-*.state.json`
-and `loop-*-round-*.prior.md` residue from a previous crashed or unrelated loop
-instance using the host's direct file tools (list + delete). Scope the delete by
-staleness — skip any file modified within the last hour — so a loop running
-concurrently in the same repository keeps its live round state and pending
-prior-context intact; session-only, advisory-only REJECT memory must never leak
-across loop instances. Round 1's
+At round 1 start, clear residual `.deep-review/tmp/loop-*-round-*.state.json`
+and `loop-*-round-*.prior.md` files left by a *crashed* previous loop, using the
+Node runtime (never a shell-only helper):
+
+```text
+node {plugin_root}/hooks/scripts/loop-state.mjs cleanup-residue --tmp-dir .deep-review/tmp
+```
+
+`cleanup-residue` removes a loop's residue only when it is *provably not live* —
+every recorded round's stamped owner (the host session process that drove that
+loop, from `record-round` in §4) probes as departed **and** its most-recent
+activity predates the staleness grace window. Any owner that is live,
+permission-blocked, on a foreign host, timeline-inconsistent, or absent (legacy
+state with no owner stamp), and any orphan `.prior.md` with no state file, is
+left untouched. This mirrors the owner-token + liveness model in
+`mutation-protocol.mjs` (`classifyLiveness`): a concurrent loop that is merely
+idle — waiting on reviewers or human input, even for hours — keeps its live
+round state and pending prior-context, because its session process is still
+alive. Session-only, advisory-only REJECT memory therefore never leaks across
+loop instances, and a live sibling loop is never disrupted. Round 1's
 `record-round` (§4) mints a fresh `loop_id` and echoes it; store that value
 and reuse it via `--loop-id` on every later round in this session — never
 re-mint mid-session.
@@ -159,7 +172,9 @@ for every later round in this session (pass the same `loop_id` back via
 `--repo-root PROJECT_ROOT` is required so finding locations canonicalize to a
 repo-relative identity — without it absolute path citations stay absolute and
 `compare-rounds` misreads an unchanged finding as resolved+added instead of
-repeated, defeating stall detection.
+repeated, defeating stall detection. `record-round` also stamps the round state
+with this loop's host-session liveness owner, which §1's `cleanup-residue`
+consults to tell a crashed loop's residue from a live sibling's.
 
 ## 5. Stop or continue
 

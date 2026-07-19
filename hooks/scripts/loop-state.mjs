@@ -13,12 +13,16 @@ import {
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { canonicalizeRepoPath, extractFindings, matchFindings } from './lib/finding-identity.mjs';
+import { classifyLiveness, currentHostHash, processStartMs } from './mutation-protocol.mjs';
 
 const SNAPSHOT_SCHEMA = 1;
 const ROUND_STATE_SCHEMA = 1;
 const PRIOR_CONTEXT_MAX_BYTES_DEFAULT = 16384;
 const PRIOR_CONTEXT_REJECT_NOTICE = '재검증 필수, 억제 금지 (advisory — re-verify, never suppress)';
 const STALLED_REPEAT_RATIO_THRESHOLD = 0.5;
+const RESIDUE_STALE_MS_DEFAULT = 3_600_000;
+const RESIDUE_STATE_PATTERN = /^loop-(.+)-round-(\d+)\.state\.json$/u;
+const RESIDUE_PRIOR_PATTERN = /^loop-(.+)-round-(\d+)\.prior\.md$/u;
 const TAXONOMY = new Set([
   'error-handling',
   'naming-convention',
@@ -252,7 +256,11 @@ function splitItemBlocks(response) {
 }
 
 function firstLocationToken(blockText) {
-  const match = /`([^`\r\n]+):(\d+)(?:-\d+)?`/u.exec(blockText);
+  // Accept single-range and comma-separated multi-range backticked citations
+  // (`path:1-2, 83-100`), anchoring on the FIRST range's start line. Kept
+  // semantically aligned with finding-identity.mjs `BACKTICKED_LOCATION` so the
+  // two parsers never disagree about what counts as a location.
+  const match = /`([^`\r\n]+):(\d+)(?:-\d+)?(?:\s*,\s*\d+(?:-\d+)?)*`/u.exec(blockText);
   if (!match) return null;
   return { path: match[1], line: Number(match[2]) };
 }
@@ -265,9 +273,10 @@ function actionReason(blockText) {
 /**
  * Parse REJECT-decision ITEM blocks from a response report into
  * `{path, line, reason}` entries. An item without a backtick `path:line` (or
- * `path:line-line`, start line only) location token anywhere in its block is
- * conservatively excluded and counted in `skippedRejects` — session-only,
- * advisory-only memory never silently invents a location.
+ * `path:line-line`, or comma-separated multi-range `path:1-2, 83-100` — start
+ * line only) location token anywhere in its block is conservatively excluded
+ * and counted in `skippedRejects` — session-only, advisory-only memory never
+ * silently invents a location.
  */
 function parseRejectedItems(response, { repoRoot } = {}) {
   if (!response) return { rejected: [], skippedRejects: 0 };
@@ -287,6 +296,30 @@ function parseRejectedItems(response, { repoRoot } = {}) {
     });
   }
   return { rejected, skippedRejects };
+}
+
+/**
+ * Stamp the round state with the host *session* process that drives this loop
+ * across rounds — this CLI's parent, which stays alive between idle rounds and
+ * dies when the loop's session ends — rather than this ephemeral node
+ * invocation (already dead by the time a sibling loop inspects the residue).
+ * `cleanupResidue` consults it via mutation-protocol.mjs `classifyLiveness` to
+ * distinguish a live-but-idle concurrent loop from crashed residue. This is
+ * never a mutation owner and gates only tmp-residue removal.
+ */
+function buildOwnerStamp() {
+  const parentPid = Number.isInteger(process.ppid) && process.ppid > 0
+    ? process.ppid
+    : process.pid;
+  return {
+    host_hash: currentHostHash(),
+    pid: String(parentPid),
+    // A monotonic lower bound (>= the parent's true start): classifyLiveness
+    // never cross-checks start_ms for a non-self pid, so this feeds only
+    // owner-timeline consistency, never process identity.
+    process_start_ms: String(processStartMs()),
+    started_at: new Date().toISOString(),
+  };
 }
 
 /**
@@ -338,6 +371,7 @@ export function recordRound(options = {}) {
     findings,
     rejected,
     skipped_rejects: skippedRejects,
+    owner: buildOwnerStamp(),
   };
   atomicJson(stateFile, state);
   return { loop_id: loopId, state_file: stateFile };
@@ -467,6 +501,124 @@ export function compareRounds(options = {}) {
   };
 }
 
+/**
+ * Read a residue state file's liveness owner. Returns null when the file is
+ * unreadable/torn, is not this loop's state, or predates owner stamping (legacy
+ * residue). A null owner classifies as `manual` — i.e. keep — so ownership that
+ * cannot be established always fails toward NOT deleting.
+ */
+function readResidueOwner(filePath, loopId) {
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, 'utf8'));
+    if (parsed && parsed.loop_id === loopId
+        && parsed.owner && typeof parsed.owner === 'object' && !Array.isArray(parsed.owner)) {
+      return parsed.owner;
+    }
+  } catch {
+    // Unreadable residue: ownership is unknown → keep.
+  }
+  return null;
+}
+
+/**
+ * Per-owner disposition mirroring mutation-protocol.mjs
+ * `sessionRecoveryDisposition`: liveness first, age only as a secondary gate
+ * once death is proven. Any owner short of provably-departed (live, uncertain,
+ * foreign, timeline-inconsistent, or absent) is kept.
+ */
+function residueOwnerDisposition(owner, { now, processProbe, staleMs }) {
+  const liveness = classifyLiveness(owner, { now, processProbe });
+  if (liveness !== 'departed') return { action: 'keep', reason: liveness };
+  const startedAtMs = owner && typeof owner.started_at === 'string'
+    ? Date.parse(owner.started_at)
+    : NaN;
+  const age = now - startedAtMs;
+  if (!Number.isFinite(age) || age < staleMs) return { action: 'keep', reason: 'departed-fresh' };
+  return { action: 'delete', reason: 'departed-stale' };
+}
+
+function decideLoopResidue(group, context) {
+  // A loop with no state file (e.g. an orphan prior.md) has no stamped owner to
+  // check → ownership unknowable → keep.
+  if (group.states.length === 0) return { action: 'keep', reason: 'no-owner' };
+  // Conservative grouping: one round that still looks live vetoes deleting the
+  // whole loop's residue.
+  for (const state of group.states) {
+    const disposition = residueOwnerDisposition(state.owner, context);
+    if (disposition.action !== 'delete') return { action: 'keep', reason: disposition.reason };
+  }
+  return { action: 'delete', reason: 'departed-stale' };
+}
+
+/**
+ * Ownership/liveness-based cleanup of `.deep-review/tmp` loop residue
+ * (`loop-<id>-round-*.state.json` + matching `.prior.md`). Replaces the former
+ * age-only staleness heuristic, which could delete a live-but-idle concurrent
+ * loop's state. A loop's files are removed only when EVERY recorded round's
+ * stamped owner is provably departed AND its most-recent activity predates the
+ * staleness grace window; otherwise the whole loop is kept. Mirrors the
+ * owner-token + liveness model in mutation-protocol.mjs and stays pure Node
+ * (no shell-only helper). `processProbe`/`now` are injectable for tests.
+ */
+export function cleanupResidue(options = {}) {
+  const tmpDir = absolute(options.tmpDir, 'tmp directory');
+  const now = options.now === undefined ? Date.now() : Number(options.now);
+  const staleMs = options.staleMs === undefined
+    ? RESIDUE_STALE_MS_DEFAULT
+    : Number(options.staleMs);
+  if (!Number.isFinite(now) || !Number.isFinite(staleMs) || staleMs < 0) {
+    throw new LoopStateError('cleanup time thresholds are invalid', 'INVALID_ARGUMENT');
+  }
+  let entries;
+  try {
+    entries = readdirSync(tmpDir, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === 'ENOENT') return { scanned: 0, deleted: [], kept: [] };
+    throw error;
+  }
+
+  const loops = new Map();
+  const loopFor = (loopId) => {
+    let group = loops.get(loopId);
+    if (!group) {
+      group = { states: [], files: [] };
+      loops.set(loopId, group);
+    }
+    return group;
+  };
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const stateMatch = RESIDUE_STATE_PATTERN.exec(entry.name);
+    if (stateMatch) {
+      const filePath = resolve(tmpDir, entry.name);
+      const group = loopFor(stateMatch[1]);
+      group.states.push({ path: filePath, owner: readResidueOwner(filePath, stateMatch[1]) });
+      group.files.push(filePath);
+      continue;
+    }
+    const priorMatch = RESIDUE_PRIOR_PATTERN.exec(entry.name);
+    if (priorMatch) loopFor(priorMatch[1]).files.push(resolve(tmpDir, entry.name));
+  }
+
+  const context = { now, processProbe: options.processProbe, staleMs };
+  const deleted = [];
+  const kept = [];
+  for (const group of loops.values()) {
+    const decision = decideLoopResidue(group, context);
+    if (decision.action === 'delete') {
+      for (const file of group.files) {
+        rmSync(file, { force: true });
+        deleted.push(file);
+      }
+    } else {
+      for (const file of group.files) kept.push({ path: file, reason: decision.reason });
+    }
+  }
+  deleted.sort(utf8Compare);
+  kept.sort((left, right) => utf8Compare(left.path, right.path));
+  return { scanned: deleted.length + kept.length, deleted, kept };
+}
+
 function parseFlags(argv) {
   const values = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -512,6 +664,10 @@ function commandOptions(command, flags) {
       ['--previous', 'previous'],
       ['--current', 'current'],
     ]),
+    'cleanup-residue': new Map([
+      ['--tmp-dir', 'tmpDir'],
+      ['--stale-ms', 'staleMs'],
+    ]),
   }[command];
   if (!known) throw new LoopStateError(`unknown command: ${command}`, 'INVALID_COMMAND');
   const options = {};
@@ -532,6 +688,7 @@ export function runLoopStateCli(argv = process.argv.slice(2)) {
   if (command === 'record-round') return recordRound(options);
   if (command === 'render-prior-context') return renderPriorContext(options);
   if (command === 'compare-rounds') return compareRounds(options);
+  if (command === 'cleanup-residue') return cleanupResidue(options);
   return collectMetrics(options);
 }
 

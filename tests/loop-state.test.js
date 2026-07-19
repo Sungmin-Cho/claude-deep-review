@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -31,6 +32,13 @@ test.after(() => {
 
 async function loadLoopState() {
   return import(moduleUrl);
+}
+
+const mutationModulePath = join(pluginRoot, 'hooks', 'scripts', 'mutation-protocol.mjs');
+const mutationModuleUrl = pathToFileURL(mutationModulePath).href;
+
+async function loadMutation() {
+  return import(mutationModuleUrl);
 }
 
 function runCli(args) {
@@ -236,6 +244,46 @@ test('recordRound extracts the first backtick path:line-line token (start line) 
   assert.equal(persisted.rejected[0].line, 18);
   assert.match(persisted.rejected[0].reason, /existing coverage/);
   assert.equal(persisted.skipped_rejects, 1);
+});
+
+test('recordRound captures a REJECT item whose location is a comma-separated MULTI-range backticked citation, anchored at the first range start (not skipped)', async () => {
+  const { recordRound } = await loadLoopState();
+  const root = temporaryDirectory();
+  const reportsDir = join(root, '.deep-review', 'reports');
+  const responsesDir = join(root, '.deep-review', 'responses');
+  const tmpDir = join(root, '.deep-review', 'tmp');
+  mkdirSync(reportsDir, { recursive: true });
+  mkdirSync(responsesDir, { recursive: true });
+  mkdirSync(tmpDir, { recursive: true });
+  const reviewPath = join(reportsDir, '2026-07-19-120000-review.md');
+  const responsePath = join(responsesDir, '2026-07-19-120100-response.md');
+  writeFileSync(reviewPath, REVIEW_REPORT);
+  writeFileSync(responsePath, [
+    '# Response Report',
+    '## Summary',
+    '- **Items**: 수락 0건, 반박 1건, 보류 0건',
+    '- **implemented_count**: 0',
+    '- **halted**: false',
+    '',
+    '### ITEM-1: multi-range reject',
+    '- **Decision**: REJECT',
+    '- **Evidence**:',
+    '  - files_read: `src/a.js:1-2, 83-100`',
+    '- **Action**: spans multiple ranges but is a single finding',
+    '',
+  ].join('\n'));
+  const result = recordRound({
+    roundNumber: 1,
+    reviewReport: reviewPath,
+    responseReport: responsePath,
+    baseCommit: 'deadbeef',
+    stateDir: tmpDir,
+  });
+  const persisted = JSON.parse(readFileSync(result.state_file, 'utf8'));
+  assert.equal(persisted.skipped_rejects, 0);
+  assert.equal(persisted.rejected.length, 1);
+  assert.equal(persisted.rejected[0].path, 'src/a.js');
+  assert.equal(persisted.rejected[0].line, 1);
 });
 
 test('recordRound with no response report yields rejected=[] and skipped_rejects=0', async () => {
@@ -497,4 +545,206 @@ test('round-savings simulation: split-only CONCERN + skipped Respond triggers co
   const executedRounds = 1;
   const roundsSaved = maxRounds - executedRounds;
   assert.equal(roundsSaved, 3);
+});
+
+// --- W-cx3-2: ownership/liveness-based residue cleanup ---------------------
+// cleanupResidue replaces the former age-only staleness heuristic. It mirrors
+// mutation-protocol.mjs `classifyLiveness`: a residue file is removed only when
+// its owning loop is *provably not live* (owner probes departed AND the last
+// round is older than the staleness grace window). Every other classification —
+// live, permission-blocked, foreign host, timeline-inconsistent, or a legacy
+// state with no owner stamp — is kept (fail toward NOT deleting).
+const HOUR_MS = 3_600_000;
+
+function makeOwner(hostHash, now, ageMs = 0) {
+  const startedAtMs = now - ageMs;
+  return {
+    host_hash: hostHash,
+    // pid value is irrelevant to these tests — liveness is decided by the
+    // injected processProbe, not a real process.kill.
+    pid: String(process.pid),
+    process_start_ms: String(Math.max(0, startedAtMs - 1000)),
+    started_at: new Date(startedAtMs).toISOString(),
+  };
+}
+
+function writeStateFile(tmpDir, { loopId, round = 1, owner }) {
+  const state = {
+    schema_version: 1,
+    source: 'report-parse',
+    loop_id: loopId,
+    round_number: round,
+    base_commit: 'deadbeef',
+    verdict: 'CONCERN',
+    counts: { critical: 0, warning: 1, info: 0 },
+    findings: [],
+    rejected: [],
+    skipped_rejects: 0,
+    ...(owner ? { owner } : {}),
+  };
+  const filePath = join(tmpDir, `loop-${loopId}-round-${round}.state.json`);
+  writeFileSync(filePath, `${JSON.stringify(state)}\n`);
+  return filePath;
+}
+
+function writePriorFile(tmpDir, { loopId, round = 1 }) {
+  const filePath = join(tmpDir, `loop-${loopId}-round-${round}.prior.md`);
+  writeFileSync(filePath, `<!-- PRIOR-CONTEXT v1 loop_id=${loopId} base_commit=deadbeef round=${round} -->\n`);
+  return filePath;
+}
+
+function makeTmpDir() {
+  const root = temporaryDirectory();
+  const tmpDir = join(root, '.deep-review', 'tmp');
+  mkdirSync(tmpDir, { recursive: true });
+  return tmpDir;
+}
+
+const CLEANUP_NOW = Date.UTC(2026, 6, 19, 12, 0, 0);
+
+test('cleanupResidue never deletes a live-but-idle owner even when its state is hours old (liveness beats age)', async () => {
+  const { cleanupResidue } = await loadLoopState();
+  const { currentHostHash } = await loadMutation();
+  const tmpDir = makeTmpDir();
+  const owner = makeOwner(currentHostHash(), CLEANUP_NOW, 4 * HOUR_MS);
+  const stateFile = writeStateFile(tmpDir, { loopId: 'live-idle-loop', owner });
+  const priorFile = writePriorFile(tmpDir, { loopId: 'live-idle-loop' });
+  const result = cleanupResidue({
+    tmpDir,
+    now: CLEANUP_NOW,
+    staleMs: HOUR_MS,
+    processProbe: () => ({ status: 'live' }),
+  });
+  assert.deepEqual(result.deleted, []);
+  assert.equal(existsSync(stateFile), true);
+  assert.equal(existsSync(priorFile), true);
+  assert.equal(result.kept.some((entry) => entry.reason === 'live'), true);
+});
+
+test('cleanupResidue deletes a provably-dead owner\'s stale residue (state + prior together)', async () => {
+  const { cleanupResidue } = await loadLoopState();
+  const { currentHostHash } = await loadMutation();
+  const tmpDir = makeTmpDir();
+  const owner = makeOwner(currentHostHash(), CLEANUP_NOW, 2 * HOUR_MS);
+  const stateFile = writeStateFile(tmpDir, { loopId: 'dead-loop', owner });
+  const priorFile = writePriorFile(tmpDir, { loopId: 'dead-loop' });
+  const result = cleanupResidue({
+    tmpDir,
+    now: CLEANUP_NOW,
+    staleMs: HOUR_MS,
+    processProbe: () => ({ status: 'dead' }),
+  });
+  assert.equal(existsSync(stateFile), false);
+  assert.equal(existsSync(priorFile), false);
+  assert.equal(result.deleted.length, 2);
+});
+
+test('cleanupResidue keeps a dead-but-FRESH owner: the age gate spares residue younger than staleMs', async () => {
+  const { cleanupResidue } = await loadLoopState();
+  const { currentHostHash } = await loadMutation();
+  const tmpDir = makeTmpDir();
+  const owner = makeOwner(currentHostHash(), CLEANUP_NOW, 60_000);
+  const stateFile = writeStateFile(tmpDir, { loopId: 'dead-fresh-loop', owner });
+  const result = cleanupResidue({
+    tmpDir,
+    now: CLEANUP_NOW,
+    staleMs: HOUR_MS,
+    processProbe: () => ({ status: 'dead' }),
+  });
+  assert.equal(existsSync(stateFile), true);
+  assert.deepEqual(result.deleted, []);
+});
+
+test('cleanupResidue leaves ambiguous ownership untouched (EPERM=uncertain, foreign host, and legacy no-owner all kept)', async () => {
+  const { cleanupResidue } = await loadLoopState();
+  const { currentHostHash } = await loadMutation();
+  const tmpDir = makeTmpDir();
+  // uncertain (EPERM) — same host, old, but liveness cannot be established.
+  const uncertainState = writeStateFile(tmpDir, {
+    loopId: 'uncertain-loop',
+    owner: makeOwner(currentHostHash(), CLEANUP_NOW, 5 * HOUR_MS),
+  });
+  // foreign host — short-circuits to 'foreign' before the probe runs.
+  const foreignState = writeStateFile(tmpDir, {
+    loopId: 'foreign-loop',
+    owner: makeOwner('f'.repeat(64), CLEANUP_NOW, 5 * HOUR_MS),
+  });
+  // legacy residue with no owner stamp — ownership cannot be established.
+  const legacyState = writeStateFile(tmpDir, { loopId: 'legacy-loop' });
+  const result = cleanupResidue({
+    tmpDir,
+    now: CLEANUP_NOW,
+    staleMs: HOUR_MS,
+    processProbe: () => ({ status: 'eperm' }),
+  });
+  assert.deepEqual(result.deleted, []);
+  assert.equal(existsSync(uncertainState), true);
+  assert.equal(existsSync(foreignState), true);
+  assert.equal(existsSync(legacyState), true);
+});
+
+test('cleanupResidue keeps an orphan prior.md whose loop has no state file (ownership unknowable)', async () => {
+  const { cleanupResidue } = await loadLoopState();
+  const tmpDir = makeTmpDir();
+  const orphanPrior = writePriorFile(tmpDir, { loopId: 'orphan-loop' });
+  const result = cleanupResidue({
+    tmpDir,
+    now: CLEANUP_NOW,
+    staleMs: HOUR_MS,
+    processProbe: () => ({ status: 'dead' }),
+  });
+  assert.equal(existsSync(orphanPrior), true);
+  assert.deepEqual(result.deleted, []);
+});
+
+test('cleanupResidue keeps a whole loop when ANY of its rounds looks live (conservative grouping)', async () => {
+  const { cleanupResidue } = await loadLoopState();
+  const { currentHostHash } = await loadMutation();
+  const tmpDir = makeTmpDir();
+  // Round 1 owner reads dead+stale, round 2 owner reads live: the live round
+  // must veto deletion of the entire loop's residue.
+  const deadOwner = makeOwner(currentHostHash(), CLEANUP_NOW, 5 * HOUR_MS);
+  const liveOwner = makeOwner(currentHostHash(), CLEANUP_NOW, 5 * HOUR_MS);
+  const state1 = writeStateFile(tmpDir, { loopId: 'mixed-loop', round: 1, owner: deadOwner });
+  const state2 = writeStateFile(tmpDir, { loopId: 'mixed-loop', round: 2, owner: liveOwner });
+  let call = 0;
+  const result = cleanupResidue({
+    tmpDir,
+    now: CLEANUP_NOW,
+    staleMs: HOUR_MS,
+    // First probe (round 1) dead, second probe (round 2) live.
+    processProbe: () => (call++ === 0 ? { status: 'dead' } : { status: 'live' }),
+  });
+  assert.equal(existsSync(state1), true);
+  assert.equal(existsSync(state2), true);
+  assert.deepEqual(result.deleted, []);
+});
+
+test('cleanup-residue CLI is registered and returns a JSON summary (missing tmp dir → scanned 0)', () => {
+  const root = temporaryDirectory();
+  const tmpDir = join(root, '.deep-review', 'tmp'); // deliberately not created
+  const result = runCli(['cleanup-residue', '--tmp-dir', tmpDir]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.json.ok, true);
+  assert.equal(result.json.scanned, 0);
+  assert.deepEqual(result.json.deleted, []);
+});
+
+test('recordRound stamps a same-host owner (host_hash/pid/process_start_ms/started_at) for cleanup liveness', async () => {
+  const { recordRound } = await loadLoopState();
+  const { currentHostHash } = await loadMutation();
+  const root = temporaryDirectory();
+  const { reviewPath, tmpDir } = writeFixtures(root);
+  const result = recordRound({
+    roundNumber: 1,
+    reviewReport: reviewPath,
+    baseCommit: 'deadbeef',
+    stateDir: tmpDir,
+  });
+  const persisted = JSON.parse(readFileSync(result.state_file, 'utf8'));
+  assert.equal(typeof persisted.owner, 'object');
+  assert.equal(persisted.owner.host_hash, currentHostHash());
+  assert.match(persisted.owner.pid, /^[0-9]+$/u);
+  assert.match(persisted.owner.process_start_ms, /^[0-9]+$/u);
+  assert.equal(new Date(persisted.owner.started_at).toISOString(), persisted.owner.started_at);
 });

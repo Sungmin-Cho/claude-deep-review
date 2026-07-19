@@ -1,10 +1,14 @@
-// Ranged citation `path:START-END` is captured with only the START line
-// (mirrors loop-state.mjs `firstLocationToken`'s `-END` suffix support).
-const BACKTICKED_LOCATION = /`([^`\r\n]+):(\d+)(?:-\d+)?`/gu;
+// Ranged citation `path:START-END` — and comma-separated multi-range spans like
+// `path:1-2, 83-100` — are captured with only the FIRST range's START line
+// (mirrors loop-state.mjs `firstLocationToken`). The trailing
+// `(?:\s*,\s*\d+(?:-\d+)?)*` consumes any additional ranges inside the same
+// backticks so they neither break the match nor mint phantom findings.
+const BACKTICKED_LOCATION = /`([^`\r\n]+):(\d+)(?:-\d+)?(?:\s*,\s*\d+(?:-\d+)?)*`/gu;
 const BARE_LOCATION = /(?:^|[\s(])((?:[A-Za-z0-9_.-]+[\\/])*[A-Za-z0-9_.-]+):(\d+)(?=$|[\s,.)])/gu;
-// Strips an already-captured backticked location (ranged suffix included) so
-// the bare pass never re-matches a quoted path's digits as prose.
-const QUOTED_LOCATION_STRIP = /`[^`\r\n]+:\d+(?:-\d+)?`/gu;
+// Strips an already-captured backticked location (ranged and multi-range suffix
+// included) so the bare pass never re-matches a quoted path's digits — or a
+// trailing range's digits — as prose.
+const QUOTED_LOCATION_STRIP = /`[^`\r\n]+:\d+(?:-\d+)?(?:\s*,\s*\d+(?:-\d+)?)*`/gu;
 
 /**
  * A bare (non-backtick) `path:line` token is only a real location if the path

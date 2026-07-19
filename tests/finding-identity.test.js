@@ -117,6 +117,48 @@ test('extractFindings extracts a ranged backticked location `path:START-END` usi
   ]);
 });
 
+test('extractFindings captures a comma-separated MULTI-range backticked citation using the FIRST range start line (no phantom findings)', async () => {
+  const { extractFindings } = await loadIdentity();
+  const markdown = [
+    '### \u{1F7E1} Warning',
+    '- multi-range citation at `src/a.js:1-2, 83-100`',
+  ].join('\n');
+  const findings = extractFindings(markdown, { repoRoot: '/repo' });
+  // Exactly one finding: the extra ranges must never mint phantom findings.
+  assert.equal(findings.length, 1);
+  assert.deepEqual(findings.map((finding) => [finding.severity, finding.path, finding.line]), [
+    ['warning', 'src/a.js', 1],
+  ]);
+});
+
+test('extractFindings captures a THREE-range backticked citation as one finding at the first start line', async () => {
+  const { extractFindings } = await loadIdentity();
+  const markdown = [
+    '### \u{1F534} Critical',
+    '- three ranges at `pkg/mod.ts:5-9, 40-41, 77-90`',
+  ].join('\n');
+  const findings = extractFindings(markdown, { repoRoot: '/repo' });
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].path, 'pkg/mod.ts');
+  assert.equal(findings[0].line, 5);
+});
+
+test('extractFindings leaves single-range and plain backticked citations unchanged alongside a multi-range one', async () => {
+  const { extractFindings } = await loadIdentity();
+  const markdown = [
+    '### \u{1F7E1} Warning',
+    '- plain at `src/p.js:7`',
+    '- ranged at `src/r.js:10-14`',
+    '- multi at `src/m.js:3-4, 30-31`',
+  ].join('\n');
+  const findings = extractFindings(markdown, { repoRoot: '/repo' });
+  assert.deepEqual(findings.map((finding) => [finding.path, finding.line]), [
+    ['src/p.js', 7],
+    ['src/r.js', 10],
+    ['src/m.js', 3],
+  ]);
+});
+
 test('extractFindings does not register unquoted numeric prose (e.g. "backoff at 3:30") as a finding', async () => {
   const { extractFindings } = await loadIdentity();
   const markdown = [
