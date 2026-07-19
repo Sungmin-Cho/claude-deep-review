@@ -12,12 +12,13 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { canonicalizeRepoPath, extractFindings } from './lib/finding-identity.mjs';
+import { canonicalizeRepoPath, extractFindings, matchFindings } from './lib/finding-identity.mjs';
 
 const SNAPSHOT_SCHEMA = 1;
 const ROUND_STATE_SCHEMA = 1;
 const PRIOR_CONTEXT_MAX_BYTES_DEFAULT = 16384;
 const PRIOR_CONTEXT_REJECT_NOTICE = '재검증 필수, 억제 금지 (advisory — re-verify, never suppress)';
+const STALLED_REPEAT_RATIO_THRESHOLD = 0.5;
 const TAXONOMY = new Set([
   'error-handling',
   'naming-convention',
@@ -424,6 +425,42 @@ export function renderPriorContext(options = {}) {
   };
 }
 
+/**
+ * Deterministic, code-owned convergence judgment between two adjacent round
+ * state files (SKILL §5 condition 3's former natural-language "half of the
+ * larger set repeats" rule, now this function's `stalled` output). Rejects a
+ * `loop_id`/`schema_version` mismatch as `STALE_STATE` rather than comparing
+ * unrelated loops. Only critical/warning findings ever appear in round state
+ * (extractFindings never captures info-level items), so no extra filtering
+ * is needed before matchFindings.
+ */
+export function compareRounds(options = {}) {
+  const previous = readRoundState(options.previous);
+  const current = readRoundState(options.current);
+  if (previous.schema_version !== current.schema_version || previous.loop_id !== current.loop_id) {
+    throw new LoopStateError('previous/current round state is from a different loop or schema', 'STALE_STATE', {
+      previous_loop_id: previous.loop_id,
+      current_loop_id: current.loop_id,
+    });
+  }
+
+  const previousFindings = Array.isArray(previous.findings) ? previous.findings : [];
+  const currentFindings = Array.isArray(current.findings) ? current.findings : [];
+  const { repeated, resolved, added } = matchFindings(previousFindings, currentFindings);
+  const largerSetSize = Math.max(previousFindings.length, currentFindings.length);
+  const repeatRatio = largerSetSize > 0 ? repeated.length / largerSetSize : 0;
+
+  return {
+    repeated_count: repeated.length,
+    resolved_count: resolved.length,
+    added_count: added.length,
+    larger_set_size: largerSetSize,
+    repeat_ratio: repeatRatio,
+    stalled: largerSetSize > 0 && repeatRatio >= STALLED_REPEAT_RATIO_THRESHOLD,
+    progressed: resolved.length > 0,
+  };
+}
+
 function parseFlags(argv) {
   const values = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -465,6 +502,10 @@ function commandOptions(command, flags) {
       ['--output', 'output'],
       ['--max-bytes', 'maxBytes'],
     ]),
+    'compare-rounds': new Map([
+      ['--previous', 'previous'],
+      ['--current', 'current'],
+    ]),
   }[command];
   if (!known) throw new LoopStateError(`unknown command: ${command}`, 'INVALID_COMMAND');
   const options = {};
@@ -484,6 +525,7 @@ export function runLoopStateCli(argv = process.argv.slice(2)) {
   if (command === 'assert-same-path') return assertSamePath(options);
   if (command === 'record-round') return recordRound(options);
   if (command === 'render-prior-context') return renderPriorContext(options);
+  if (command === 'compare-rounds') return compareRounds(options);
   return collectMetrics(options);
 }
 

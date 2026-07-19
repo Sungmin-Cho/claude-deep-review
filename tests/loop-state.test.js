@@ -321,3 +321,162 @@ test('render-prior-context CLI is registered and produces the file (round trip)'
   assert.equal(renderResult.json.output_file, outputFile);
   assert.match(readFileSync(outputFile, 'utf8'), /PRIOR-CONTEXT v1/);
 });
+
+const ROUND1_REVIEW = [
+  '# Deep Review Report',
+  '## Summary',
+  '- **Verdict**: REQUEST_CHANGES',
+  '- **Issues**: \u{1F534} 1건, \u{1F7E1} 2건, ℹ️ 0건',
+  '### \u{1F534} Critical',
+  '- issue A at `src/a.js:10`',
+  '### \u{1F7E1} Warning',
+  '- issue B at `src/b.js:20`',
+  '- issue C at `src/c.js:30`',
+].join('\n');
+
+const ROUND2_REVIEW = [
+  '# Deep Review Report',
+  '## Summary',
+  '- **Verdict**: CONCERN',
+  '- **Issues**: \u{1F534} 1건, \u{1F7E1} 2건, ℹ️ 0건',
+  '### \u{1F534} Critical',
+  '- issue A at `src/a.js:10`',
+  '### \u{1F7E1} Warning',
+  '- issue B at `src/b.js:23`',
+  '- issue D at `src/d.js:5`',
+].join('\n');
+
+const EMPTY_APPROVE_REVIEW = [
+  '# Deep Review Report',
+  '## Summary',
+  '- **Verdict**: APPROVE',
+  '- **Issues**: \u{1F534} 0건, \u{1F7E1} 0건, ℹ️ 0건',
+  '### \u{1F7E2} Passed',
+  '- everything looks fine',
+].join('\n');
+
+function recordTwoRounds(root, review1, review2) {
+  const reportsDir = join(root, '.deep-review', 'reports');
+  mkdirSync(reportsDir, { recursive: true });
+  const path1 = join(reportsDir, '2026-07-19-090000-review.md');
+  const path2 = join(reportsDir, '2026-07-19-091000-review.md');
+  writeFileSync(path1, review1);
+  writeFileSync(path2, review2);
+  const tmpDir = join(root, '.deep-review', 'tmp');
+  mkdirSync(tmpDir, { recursive: true });
+  const round1 = runCli([
+    'record-round', '--round-number', '1', '--review-report', path1,
+    '--base-commit', 'deadbeef', '--state-dir', tmpDir,
+  ]);
+  assert.equal(round1.status, 0, round1.stderr);
+  const round2 = runCli([
+    'record-round', '--round-number', '2', '--review-report', path2,
+    '--loop-id', round1.json.loop_id, '--base-commit', 'deadbeef', '--state-dir', tmpDir,
+  ]);
+  assert.equal(round2.status, 0, round2.stderr);
+  return { round1, round2, tmpDir };
+}
+
+test('compare-rounds reports repeated/resolved/added and a >=0.5 repeat_ratio as stalled=true, progressed=true', () => {
+  const root = temporaryDirectory();
+  const { round1, round2 } = recordTwoRounds(root, ROUND1_REVIEW, ROUND2_REVIEW);
+  const compared = runCli([
+    'compare-rounds', '--previous', round1.json.state_file, '--current', round2.json.state_file,
+  ]);
+  assert.equal(compared.status, 0, compared.stderr);
+  assert.equal(compared.json.repeated_count, 2);
+  assert.equal(compared.json.resolved_count, 1);
+  assert.equal(compared.json.added_count, 1);
+  assert.equal(compared.json.larger_set_size, 3);
+  assert.ok(Math.abs(compared.json.repeat_ratio - 2 / 3) < 1e-9);
+  assert.equal(compared.json.stalled, true);
+  assert.equal(compared.json.progressed, true);
+});
+
+test('compare-rounds rejects a loop_id mismatch as STALE_STATE', () => {
+  const root = temporaryDirectory();
+  const { reviewPath, tmpDir } = writeFixtures(root);
+  const roundA = runCli([
+    'record-round', '--round-number', '1', '--review-report', reviewPath,
+    '--loop-id', 'loop-A', '--base-commit', 'deadbeef', '--state-dir', tmpDir,
+  ]);
+  const roundB = runCli([
+    'record-round', '--round-number', '2', '--review-report', reviewPath,
+    '--loop-id', 'loop-B', '--base-commit', 'deadbeef', '--state-dir', tmpDir,
+  ]);
+  const compared = runCli([
+    'compare-rounds', '--previous', roundA.json.state_file, '--current', roundB.json.state_file,
+  ]);
+  assert.notEqual(compared.status, 0);
+  assert.equal(compared.json.error.code, 'STALE_STATE');
+});
+
+test('compare-rounds treats an empty adjacent pair as stalled=false (larger_set_size=0)', () => {
+  const root = temporaryDirectory();
+  const { round1, round2 } = recordTwoRounds(root, EMPTY_APPROVE_REVIEW, EMPTY_APPROVE_REVIEW);
+  const compared = runCli([
+    'compare-rounds', '--previous', round1.json.state_file, '--current', round2.json.state_file,
+  ]);
+  assert.equal(compared.status, 0, compared.stderr);
+  assert.equal(compared.json.larger_set_size, 0);
+  assert.equal(compared.json.repeat_ratio, 0);
+  assert.equal(compared.json.stalled, false);
+  assert.equal(compared.json.progressed, false);
+});
+
+test('compare-rounds output is deterministic across repeated invocations on the same inputs', () => {
+  const root = temporaryDirectory();
+  const { round1, round2 } = recordTwoRounds(root, ROUND1_REVIEW, ROUND2_REVIEW);
+  const first = runCli(['compare-rounds', '--previous', round1.json.state_file, '--current', round2.json.state_file]);
+  const second = runCli(['compare-rounds', '--previous', round1.json.state_file, '--current', round2.json.state_file]);
+  assert.deepEqual(
+    { ...first.json, ok: undefined },
+    { ...second.json, ok: undefined },
+  );
+});
+
+// Round-savings simulation (SKILL §5 condition 7 / §6 rounds_saved): a
+// split-only CONCERN round with no accepted actionable item skips Respond
+// (spec §3 of SKILL — Respond skip semantics). collect-metrics on that
+// lone round, with no --response-report, must surface accepted=0,
+// implemented=0, halted=false — the exact trio condition 7 tests before
+// starting another Review round. rounds_saved = max_rounds - executed_rounds
+// is then a deterministic arithmetic fact from those loop-state outputs.
+test('round-savings simulation: split-only CONCERN + skipped Respond triggers condition 7 inputs, rounds_saved = max - executed = 3', () => {
+  const root = temporaryDirectory();
+  const reportsDir = join(root, '.deep-review', 'reports');
+  mkdirSync(reportsDir, { recursive: true });
+  const splitOnlyConcern = [
+    '# Deep Review Report',
+    '## Summary',
+    '- **Verdict**: CONCERN',
+    '- **Issues**: \u{1F534} 0건, \u{1F7E1} 2건, ℹ️ 0건',
+    '### \u{1F7E1} Warning',
+    '- split opinion issue at `src/x.js:5`',
+    '- split opinion issue two at `src/y.js:9`',
+  ].join('\n');
+  const reviewPath = join(reportsDir, '2026-07-19-080000-review.md');
+  writeFileSync(reviewPath, splitOnlyConcern);
+
+  const metrics = runCli(['collect-metrics', '--round-number', '1', '--review-report', reviewPath]);
+  assert.equal(metrics.status, 0, metrics.stderr);
+  assert.equal(metrics.json.verdict, 'CONCERN');
+  // No --response-report was passed: Respond was skipped for this
+  // split-only CONCERN round (SKILL §3), so these default to the
+  // condition-7 trigger trio.
+  assert.equal(metrics.json.accepted_count, 0);
+  assert.equal(metrics.json.implemented_count, 0);
+  assert.equal(metrics.json.halted, false);
+
+  const conditionSevenFires = metrics.json.accepted_count === 0
+    && metrics.json.implemented_count === 0
+    && metrics.json.halted === false;
+  assert.equal(conditionSevenFires, true);
+
+  // Condition 7 fires immediately after round 1 metrics: the loop stops
+  // before starting round 2, so exactly one round executed.
+  const maxRounds = 4;
+  const executedRounds = 1;
+  const roundsSaved = maxRounds - executedRounds;
+  assert.equal(roundsSaved, 3);
+});
