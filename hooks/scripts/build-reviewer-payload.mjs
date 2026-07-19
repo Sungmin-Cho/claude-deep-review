@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -13,10 +13,14 @@ import {
 } from './lib/runtime-context.mjs';
 
 const DOCTRINE_WARNING = 'fp-doctrine extraction failed (injection skipped)';
+const PRIOR_ROUNDS_TITLE = 'PRIOR ROUND CONTEXT (advisory — re-verify, never suppress)';
+const PRIOR_ROUNDS_MAX_BYTES = 32 * 1024;
+const PRIOR_CONTEXT_HEADER_PATTERN = /^<!-- PRIOR-CONTEXT v1 loop_id=(\S+) base_commit=(\S+) round=(\d+) -->\s*$/u;
 const SECTION_ORDER = [
   ['REVIEW SUPPRESSION DOCTRINE', 'doctrine'],
   ['CHANGED FILES (cross-file context)', 'changeFiles'],
   ['PROJECT RULES / CONTRACT / HEALTH', 'context'],
+  [PRIOR_ROUNDS_TITLE, 'priorRounds'],
   ['DIFF UNDER REVIEW', 'diff'],
 ];
 
@@ -82,6 +86,59 @@ export function assembleReviewerPayload(sections = {}) {
   return payload;
 }
 
+function escapePriorRoundsFences(text) {
+  // A forged `=====` line inside untrusted prior-round content must never be
+  // mistaken for a real `assembleReviewerPayload` section boundary.
+  return text.replace(/^=====/gmu, '\\=====');
+}
+
+/**
+ * Validated ingest for the optional `--prior-rounds-file` advisory context
+ * (research §7-6 / plan v2 — explicit flag + verified ingest replaces fixed-
+ * path-existence keying). Every rejection reason is pushed to `warnings` and
+ * the section is omitted (never truncated, never silently substituted).
+ */
+export function ingestPriorRounds(options, warnings) {
+  if (!options.priorRoundsFile) return '';
+  const filePath = options.priorRoundsFile;
+  let stat;
+  try {
+    // lstat (not stat): a symlink must never be trusted regardless of its
+    // target — only a genuine regular file is a valid prior-rounds source.
+    stat = lstatSync(filePath);
+  } catch {
+    warnings.push(`prior-rounds-file unreadable (section skipped): ${filePath}`);
+    return '';
+  }
+  if (!stat.isFile()) {
+    warnings.push(`prior-rounds-file is not a regular file (section skipped): ${filePath}`);
+    return '';
+  }
+  if (stat.size > PRIOR_ROUNDS_MAX_BYTES) {
+    warnings.push(
+      `prior-rounds-file exceeds ${PRIOR_ROUNDS_MAX_BYTES} bytes (section skipped, not truncated): ${filePath}`,
+    );
+    return '';
+  }
+
+  const raw = readFileSync(filePath, 'utf8');
+  const firstLine = raw.split(/\r?\n/u)[0] ?? '';
+  const headerMatch = PRIOR_CONTEXT_HEADER_PATTERN.exec(firstLine);
+  if (!headerMatch) {
+    warnings.push(`prior-rounds-file missing PRIOR-CONTEXT v1 header (section skipped): ${filePath}`);
+    return '';
+  }
+  const headerBaseCommit = headerMatch[2];
+  if (options.priorBase && options.priorBase !== headerBaseCommit) {
+    warnings.push(
+      `prior-rounds-file base_commit mismatch (section skipped): expected ${options.priorBase}, got ${headerBaseCommit}`,
+    );
+    return '';
+  }
+
+  return escapePriorRoundsFences(raw);
+}
+
 function contentFromOption(options, valueKey, fileKey) {
   if (options[valueKey] !== undefined) {
     if (typeof options[valueKey] !== 'string') throw new TypeError(`${valueKey} must be a string`);
@@ -129,7 +186,8 @@ export function buildReviewerPayload(options = {}) {
 
   const context = contentFromOption(options, 'context', 'contextFile');
   const diff = contentFromOption(options, 'diff', 'diffFile');
-  const payload = assembleReviewerPayload({ doctrine, changeFiles, context, diff });
+  const priorRounds = ingestPriorRounds(options, warnings);
+  const payload = assembleReviewerPayload({ doctrine, changeFiles, context, priorRounds, diff });
   const promptFile = makeSecureTempPath('deep-review-prompt', '.md');
   atomicWriteFile(promptFile, payload, { encoding: 'utf8', mode: 0o600 });
   return { promptFile: resolve(promptFile), warnings, changeFilesCount };
@@ -145,6 +203,8 @@ function parseArguments(argv) {
     ['--files-from-z', 'filesFromZ'],
     ['--context-file', 'contextFile'],
     ['--diff-file', 'diffFile'],
+    ['--prior-rounds-file', 'priorRoundsFile'],
+    ['--prior-base', 'priorBase'],
     ['--max-entries', 'maxEntries'],
     ['--max-bytes', 'maxBytes'],
   ]);
