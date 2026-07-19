@@ -185,12 +185,16 @@ function categoryFor(findings, file, line) {
  * parser `record-round` uses — so a multi-range citation such as
  * `src/a.js:1-2, 83-100` resolves to the identical first-range start location
  * in both paths, instead of the old single-token matcher's bogus capture.
- * Each entry buckets the line into a 7-line window and tags it with the
- * recurring-findings category; the set is deterministically sorted.
+ * `repoRoot` is threaded straight into `extractFindings` so paths canonicalize
+ * on the SAME basis as `record-round` (single source of truth): with a repo
+ * root an absolute `/repo/src/a.js` and a `./src/a.js` both fold to `src/a.js`,
+ * and without one the legacy relative-path signature is unchanged. Each entry
+ * buckets the line into a 7-line window and tags it with the recurring-findings
+ * category; the set is deterministically sorted.
  */
-function signatures(review, recurringFindings) {
+function signatures(review, recurringFindings, { repoRoot } = {}) {
   const result = new Set();
-  for (const finding of extractFindings(review)) {
+  for (const finding of extractFindings(review, { repoRoot })) {
     const bucket = Math.floor(finding.line / 7);
     const category = categoryFor(recurringFindings, finding.path, finding.line);
     result.add(`${finding.severity}:${finding.path}:${bucket}:${category}`);
@@ -236,7 +240,7 @@ export function collectMetrics(options = {}) {
     implemented_count: implemented,
     halted: haltedMatch ? haltedMatch[1].toLowerCase() === 'true' : false,
     execution_path: executionMatch ? executionMatch[1].toLowerCase() : 'n/a',
-    findings_signature: signatures(review, parseRecurring(recurringPath)),
+    findings_signature: signatures(review, parseRecurring(recurringPath), { repoRoot: options.repoRoot }),
   };
 }
 
@@ -603,7 +607,12 @@ function decideLoopResidue(group, context) {
  * stamped owner is provably departed AND its most-recent activity predates the
  * staleness grace window; otherwise the whole loop is kept. Mirrors the
  * owner-token + liveness model in mutation-protocol.mjs and stays pure Node
- * (no shell-only helper). `processProbe`/`now` are injectable for tests.
+ * (no shell-only helper). Within a deletion group the advisory `.prior.md`
+ * file(s) are removed FIRST and the state file(s) only after every advisory
+ * removal succeeds, so a mid-group removal failure leaves the state file intact
+ * and the loop stays retryable next round — never orphaning a `.prior.md` whose
+ * state owner was already reaped. `processProbe`/`now`/`removeFile` are
+ * injectable for tests.
  */
 export function cleanupResidue(options = {}) {
   const tmpDir = absolute(options.tmpDir, 'tmp directory');
@@ -614,11 +623,14 @@ export function cleanupResidue(options = {}) {
   if (!Number.isFinite(now) || !Number.isFinite(staleMs) || staleMs < 0) {
     throw new LoopStateError('cleanup time thresholds are invalid', 'INVALID_ARGUMENT');
   }
+  const removeFile = typeof options.removeFile === 'function'
+    ? options.removeFile
+    : (file) => rmSync(file, { force: true });
   let entries;
   try {
     entries = readdirSync(tmpDir, { withFileTypes: true });
   } catch (error) {
-    if (error.code === 'ENOENT') return { scanned: 0, deleted: [], kept: [] };
+    if (error.code === 'ENOENT') return { scanned: 0, deleted: [], kept: [], errors: [] };
     throw error;
   }
 
@@ -626,7 +638,7 @@ export function cleanupResidue(options = {}) {
   const loopFor = (loopId) => {
     let group = loops.get(loopId);
     if (!group) {
-      group = { states: [], files: [] };
+      group = { states: [], priors: [] };
       loops.set(loopId, group);
     }
     return group;
@@ -638,38 +650,54 @@ export function cleanupResidue(options = {}) {
       const filePath = resolve(tmpDir, entry.name);
       const group = loopFor(stateMatch[1]);
       group.states.push({ path: filePath, owner: readResidueOwner(filePath, stateMatch[1]) });
-      group.files.push(filePath);
       continue;
     }
     const priorMatch = RESIDUE_PRIOR_PATTERN.exec(entry.name);
-    if (priorMatch) loopFor(priorMatch[1]).files.push(resolve(tmpDir, entry.name));
+    if (priorMatch) loopFor(priorMatch[1]).priors.push(resolve(tmpDir, entry.name));
   }
 
   const context = { now, processProbe: options.processProbe, staleMs };
   const deleted = [];
   const kept = [];
   const errors = [];
-  for (const group of loops.values()) {
-    const decision = decideLoopResidue(group, context);
-    if (decision.action === 'delete') {
-      for (const file of group.files) {
-        try {
-          rmSync(file, { force: true });
-          deleted.push(file);
-        } catch (error) {
-          // A per-file removal failure (e.g. EPERM/EBUSY on Windows, force
-          // already swallows ENOENT) must not abort the whole scan or drop the
-          // JSON summary: record it and keep going.
-          errors.push({
-            path: file,
-            code: error?.code || 'RESIDUE_RM_FAILED',
-            message: error?.message || String(error),
-          });
-        }
-      }
-    } else {
-      for (const file of group.files) kept.push({ path: file, reason: decision.reason });
+  // Remove one residue file, recording (never throwing) a failure. A per-file
+  // removal failure (e.g. EPERM/EBUSY on Windows; force already swallows ENOENT)
+  // must not abort the whole scan or drop the JSON summary.
+  const tryRemove = (file) => {
+    try {
+      removeFile(file);
+      deleted.push(file);
+      return true;
+    } catch (error) {
+      errors.push({
+        path: file,
+        code: error?.code || 'RESIDUE_RM_FAILED',
+        message: error?.message || String(error),
+      });
+      return false;
     }
+  };
+  for (const group of loops.values()) {
+    const statePaths = group.states.map((state) => state.path);
+    const decision = decideLoopResidue(group, context);
+    if (decision.action !== 'delete') {
+      for (const file of [...group.priors, ...statePaths]) kept.push({ path: file, reason: decision.reason });
+      continue;
+    }
+    // Advisory (.prior.md) first; state file(s) only once every advisory
+    // removal in this group succeeds. If any advisory removal fails, preserve
+    // the state file(s) so the next cleanup re-establishes ownership against the
+    // surviving state and retries — instead of orphaning a `.prior.md` whose
+    // state owner was already reaped (which the no-owner branch keeps forever).
+    let advisoryFailed = false;
+    for (const file of group.priors) {
+      if (!tryRemove(file)) advisoryFailed = true;
+    }
+    if (advisoryFailed) {
+      for (const file of statePaths) kept.push({ path: file, reason: 'retry-pending' });
+      continue;
+    }
+    for (const file of statePaths) tryRemove(file);
   }
   deleted.sort(utf8Compare);
   kept.sort((left, right) => utf8Compare(left.path, right.path));
@@ -702,6 +730,7 @@ function commandOptions(command, flags) {
       ['--review-report', 'reviewReport'],
       ['--response-report', 'responseReport'],
       ['--recurring-findings', 'recurringFindings'],
+      ['--repo-root', 'repoRoot'],
     ]),
     'record-round': new Map([
       ['--round-number', 'roundNumber'],

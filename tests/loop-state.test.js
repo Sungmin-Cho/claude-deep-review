@@ -864,3 +864,129 @@ test('collect-metrics findings_signature agrees with record-round on a MULTI-ran
   // The old single-token matcher would have captured a bogus `...83-` path at line 100.
   assert.equal(metrics.findings_signature.some((sig) => /83-/u.test(sig)), false);
 });
+
+// --- P2-1: collect-metrics repo-root canonicalization parity with record-round -
+// signatures() reuses the shared extractFindings() parser, which canonicalizes
+// paths. Without a repo-root, collect-metrics left an absolute /repo/src/a.js as
+// `repo/src/a.js` while record-round (given --repo-root) canonicalized it to
+// `src/a.js` — diverging the backward-compat findings_signature and risking a
+// distinct-citation collapse. collect-metrics now takes --repo-root and threads
+// it into signatures() on the SAME basis as record-round (single source of truth).
+
+function buildSingleCriticalReview(citation) {
+  return [
+    '# Deep Review Report',
+    '## Summary',
+    '- **Verdict**: REQUEST_CHANGES',
+    '- **Issues**: \u{1F534} 1건, \u{1F7E1} 0건, ℹ️ 0건',
+    '### \u{1F534} Critical',
+    `- unsafe edge at \`${citation}\``,
+  ].join('\n');
+}
+
+test('collect-metrics --repo-root canonicalizes an absolute and a ./-prefixed citation to the SAME signature as a plain relative one, matching record-round (SSOT)', async () => {
+  const { recordRound, collectMetrics } = await loadLoopState();
+  const root = temporaryDirectory();
+  const reportsDir = join(root, '.deep-review', 'reports');
+  const tmpDir = join(root, '.deep-review', 'tmp');
+  mkdirSync(reportsDir, { recursive: true });
+  mkdirSync(tmpDir, { recursive: true });
+  const repoRoot = '/tmp/some/repo';
+
+  const absReview = join(reportsDir, 'abs-review.md');
+  const dotReview = join(reportsDir, 'dot-review.md');
+  const relReview = join(reportsDir, 'rel-review.md');
+  writeFileSync(absReview, buildSingleCriticalReview(`${repoRoot}/src/a.js:14`));
+  writeFileSync(dotReview, buildSingleCriticalReview('./src/a.js:14'));
+  writeFileSync(relReview, buildSingleCriticalReview('src/a.js:14'));
+
+  // floor(14/7) = 2; no recurring-findings file → untagged.
+  const expectedSig = ['critical:src/a.js:2:untagged'];
+  const absMetrics = collectMetrics({ roundNumber: 1, reviewReport: absReview, repoRoot });
+  const dotMetrics = collectMetrics({ roundNumber: 1, reviewReport: dotReview, repoRoot });
+  const relMetrics = collectMetrics({ roundNumber: 1, reviewReport: relReview, repoRoot });
+  assert.deepEqual(absMetrics.findings_signature, expectedSig);
+  assert.deepEqual(dotMetrics.findings_signature, expectedSig);
+  assert.deepEqual(relMetrics.findings_signature, expectedSig);
+
+  // record-round on the same repo-root canonicalizes to the identical path, so
+  // the signature path component is parity with record-round's finding path.
+  const recorded = recordRound({
+    roundNumber: 1, reviewReport: absReview, baseCommit: 'deadbeef', stateDir: tmpDir, repoRoot,
+  });
+  const persisted = JSON.parse(readFileSync(recorded.state_file, 'utf8'));
+  assert.equal(persisted.findings[0].path, 'src/a.js');
+  assert.equal(absMetrics.findings_signature[0], `critical:${persisted.findings[0].path}:2:untagged`);
+});
+
+test('collect-metrics without --repo-root leaves plain relative-path signatures unchanged (backward compatible)', async () => {
+  const { collectMetrics } = await loadLoopState();
+  const root = temporaryDirectory();
+  const reportsDir = join(root, '.deep-review', 'reports');
+  mkdirSync(reportsDir, { recursive: true });
+  const reviewPath = join(reportsDir, 'rel-only-review.md');
+  writeFileSync(reviewPath, buildSingleCriticalReview('src/a.js:14'));
+  const metrics = collectMetrics({ roundNumber: 1, reviewReport: reviewPath });
+  assert.deepEqual(metrics.findings_signature, ['critical:src/a.js:2:untagged']);
+});
+
+test('collect-metrics CLI accepts --repo-root and threads it into the signature basis', () => {
+  const root = temporaryDirectory();
+  const reportsDir = join(root, '.deep-review', 'reports');
+  mkdirSync(reportsDir, { recursive: true });
+  const repoRoot = '/tmp/cli/repo';
+  const reviewPath = join(reportsDir, 'cli-review.md');
+  writeFileSync(reviewPath, buildSingleCriticalReview(`${repoRoot}/src/a.js:14`));
+  const metrics = runCli([
+    'collect-metrics', '--round-number', '1', '--review-report', reviewPath, '--repo-root', repoRoot,
+  ]);
+  assert.equal(metrics.status, 0, metrics.stderr);
+  assert.deepEqual(metrics.json.findings_signature, ['critical:src/a.js:2:untagged']);
+});
+
+// --- P2-2: retryable residue cleanup (advisory-first deletion ordering) ---------
+// Within a deletion group, the advisory .prior.md file(s) are removed FIRST and
+// the state file(s) only after every advisory removal succeeds. A mid-group
+// advisory removal failure (EPERM/EBUSY, e.g. Windows) must therefore leave the
+// state file intact so the loop stays retryable — never orphan a .prior.md whose
+// state owner was already reaped (which the no-owner branch keeps forever).
+
+test('cleanupResidue preserves the state file (retryable) and records errors[] when an advisory .prior.md removal fails', async () => {
+  const { cleanupResidue } = await loadLoopState();
+  const { currentHostHash } = await loadMutation();
+  const tmpDir = makeTmpDir();
+  const owner = makeOwner(currentHostHash(), CLEANUP_NOW, 2 * HOUR_MS);
+  const stateFile = writeStateFile(tmpDir, { loopId: 'partial-fail-loop', owner });
+  const priorFile = writePriorFile(tmpDir, { loopId: 'partial-fail-loop' });
+  const result = cleanupResidue({
+    tmpDir,
+    now: CLEANUP_NOW,
+    staleMs: HOUR_MS,
+    processProbe: () => ({ status: 'dead' }),
+    // Advisory removal fails; state removal (if ever reached) would succeed.
+    removeFile: (file) => {
+      if (file === priorFile) {
+        const error = new Error('EPERM: operation not permitted');
+        error.code = 'EPERM';
+        throw error;
+      }
+      rmSync(file, { force: true });
+    },
+  });
+  // The state file is preserved so the next round re-evaluates ownership and retries.
+  assert.equal(existsSync(stateFile), true);
+  assert.equal(result.deleted.includes(stateFile), false);
+  // The advisory removal failure is recorded, not swallowed.
+  assert.equal(result.errors.some((entry) => entry.path === priorFile && entry.code === 'EPERM'), true);
+  // The preserved state file is surfaced (retry-pending), keeping scanned accounting complete.
+  assert.equal(result.kept.some((entry) => entry.path === stateFile), true);
+  assert.equal(result.scanned, result.deleted.length + result.kept.length + result.errors.length);
+});
+
+test('cleanup-residue missing tmp dir early-return includes a uniform errors:[] key', () => {
+  const root = temporaryDirectory();
+  const tmpDir = join(root, '.deep-review', 'tmp'); // deliberately not created
+  const result = runCli(['cleanup-residue', '--tmp-dir', tmpDir]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.json.errors, []);
+});
