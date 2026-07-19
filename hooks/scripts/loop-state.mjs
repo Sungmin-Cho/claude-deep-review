@@ -12,8 +12,12 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { canonicalizeRepoPath, extractFindings } from './lib/finding-identity.mjs';
 
 const SNAPSHOT_SCHEMA = 1;
+const ROUND_STATE_SCHEMA = 1;
+const PRIOR_CONTEXT_MAX_BYTES_DEFAULT = 16384;
+const PRIOR_CONTEXT_REJECT_NOTICE = '재검증 필수, 억제 금지 (advisory — re-verify, never suppress)';
 const TAXONOMY = new Set([
   'error-handling',
   'naming-convention',
@@ -44,17 +48,22 @@ function absolute(value, label) {
   return resolve(value);
 }
 
-function atomicJson(filePath, value) {
-  const target = absolute(filePath, 'output');
+function atomicText(filePath, text, label = 'output') {
+  const target = absolute(filePath, label);
   mkdirSync(dirname(target), { recursive: true });
   const temporary = `${target}.tmp.${process.pid}.${randomUUID()}`;
   try {
-    writeFileSync(temporary, `${JSON.stringify(value)}\n`, { encoding: 'utf8', mode: 0o600 });
+    writeFileSync(temporary, text, { encoding: 'utf8', mode: 0o600 });
     renameSync(temporary, target);
   } catch (error) {
     rmSync(temporary, { force: true });
     throw error;
   }
+  return target;
+}
+
+function atomicJson(filePath, value) {
+  atomicText(filePath, `${JSON.stringify(value)}\n`, 'output');
 }
 
 function listReports(reportsDir) {
@@ -229,6 +238,192 @@ export function collectMetrics(options = {}) {
   };
 }
 
+function splitItemBlocks(response) {
+  const headerPattern = /^###\s+ITEM-\d+:[^\n]*$/gmu;
+  const starts = [...response.matchAll(headerPattern)];
+  const blocks = [];
+  for (let index = 0; index < starts.length; index += 1) {
+    const begin = starts[index].index;
+    const end = index + 1 < starts.length ? starts[index + 1].index : response.length;
+    blocks.push(response.slice(begin, end));
+  }
+  return blocks;
+}
+
+function firstLocationToken(blockText) {
+  const match = /`([^`\r\n]+):(\d+)(?:-\d+)?`/u.exec(blockText);
+  if (!match) return null;
+  return { path: match[1], line: Number(match[2]) };
+}
+
+function actionReason(blockText) {
+  const match = /-\s*\*\*Action\*\*\s*:\s*([^\n]*)/u.exec(blockText);
+  return match ? match[1].trim() : '';
+}
+
+/**
+ * Parse REJECT-decision ITEM blocks from a response report into
+ * `{path, line, reason}` entries. An item without a backtick `path:line` (or
+ * `path:line-line`, start line only) location token anywhere in its block is
+ * conservatively excluded and counted in `skippedRejects` — session-only,
+ * advisory-only memory never silently invents a location.
+ */
+function parseRejectedItems(response, { repoRoot } = {}) {
+  if (!response) return { rejected: [], skippedRejects: 0 };
+  const rejected = [];
+  let skippedRejects = 0;
+  for (const block of splitItemBlocks(response)) {
+    if (!/-\s*\*\*Decision\*\*\s*:\s*REJECT/iu.test(block)) continue;
+    const location = firstLocationToken(block);
+    if (!location) {
+      skippedRejects += 1;
+      continue;
+    }
+    rejected.push({
+      path: canonicalizeRepoPath(location.path, { repoRoot }),
+      line: location.line,
+      reason: actionReason(block),
+    });
+  }
+  return { rejected, skippedRejects };
+}
+
+/**
+ * Record one round's finding-state snapshot from a canonical review report
+ * (+ optional response report) into a loop-bound, schema-versioned JSON file.
+ * `loopId` is minted with `randomUUID()` when omitted (round 1) and echoed
+ * back alongside the absolute `state_file` so callers never need to know the
+ * file naming convention. `baseCommit` is required (fail-closed).
+ */
+export function recordRound(options = {}) {
+  const roundNumber = Number(options.roundNumber);
+  if (!Number.isInteger(roundNumber) || roundNumber < 1) {
+    throw new LoopStateError('round number must be a positive integer', 'INVALID_ROUND');
+  }
+  if (typeof options.baseCommit !== 'string' || options.baseCommit.length === 0) {
+    throw new LoopStateError('base_commit is required', 'MISSING_BASE_COMMIT');
+  }
+  const reviewPath = absolute(options.reviewReport, 'review report');
+  const review = readFileSync(reviewPath, 'utf8');
+  const verdictMatch = /\*\*Verdict\*\*\s*:\s*(APPROVE|REQUEST_CHANGES|CONCERN)/iu.exec(review);
+  if (!verdictMatch) throw new LoopStateError('review report has no valid Verdict', 'INVALID_REPORT');
+  const issueCounts = parseIssues(review);
+  if (!issueCounts) throw new LoopStateError('review report has no valid Issues summary', 'INVALID_REPORT');
+  const [countRed, countYellow, countInfo] = issueCounts;
+
+  const responsePath = options.responseReport ? absolute(options.responseReport, 'response report') : '';
+  const response = readOptional(responsePath);
+  const recurringPath = options.recurringFindings
+    || join(dirname(dirname(reviewPath)), 'recurring-findings.json');
+  const recurring = parseRecurring(recurringPath);
+
+  const findings = extractFindings(review, { repoRoot: options.repoRoot }).map((finding) => ({
+    ...finding,
+    category: categoryFor(recurring, finding.path, finding.line),
+  }));
+  const { rejected, skippedRejects } = parseRejectedItems(response, { repoRoot: options.repoRoot });
+
+  const loopId = options.loopId || randomUUID();
+  const stateDir = absolute(options.stateDir, 'state directory');
+  const stateFile = resolve(stateDir, `loop-${loopId}-round-${roundNumber}.state.json`);
+  const state = {
+    schema_version: ROUND_STATE_SCHEMA,
+    source: 'report-parse',
+    loop_id: loopId,
+    round_number: roundNumber,
+    base_commit: options.baseCommit,
+    verdict: verdictMatch[1].toUpperCase(),
+    counts: { critical: countRed, warning: countYellow, info: countInfo },
+    findings,
+    rejected,
+    skipped_rejects: skippedRejects,
+  };
+  atomicJson(stateFile, state);
+  return { loop_id: loopId, state_file: stateFile };
+}
+
+function readRoundState(stateFile) {
+  const filePath = absolute(stateFile, 'state file');
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(filePath, 'utf8'));
+  } catch (error) {
+    throw new LoopStateError(`cannot read round state: ${error.message}`, 'INVALID_STATE');
+  }
+  if (
+    parsed?.schema_version !== ROUND_STATE_SCHEMA
+    || typeof parsed.loop_id !== 'string'
+    || typeof parsed.base_commit !== 'string'
+    || !Number.isInteger(parsed.round_number)
+  ) {
+    throw new LoopStateError('round state schema is invalid', 'INVALID_STATE');
+  }
+  return parsed;
+}
+
+function truncateUtf8(text, maxBytes, marker) {
+  const bodyBuffer = Buffer.from(text, 'utf8');
+  const markerBytes = Buffer.byteLength(marker, 'utf8');
+  const budget = Math.max(0, maxBytes - markerBytes);
+  let sliceEnd = Math.min(budget, bodyBuffer.length);
+  // Never split a multi-byte UTF-8 sequence: back up to the previous
+  // lead-byte boundary (a continuation byte has the high bits 10xxxxxx).
+  while (sliceEnd > 0 && (bodyBuffer[sliceEnd] & 0xc0) === 0x80) sliceEnd -= 1;
+  return `${bodyBuffer.subarray(0, sliceEnd).toString('utf8')}${marker}`;
+}
+
+/**
+ * Render a loop-bound prior-round advisory context file: a `PRIOR-CONTEXT v1`
+ * header carrying `loop_id`/`base_commit`/`round` (consumed by
+ * build-reviewer-payload.mjs's ingest validation), an open-findings summary,
+ * and a REJECT list explicitly marked re-verify/never-suppress. Truncates at
+ * `maxBytes` with a visible marker rather than silently growing unbounded.
+ */
+export function renderPriorContext(options = {}) {
+  const state = readRoundState(options.stateFile);
+  const maxBytes = options.maxBytes ? Number(options.maxBytes) : PRIOR_CONTEXT_MAX_BYTES_DEFAULT;
+
+  const header = `<!-- PRIOR-CONTEXT v1 loop_id=${state.loop_id} base_commit=${state.base_commit} round=${state.round_number} -->`;
+  const lines = [header, '', `# Prior round ${state.round_number} context (loop ${state.loop_id})`, ''];
+
+  const findings = Array.isArray(state.findings) ? state.findings : [];
+  lines.push(`## Open findings from round ${state.round_number} (${findings.length})`);
+  if (findings.length === 0) {
+    lines.push('- (none)');
+  } else {
+    for (const finding of findings) {
+      lines.push(`- [${finding.severity}] \`${finding.path}:${finding.line}\` (${finding.category}) — ${finding.title_slug}`);
+    }
+  }
+  lines.push('');
+
+  const rejected = Array.isArray(state.rejected) ? state.rejected : [];
+  lines.push(`## Previously rejected — ${PRIOR_CONTEXT_REJECT_NOTICE}`);
+  if (rejected.length === 0) {
+    lines.push('- (none)');
+  } else {
+    for (const entry of rejected) {
+      lines.push(`- \`${entry.path}:${entry.line}\` — ${entry.reason || '(no reason recorded)'}`);
+    }
+  }
+  lines.push('');
+
+  const body = lines.join('\n');
+  const bodyBytes = Buffer.byteLength(body, 'utf8');
+  const truncated = bodyBytes > maxBytes;
+  const finalText = truncated
+    ? truncateUtf8(body, maxBytes, '\n\n<!-- TRUNCATED: prior-context exceeded maxBytes -->\n')
+    : body;
+
+  const outputFile = atomicText(options.output, finalText, 'output');
+  return {
+    output_file: outputFile,
+    loop_id: state.loop_id,
+    round_number: state.round_number,
+    truncated,
+  };
+}
+
 function parseFlags(argv) {
   const values = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -255,6 +450,21 @@ function commandOptions(command, flags) {
       ['--response-report', 'responseReport'],
       ['--recurring-findings', 'recurringFindings'],
     ]),
+    'record-round': new Map([
+      ['--round-number', 'roundNumber'],
+      ['--review-report', 'reviewReport'],
+      ['--response-report', 'responseReport'],
+      ['--loop-id', 'loopId'],
+      ['--base-commit', 'baseCommit'],
+      ['--state-dir', 'stateDir'],
+      ['--repo-root', 'repoRoot'],
+      ['--recurring-findings', 'recurringFindings'],
+    ]),
+    'render-prior-context': new Map([
+      ['--state-file', 'stateFile'],
+      ['--output', 'output'],
+      ['--max-bytes', 'maxBytes'],
+    ]),
   }[command];
   if (!known) throw new LoopStateError(`unknown command: ${command}`, 'INVALID_COMMAND');
   const options = {};
@@ -272,6 +482,8 @@ export function runLoopStateCli(argv = process.argv.slice(2)) {
   if (command === 'snapshot-reports') return snapshotReports(options);
   if (command === 'resolve-round-report') return resolveRoundReport(options);
   if (command === 'assert-same-path') return assertSamePath(options);
+  if (command === 'record-round') return recordRound(options);
+  if (command === 'render-prior-context') return renderPriorContext(options);
   return collectMetrics(options);
 }
 
