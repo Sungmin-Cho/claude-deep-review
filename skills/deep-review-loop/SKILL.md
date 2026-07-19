@@ -35,10 +35,13 @@ issues, and progress.
 
 Never forward `--max`, `--respond`, `init`, or `--qa` to Review.
 
-At round 1 start, clean any `.deep-review/tmp/loop-*-round-*.state.json` and
-`loop-*-round-*.prior.md` residue from a previous crashed or unrelated loop
-instance using the host's direct file tools (list + delete) — session-only,
-advisory-only REJECT memory must never leak across loop instances. Round 1's
+At round 1 start, clean only *stale* `.deep-review/tmp/loop-*-round-*.state.json`
+and `loop-*-round-*.prior.md` residue from a previous crashed or unrelated loop
+instance using the host's direct file tools (list + delete). Scope the delete by
+staleness — skip any file modified within the last hour — so a loop running
+concurrently in the same repository keeps its live round state and pending
+prior-context intact; session-only, advisory-only REJECT memory must never leak
+across loop instances. Round 1's
 `record-round` (§4) mints a fresh `loop_id` and echoes it; store that value
 and reuse it via `--loop-id` on every later round in this session — never
 re-mint mid-session.
@@ -146,13 +149,17 @@ Immediately after `collect-metrics`, record this round's finding-state for
 convergence comparison:
 
 ```text
-node {plugin_root}/hooks/scripts/loop-state.mjs record-round --round-number N --review-report ROUND_REVIEW_REPORT_PATH --response-report RESPONSE_REPORT_PATH --base-commit REVIEW_BASE --state-dir .deep-review/tmp [--loop-id LOOP_ID]
+node {plugin_root}/hooks/scripts/loop-state.mjs record-round --round-number N --review-report ROUND_REVIEW_REPORT_PATH --response-report RESPONSE_REPORT_PATH --base-commit REVIEW_BASE --repo-root PROJECT_ROOT --state-dir .deep-review/tmp [--loop-id LOOP_ID]
 ```
 
 Omit `--response-report` when Respond was skipped. Omit `--loop-id` on round 1
 only — `record-round` mints one and echoes `{loop_id, state_file}`; store both
 for every later round in this session (pass the same `loop_id` back via
 `--loop-id` on rounds 2+; never re-mint). `--base-commit` is required.
+`--repo-root PROJECT_ROOT` is required so finding locations canonicalize to a
+repo-relative identity — without it absolute path citations stay absolute and
+`compare-rounds` misreads an unchanged finding as resolved+added instead of
+repeated, defeating stall detection.
 
 ## 5. Stop or continue
 
