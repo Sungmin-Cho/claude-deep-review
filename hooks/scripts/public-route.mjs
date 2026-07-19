@@ -116,6 +116,12 @@ function parseReview(argv, host, cwd) {
       if (/^SLICE-[0-9]+$/u.test(expanded[index + 1] || '')) index += 1;
       continue;
     }
+    // Additive-optional grammar extension (research §7-6 / plan v2): a
+    // loop-bound prior-round advisory context path. Value validation is the
+    // payload builder's job (build-reviewer-payload.mjs ingestPriorRounds);
+    // this grammar only accepts the token shape. Review-only — the loop
+    // entry's grammar (parseLoop) is intentionally untouched.
+    if (/^--prior-rounds-file=.+$/u.test(token)) continue;
     return { ...routeError(`unknown review argument: ${token}`), host, argv: expanded };
   }
   return { ok: true, route: 'review', host, argv: expanded };

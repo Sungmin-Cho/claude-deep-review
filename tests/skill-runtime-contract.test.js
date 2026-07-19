@@ -6,10 +6,17 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { spawnSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
 const loopState = path.join(root, 'hooks', 'scripts', 'loop-state.mjs');
+const publicRoutePath = path.join(root, 'hooks', 'scripts', 'public-route.mjs');
+const publicRouteUrl = pathToFileURL(publicRoutePath).href;
+
+async function loadPublicRoute() {
+  return import(publicRouteUrl);
+}
 
 function read(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), 'utf8');
@@ -386,4 +393,84 @@ test('loop metrics rejects a report that omits the required Issues summary', () 
   const result = runLoop(['collect-metrics', '--round-number', '1', '--review-report', report]);
   assert.notEqual(result.status, 0);
   assert.equal(result.json.error.code, 'INVALID_REPORT');
+});
+
+test('public-route review grammar accepts an optional --prior-rounds-file=PATH token without changing any existing flag semantics', async () => {
+  const { parsePublicRoute } = await loadPublicRoute();
+  const cwd = process.cwd();
+
+  const withPrior = parsePublicRoute({
+    entry: 'review',
+    argv: ['--entropy', '--prior-rounds-file=/tmp/loop-x-round-2.prior.md'],
+    host: 'claude',
+    cwd,
+  });
+  assert.equal(withPrior.ok, true);
+  assert.equal(withPrior.route, 'review');
+
+  const combinedWithCodexOnly = parsePublicRoute({
+    entry: 'review',
+    argv: ['--codex-only', '--prior-rounds-file=/tmp/x.md'],
+    host: 'claude',
+    cwd,
+  });
+  assert.equal(combinedWithCodexOnly.ok, true);
+  assert.deepEqual(combinedWithCodexOnly.argv, ['--codex', '--no-opus', '--no-agy', '--prior-rounds-file=/tmp/x.md']);
+
+  // A value-less token is still rejected — the flag requires `=PATH`.
+  const valueless = parsePublicRoute({ entry: 'review', argv: ['--prior-rounds-file'], host: 'claude', cwd });
+  assert.equal(valueless.ok, false);
+
+  // Existing flag conflicts are unchanged by the new token's presence.
+  const stillConflicts = parsePublicRoute({
+    entry: 'review', argv: ['--ultracode', '--no-opus', '--prior-rounds-file=/tmp/x.md'], host: 'claude', cwd,
+  });
+  assert.equal(stillConflicts.ok, false);
+  assert.match(stillConflicts.error, /--ultracode cannot be combined with --no-opus/);
+
+  // No flag at all: baseline review route is unaffected.
+  const bare = parsePublicRoute({ entry: 'review', argv: [], host: 'claude', cwd });
+  assert.equal(bare.ok, true);
+  assert.equal(bare.route, 'review');
+});
+
+test('public-route loop grammar is unchanged (does not accept --prior-rounds-file)', async () => {
+  const { parsePublicRoute } = await loadPublicRoute();
+  const rejected = parsePublicRoute({
+    entry: 'loop', argv: ['--prior-rounds-file=/tmp/x.md'], host: 'claude', cwd: process.cwd(),
+  });
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.error, /unknown loop argument/);
+});
+
+test('loop SKILL codifies compare-rounds consumption, no-new-verdict-on-skip, and explicit-flag prior-context handoff', () => {
+  const loop = fs.readFileSync(path.join(root, 'skills', 'deep-review-loop', 'SKILL.md'), 'utf8');
+
+  // Condition 3 is re-stated to consume compare-rounds's code output rather
+  // than a natural-language "half of the larger set repeats" judgment.
+  assert.match(loop, /compare-rounds.{0,200}stalled/is);
+  assert.match(loop, /implemented_count.{0,80}0|0.{0,80}implemented_count/is);
+  assert.match(loop, /response halted/i);
+
+  // A review-skipped round must never fabricate a new verdict/N_actual.
+  assert.match(loop, /(?:새|new).{0,40}verdict.{0,60}(?:생성 금지|must not|never)/is);
+
+  // The prior-round advisory context is handed to Review via the explicit
+  // public flag — never consumed merely because a file happens to exist.
+  assert.match(loop, /--prior-rounds-file=/);
+  assert.match(loop, /render-prior-context/);
+
+  // rounds_saved bookkeeping and loop_id/record-round wiring.
+  assert.match(loop, /rounds_saved/);
+  assert.match(loop, /record-round/);
+});
+
+test('review-execution Stage 2 forwards --prior-rounds-file to build-reviewer-payload only when explicitly provided', () => {
+  const review = fs.readFileSync(
+    path.join(root, 'skills', 'deep-review-workflow', 'references', 'review-execution.md'),
+    'utf8',
+  );
+  assert.match(review, /--prior-rounds-file.{0,300}only when.{0,80}explicitly/is);
+  assert.match(review, /--prior-rounds-file.{0,120}--prior-base/is);
+  assert.match(review, /existence alone.{0,80}never trigger.{0,80}automatic consumption/is);
 });

@@ -104,6 +104,15 @@ file tools, then invoke:
 node {plugin_root}/hooks/scripts/build-reviewer-payload.mjs --plugin-root PLUGIN_ROOT_ABS --repo PROJECT_ROOT --change-state CHANGE_STATE --review-base REVIEW_BASE --context-file CONTEXT_FILE --diff-file DIFF_FILE
 ```
 
+If (and only if) the caller's argv carried `--prior-rounds-file=PATH`
+(deep-review-loop round 2+ — see its §2), forward that same path to
+`build-reviewer-payload.mjs` unchanged as `--prior-rounds-file PATH` together
+with `--prior-base REVIEW_BASE`. Forward `--prior-rounds-file` **only when it
+was explicitly passed** — the file's existence alone must never trigger
+automatic consumption; that would be exactly the fixed-path-existence keying
+this design replaced. A single-shot review invocation (no loop) never has
+this flag and therefore never sees the section.
+
 The JSON result contains the absolute shared payload path. This Node builder is
 the sole doctrine injector for all supported reviewer roles. Preserve every
 builder warning in the final report.

@@ -35,6 +35,14 @@ issues, and progress.
 
 Never forward `--max`, `--respond`, `init`, or `--qa` to Review.
 
+At round 1 start, clean any `.deep-review/tmp/loop-*-round-*.state.json` and
+`loop-*-round-*.prior.md` residue from a previous crashed or unrelated loop
+instance using the host's direct file tools (list + delete) — session-only,
+advisory-only REJECT memory must never leak across loop instances. Round 1's
+`record-round` (§4) mints a fresh `loop_id` and echoes it; store that value
+and reuse it via `--loop-id` on every later round in this session — never
+re-mint mid-session.
+
 - Round 1 forwards the user's review, contract, entropy, and reviewer flags.
 - If round 1 requested `--ultracode`, mark `ultracode_consumed=true` after that
   attempt. Rounds 2+ remove `--ultracode`, retain Codex, and inject
@@ -52,6 +60,22 @@ Never forward `--max`, `--respond`, `init`, or `--qa` to Review.
 
 At the beginning of every round, execute the review pipeline's Stage 0
 `mutation-protocol.mjs auto-recover` path. Failure is an operational stop.
+
+For round 2+, **before** `review-execution.md` Stage 0 begins (this ordering
+keeps the write outside the Stage 3/4 fingerprint-sensitive window — RF-008),
+render the previous round's advisory context from its `record-round`-echoed
+`state_file`:
+
+```text
+node {plugin_root}/hooks/scripts/loop-state.mjs render-prior-context --state-file PREVIOUS_STATE_FILE --output PRIOR_CONTEXT_FILE
+```
+
+Forward the echoed `output_file` explicitly as `--prior-rounds-file=PRIOR_CONTEXT_FILE`
+on this round's review branch call — the file's mere existence never triggers
+consumption; only this explicit flag does (`public-route.mjs` `parseReview`
+accepts the token; `build-reviewer-payload.mjs` performs the validated
+ingest, per `review-execution.md` Stage 2). Round 1 has no previous state, so
+this step is skipped on round 1.
 
 Before Review, create a private snapshot file with:
 
@@ -114,7 +138,21 @@ and `findings_signature`.
 Each signature is
 `severity:file:floor(line/7):taxonomy_category`. The category comes from the
 current recurring artifact's exact `example_files` match and otherwise is
-`untagged`.
+`untagged`. This field is vestigial for stop-condition purposes — display and
+backward-compatibility only. The deterministic stop logic in §5 consumes
+`compare-rounds` output, never `findings_signature`.
+
+Immediately after `collect-metrics`, record this round's finding-state for
+convergence comparison:
+
+```text
+node {plugin_root}/hooks/scripts/loop-state.mjs record-round --round-number N --review-report ROUND_REVIEW_REPORT_PATH --response-report RESPONSE_REPORT_PATH --base-commit REVIEW_BASE --state-dir .deep-review/tmp [--loop-id LOOP_ID]
+```
+
+Omit `--response-report` when Respond was skipped. Omit `--loop-id` on round 1
+only — `record-round` mints one and echoes `{loop_id, state_file}`; store both
+for every later round in this session (pass the same `loop_id` back via
+`--loop-id` on rounds 2+; never re-mint). `--base-commit` is required.
 
 ## 5. Stop or continue
 
@@ -122,16 +160,49 @@ Stop immediately when any condition holds:
 
 1. `APPROVE` with zero Critical and Warning issues.
 2. Review count reaches `--max`.
-3. At least half of the larger adjacent signature set repeats and no change was
-   implemented, or the response halted.
+3. `compare-rounds` (previous round's `state_file` vs. this round's) reports
+   `stalled=true` AND this round's `implemented_count == 0`, or the response halted:
+
+   ```text
+   node {plugin_root}/hooks/scripts/loop-state.mjs compare-rounds --previous PREVIOUS_STATE_FILE --current CURRENT_STATE_FILE
+   ```
+
+   This condition **consumes `compare-rounds`'s code-owned `stalled` output**
+   in place of the former natural-language "half of the larger set repeats"
+   judgment; the `halted` branch is preserved unchanged. Round 1 has no
+   previous state to compare against, so condition 3 cannot fire before
+   round 2.
 4. Two operational failures occur in one round.
 5. The user chooses stop or DEFER-and-stop.
 6. `N_actual == 0` or a Codex-only round has no Codex role.
+7. This round's `accepted_count == 0` AND `implemented_count == 0` AND
+   `halted == false` — a Review executed but nothing was accepted or
+   implemented and Respond did not halt (most often a split-only `CONCERN`
+   round where Respond was itself skipped per §3). Stop with the last
+   trusted verdict; **do not start another Review round.**
+
+**Condition interaction**: condition 7 fires immediately whenever a
+split-only `CONCERN` round skips Respond (§3) — this is an intended early
+stop, not a bug. §3's Respond-skip rule and condition 7 interact by design to
+avoid an idle extra round.
+
+**Skip semantics — three distinct kinds, never conflate them**:
+(a) *Respond skip within an executed round* (§3 — `APPROVE` with zero issues,
+or a split-only `CONCERN` with no accepted actionable item; that round's
+metrics use response defaults);
+(b) *stopping before starting another Review round* (conditions 2/3/6/7 — no
+new round begins, and a new `verdict` or `N_actual` must never be generated
+for a round whose Review was never started; the loop summary's final verdict
+attribution is always the last executed canonical report, never inferred or
+synthesized by the loop layer);
+(c) the user's explicit DEFER-and-stop choice (§3), which ends after the
+current round regardless of other conditions.
 
 Continue when the verdict is actionable, at least one change was implemented,
-the response did not halt, signatures show progress, and the safety maximum is
-not reached. In a gray area, stop on external dependency or repeatedly failing
-dispatch rather than cycling without evidence.
+the response did not halt, `compare-rounds` shows progress (`progressed=true`
+or `stalled=false`), and the safety maximum is not reached. In a gray area,
+stop on external dependency or repeatedly failing dispatch rather than
+cycling without evidence.
 
 After each round, report verdict, issue counts, change summary, and the decision
 in one paragraph.
@@ -141,5 +212,11 @@ in one paragraph.
 Use a direct host file tool to write one unique
 `.deep-review/responses/{YYYY-MM-DD}-{HHmmss}-loop-summary.md`. Include each
 round's review and response paths, counts, implemented total, final verdict,
-stop reason, and remaining human or external work. Loop state is otherwise
-session-local; existing reports allow a later explicit response to resume.
+stop reason, `rounds_saved` (the safety maximum `--max` minus the number of
+rounds that actually executed a Review), and remaining human or external
+work. Loop state is otherwise session-local; existing reports allow a later
+explicit response to resume.
+
+Delete this session's `loop-*-round-*.prior.md` advisory files with a direct
+host file tool. Leave the `.state.json` files in place — they remain
+readable evidence of the round history.
