@@ -72,6 +72,53 @@ test('public override → emit-routing-plan → leaf argv applies explicit model
   assert.deepEqual(argv.slice(argv.indexOf('--model'), argv.indexOf('--model') + 4), ['--model', 'vendor=model 품질', '--effort', 'xhigh']);
 });
 
+// I4: --host-assertions-json is the internal preflight argv transport for
+// native host tool assertions. These tests deliberately omit
+// runtime.capabilities (it takes full precedence and would bypass the flag
+// entirely) and instead stub runtime.probes to avoid any real subprocess
+// probing of an installed claude/codex/agy binary, restricting PATH so
+// environment detection cannot discover one either.
+const SAFE_SYSTEM_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(path.delimiter);
+
+test('I4: --host-assertions-json threads native Claude agent availability into the routing plan', async () => {
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-host-assertions-native-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--files-from0', files, '--host-assertions-json', '{"claudeNativeAgent":true}'],
+    { PATH: SAFE_SYSTEM_PATH },
+    { probes: { claude: { ok: false }, codex: { ok: false } } },
+  );
+  const claudeRoute = result.routing_plan.routes.find((route) => route.reviewer_id === 'claude-opus');
+  assert.ok(claudeRoute, 'claude-opus route must exist once the native agent host assertion is true');
+  assert.equal(claudeRoute.adapter_id, 'claude-native-agent');
+});
+
+test('I4: omitting --host-assertions-json leaves adapter selection unchanged (claude-cli chosen when only the CLI capability is available)', async () => {
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-host-assertions-absent-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-fake-claude-bin-'));
+  const claudeScript = path.join(binDir, 'claude');
+  fs.writeFileSync(claudeScript, '#!/bin/sh\necho "Claude Code v9.9.9"\n');
+  if (process.platform !== 'win32') fs.chmodSync(claudeScript, 0o755);
+
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--files-from0', files],
+    { PATH: `${binDir}${path.delimiter}${SAFE_SYSTEM_PATH}` },
+    { probes: { claude: { ok: true, version: 'Claude Code v9.9.9', help: '' }, codex: { ok: false } } },
+  );
+  const claudeRoute = result.routing_plan.routes.find((route) => route.reviewer_id === 'claude-opus');
+  assert.ok(claudeRoute, 'claude-opus route must exist when the CLI capability is available');
+  assert.equal(claudeRoute.adapter_id, 'claude-cli');
+});
+
 test('shadow routing defaults to report-only and preflight failures stop only explicit overrides', async () => {
   const { routingPreflightDecision } = await import(classifyUrl);
   assert.deepEqual(routingPreflightDecision({ explicit: false, error: new Error('probe failed') }), { action: 'continue', warning: 'probe failed' });

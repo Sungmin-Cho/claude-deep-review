@@ -182,8 +182,14 @@ Immediately before Stage 4, invoke the reviewer-free preflight with argv-array
 transport:
 
 ```text
-node {plugin_root}/hooks/scripts/classify-artifacts.mjs --repo PROJECT_ROOT --emit-routing-plan --routing-plan-out .deep-review/tmp/routing-plan.json
+node {plugin_root}/hooks/scripts/classify-artifacts.mjs --repo PROJECT_ROOT --emit-routing-plan --routing-plan-out .deep-review/tmp/routing-plan.json --host-assertions-json {"claudeNativeAgent":true,"codexNativeGeneric":false}
 ```
+
+Because this subprocess cannot observe the orchestrating host directly, always
+append `--host-assertions-json` with compact JSON reflecting the current host
+tool capability (named Claude agent availability → `claudeNativeAgent`, native
+Codex generic subagent availability → `codexNativeGeneric`) as one argv value;
+omitting either key or the whole flag leaves that adapter `unknown`.
 
 When public-route returned normalized overrides, append `--overrides-json` and
 the compact `JSON.stringify(route.overrides)` as one argv value. An explicit

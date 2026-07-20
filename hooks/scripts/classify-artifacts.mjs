@@ -211,7 +211,25 @@ const VALUE_FLAGS = {
   '--format': 'format',
   '--files-from0': 'filesFrom',
   '--routing-plan-out': 'routingPlanOut',
+  '--host-assertions-json': 'hostAssertionsJson',
 };
+
+// I4: the internal preflight argv-only transport for native host tool
+// assertions (named Claude agent / native Codex generic subagent
+// availability) that the JS runtime object cannot carry across the
+// classify-artifacts.mjs subprocess boundary. Not part of the public review
+// grammar; the workflow composes this flag itself.
+const HOST_ASSERTION_KEYS = ['claudeNativeAgent', 'codexNativeGeneric'];
+
+function validateHostAssertions(value) {
+  const invalid = !value || typeof value !== 'object' || Array.isArray(value)
+    || Object.keys(value).some((key) => !HOST_ASSERTION_KEYS.includes(key))
+    || Object.values(value).some((entry) => typeof entry !== 'boolean');
+  if (invalid) {
+    throw new Error('--host-assertions-json keys must be claudeNativeAgent/codexNativeGeneric with boolean values');
+  }
+  return value;
+}
 
 // I3: allow provenance to be byte-identical across runs when a caller pins the
 // timestamp via SOURCE_DATE_EPOCH (reproducible-builds convention). Unset ⇒
@@ -363,7 +381,24 @@ export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env 
   const classificationOptions = {
     repo, changeState, reviewBase, filesFromZ, generatedAt: deterministicTimestamp(env),
   };
-  const { capabilities, reviewers, detected } = await routingInputs(repo, env, runtime, environment);
+  // I4: an orchestrator-supplied --host-assertions-json argv value is the only
+  // transport for native host tool assertions into this subprocess. A runtime
+  // object supplied by an in-process JS caller (tests, future embedders) keeps
+  // full precedence over the parsed argv value.
+  let hostAssertionsFromArgv;
+  if (options.hostAssertionsJson !== undefined) {
+    let parsedHostAssertions;
+    try {
+      parsedHostAssertions = JSON.parse(options.hostAssertionsJson);
+    } catch (error) {
+      throw new Error(`--host-assertions-json must contain valid JSON: ${error.message}`);
+    }
+    hostAssertionsFromArgv = validateHostAssertions(parsedHostAssertions);
+  }
+  const routingRuntime = hostAssertionsFromArgv === undefined
+    ? runtime
+    : { ...runtime, hostAssertions: runtime.hostAssertions ?? hostAssertionsFromArgv };
+  const { capabilities, reviewers, detected } = await routingInputs(repo, env, routingRuntime, environment);
   const policy = routingPolicy(repo, env, options.overrides, runtime);
   const semanticAdapters = { ...(runtime.semanticAdapters || {}) };
   const claudeCapability = capabilities.find((item) => item.adapter_id === 'claude-cli' && item.available === true);

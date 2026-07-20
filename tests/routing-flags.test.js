@@ -83,6 +83,40 @@ test('classify CLI override parser round-trips normalized schema and rejects mal
   assert.throws(() => parseArguments(['--overrides-json', '{}']), /protocol_version/i);
 });
 
+// I4: --host-assertions-json is the only transport for native host tool
+// assertions into the classify-artifacts.mjs subprocess. Validation happens
+// inside runClassifyArtifactsCli (not parseArguments), so these assertions
+// exercise the full async CLI entry point with a runtime.capabilities short
+// circuit to avoid any real environment detection.
+test('classify CLI --host-assertions-json rejects malformed JSON, non-object values, unknown keys, and non-boolean values', async () => {
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-host-assertions-invalid-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+  const runtime = {
+    capabilities: [{
+      protocol_version: '2.0', adapter_id: 'claude-cli', provider: 'claude', available: true,
+      roles: ['standard'],
+      model_selection: { supported: true, aliases: ['steady'], catalog_complete: false, transport: 'flag:--model' },
+      effort_selection: { supported: true, levels: ['low', 'medium'], transport: 'flag:--effort' },
+      structured_output: true, read_only_enforcement: 'process-contract',
+    }],
+    reviewers: [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }],
+  };
+  const run = (hostAssertionsJson) => runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', files, '--host-assertions-json', hostAssertionsJson],
+    {},
+    runtime,
+  );
+  await assert.rejects(run('{'), /--host-assertions-json must contain valid JSON/);
+  await assert.rejects(run('null'), /claudeNativeAgent\/codexNativeGeneric/);
+  await assert.rejects(run('[]'), /claudeNativeAgent\/codexNativeGeneric/);
+  await assert.rejects(run('"x"'), /claudeNativeAgent\/codexNativeGeneric/);
+  await assert.rejects(run('{"unknownKey":true}'), /claudeNativeAgent\/codexNativeGeneric/);
+  await assert.rejects(run('{"claudeNativeAgent":"yes"}'), /claudeNativeAgent\/codexNativeGeneric/);
+});
+
 test('public skill forwards normalized routing overrides as one compact JSON argv value', () => {
   const skill = fs.readFileSync(path.join(root, 'skills/deep-review/SKILL.md'), 'utf8');
   assert.match(skill, /--overrides-json/);
