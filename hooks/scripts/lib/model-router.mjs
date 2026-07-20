@@ -13,6 +13,10 @@ const HIGH_RISK = Object.freeze([
 ]);
 const SIZE_NAMES = Object.freeze(['tiny', 'small', 'medium', 'large']);
 const EFFORT_ORDER = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+const DEFAULT_SIZE_THRESHOLDS = Object.freeze({
+  code: Object.freeze([100, 400, 1500]),
+  document: Object.freeze([10 * 1024, 30 * 1024, 100 * 1024]),
+});
 
 export function assessRisk(artifacts = []) {
   if (artifacts.some((artifact) => artifact.content_risk === 'high')) return 'high';
@@ -22,9 +26,29 @@ export function assessRisk(artifacts = []) {
   return HIGH_RISK.some((pattern) => pattern.test(text)) ? 'high' : 'low';
 }
 
+function sizeThresholds(value, name) {
+  const supplied = value !== undefined;
+  const thresholds = supplied ? value : DEFAULT_SIZE_THRESHOLDS[name];
+  const valid = Array.isArray(thresholds)
+    && thresholds.length === 3
+    && thresholds.every((entry) => typeof entry === 'number' && Number.isFinite(entry) && entry >= 0)
+    && thresholds[0] < thresholds[1]
+    && thresholds[1] < thresholds[2];
+  if (!valid) {
+    throw Object.assign(
+      new Error(`ERROR_POLICY_INVALID: classification.size_thresholds.${name} must be three finite non-negative strictly increasing numbers`),
+      { code: 'ERROR_POLICY_INVALID' },
+    );
+  }
+  return thresholds;
+}
+
 export function assessSize(artifact = {}, thresholds = {}) {
-  const codeThresholds = thresholds.code || [100, 400, 1500];
-  const documentThresholds = thresholds.document || [10 * 1024, 30 * 1024, 100 * 1024];
+  const values = thresholds && typeof thresholds === 'object' && !Array.isArray(thresholds)
+    ? thresholds
+    : { code: thresholds, document: thresholds };
+  const codeThresholds = sizeThresholds(values.code, 'code');
+  const documentThresholds = sizeThresholds(values.document, 'document');
   const isCode = artifact.target_kind === 'code-change' || Number.isFinite(artifact.changed_lines);
   const value = isCode
     ? Number(Number.isFinite(artifact.changed_lines) ? artifact.changed_lines : (artifact.line_count ?? 0))
@@ -34,7 +58,7 @@ export function assessSize(artifact = {}, thresholds = {}) {
   return SIZE_NAMES[index < 0 ? 3 : index];
 }
 
-function matrixProfile(targetKind, risk, size, role) {
+function baseMatrixProfile(targetKind, risk, role) {
   if (role === 'classifier') return { model_tier: 'fast', effort: 'low', reviewer_plan: 'semantic classifier' };
   if (targetKind === 'code-change') {
     if (risk === 'high' || risk === 'critical') return { model_tier: 'quality', effort: 'xhigh', reviewer_plan: 'standard + adversarial + independent provider' };
@@ -59,6 +83,28 @@ function matrixProfile(targetKind, risk, size, role) {
   }
   if (targetKind === 'mixed') return { model_tier: 'quality', effort: 'high', reviewer_plan: 'per-unit reviewers + traceability' };
   return { model_tier: 'balanced', effort: 'medium', reviewer_plan: 'generic standard' };
+}
+
+function floorOrdered(value, floor, order) {
+  const valueIndex = order.indexOf(value);
+  const floorIndex = order.indexOf(floor);
+  return valueIndex >= floorIndex ? value : floor;
+}
+
+function matrixProfile(targetKind, risk, size, role) {
+  const profile = baseMatrixProfile(targetKind, risk, role);
+  if (role === 'classifier' || size === 'tiny' || size === 'small') return profile;
+  if (size === 'medium') {
+    return { ...profile, effort: floorOrdered(profile.effort, 'high', EFFORT_ORDER) };
+  }
+  if (size === 'large') {
+    return {
+      ...profile,
+      model_tier: floorOrdered(profile.model_tier, 'quality', MODEL_TIERS),
+      effort: floorOrdered(profile.effort, 'high', EFFORT_ORDER),
+    };
+  }
+  return profile;
 }
 
 function applyRoutingPolicy(profile, routingPolicy, risk) {

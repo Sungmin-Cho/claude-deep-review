@@ -38,6 +38,25 @@ test('risk and size classifiers use deterministic high-risk signals and configur
   assert.equal(assessSize({ target_kind: 'code-change', changed_lines: 42 }, { code: [10, 20, 30] }), 'large');
 });
 
+test('K3: malformed size thresholds fail with stable ERROR_POLICY_INVALID diagnostics', async () => {
+  const { assessSize } = await import(routerUrl);
+  const malformed = [
+    100,
+    [10, 20],
+    [10, '20', 30],
+    [-1, 20, 30],
+    [10, 10, 30],
+    [20, 10, 30],
+  ];
+  for (const code of malformed) {
+    assert.throws(
+      () => assessSize({ target_kind: 'code-change', changed_lines: 12 }, { code }),
+      (error) => error?.code === 'ERROR_POLICY_INVALID'
+        && error.message === 'ERROR_POLICY_INVALID: classification.size_thresholds.code must be three finite non-negative strictly increasing numbers',
+    );
+  }
+});
+
 // F3: preserved content-derived risk/size evidence must feed routing even when
 // the reduced artifact carries no raw content or diff text.
 test('F3: assessRisk honours a precomputed content_risk flag and assessSize falls back to line_count for code', async () => {
@@ -67,6 +86,43 @@ test('auto matrix routes kind × risk × size × role with symbolic tiers', asyn
     assert.equal(result.requested.model_tier, tier, target_kind);
     assert.equal(result.requested.effort, effort, target_kind);
   }
+});
+
+test('K5: size applies monotonic routing floors without weakening strong or classifier profiles', async () => {
+  const { routeReviewer } = await import(routerUrl);
+  const route = (target_kind, size, risk = 'low', role = 'standard') => routeReviewer(request({
+    unit: { target_kind }, size, risk,
+    reviewer: { id: 'claude-opus', provider: 'claude', role, adapter_id: 'claude-cli' },
+  })).requested;
+
+  assert.deepEqual(
+    [route('generic-document', 'tiny').model_tier, route('generic-document', 'tiny').effort],
+    ['balanced', 'medium'],
+  );
+  assert.deepEqual(
+    [route('generic-document', 'medium').model_tier, route('generic-document', 'medium').effort],
+    ['balanced', 'high'],
+  );
+  assert.deepEqual(
+    [route('generic-document', 'large').model_tier, route('generic-document', 'large').effort],
+    ['quality', 'high'],
+  );
+  assert.deepEqual(
+    [route('code-change', 'tiny').model_tier, route('code-change', 'tiny').effort],
+    ['balanced', 'high'],
+  );
+  assert.deepEqual(
+    [route('code-change', 'large').model_tier, route('code-change', 'large').effort],
+    ['quality', 'high'],
+  );
+  assert.deepEqual(
+    [route('design-document', 'large', 'high').model_tier, route('design-document', 'large', 'high').effort],
+    ['maximum', 'xhigh'],
+  );
+  assert.deepEqual(
+    [route('generic-document', 'large', 'low', 'classifier').model_tier, route('generic-document', 'large', 'low', 'classifier').effort],
+    ['fast', 'low'],
+  );
 });
 
 test('override precedence is reviewer CLI > provider CLI > global > project > user > auto', async () => {
