@@ -192,6 +192,28 @@ test('Claude CLI semantic adapter transports untrusted payload by stdin with arg
   assert.equal(output, '{"classification_version":"1.0"}');
 });
 
+// R2I2: env: effort transport must mirror run-claude-reviewer.mjs — the
+// effort value is delivered through a shallow-copied env object, never an
+// argv token, and process.env itself must never be mutated as a side effect.
+test('R2I2: Claude CLI semantic adapter forwards env: effort transport via a shallow-copied env, never argv, and never mutates process.env', async () => {
+  const { createClaudeCliSemanticAdapter } = await import(semanticUrl);
+  assert.equal(process.env.CLAUDE_TEST_EFFORT, undefined);
+  let invocation;
+  const adapter = createClaudeCliSemanticAdapter({
+    binary: '/tools/claude', cwd: '/repo',
+    effort: 'low', effortTransport: 'env:CLAUDE_TEST_EFFORT',
+    run: async (binary, args, options) => {
+      invocation = { binary, args, options };
+      return { code: 0, timedOut: false, stdout: Buffer.from('{"classification_version":"1.0"}'), stderr: Buffer.alloc(0) };
+    },
+  });
+  await adapter({ snippets: { head: '', middle: '', tail: '' } }, { timeoutMs: 123 });
+  assert.equal(invocation.options.env.CLAUDE_TEST_EFFORT, 'low');
+  assert.equal(invocation.args.includes('low'), false);
+  assert.equal(invocation.args.some((token) => token.startsWith('--effort')), false);
+  assert.equal(process.env.CLAUDE_TEST_EFFORT, undefined);
+});
+
 test('successful semantic output merges with deterministic provenance and lower confidence does not win', async () => {
   const { classifyWithSemantic } = await import(semanticUrl);
   const result = await classifyWithSemantic({

@@ -102,7 +102,15 @@ export function createClaudeCliSemanticAdapter({ binary, cwd, env = process.env,
   return async function invokeClaudeSemanticClassifier(payload, { timeoutMs = 15_000 } = {}) {
     const args = ['-p'];
     if (model) args.push('--model', model);
-    if (effort && effortTransport?.startsWith('flag:')) args.push(effortTransport.slice(5), effort);
+    // Mirror run-claude-reviewer.mjs's effort transport handling: flag: sends
+    // an argv token, env: sends a shallow-copied env var (never mutating the
+    // caller's env/process.env), and any other transport drops effort silently.
+    let runEnv = env;
+    if (effort && effortTransport?.startsWith('flag:')) {
+      args.push(effortTransport.slice('flag:'.length), effort);
+    } else if (effort && effortTransport?.startsWith('env:')) {
+      runEnv = { ...env, [effortTransport.slice('env:'.length)]: effort };
+    }
     args.push('--permission-mode', 'dontAsk', '--tools', '', '--output-format', 'text');
     const prompt = Buffer.from([
       'Classify the artifact using only the JSON contract below.',
@@ -112,7 +120,7 @@ export function createClaudeCliSemanticAdapter({ binary, cwd, env = process.env,
       JSON.stringify(payload),
       '</UNTRUSTED_ARTIFACT_JSON>',
     ].join('\n'));
-    const result = await run(binary, args, { cwd, env, input: prompt, timeoutMs });
+    const result = await run(binary, args, { cwd, env: runEnv, input: prompt, timeoutMs });
     if (result.code !== 0 || result.timedOut) {
       throw new Error(result.timedOut
         ? 'semantic classifier timed out'

@@ -899,3 +899,103 @@ test('I1: policy classification.max_classifier_bytes_per_artifact wires into the
     'without the policy override the default ~24KB budget must not truncate down to 512 bytes',
   );
 });
+
+// ---------------------------------------------------------------------------
+// R2I1: routingInputs' no-runtime-capabilities/no-runtime-probes branch must
+// consult the on-disk capability cache before spawning fresh probes, save the
+// cache after a fresh probe, and never persist native host-assertion entries.
+// These tests deliberately omit runtime.capabilities and runtime.probes (both
+// take precedence and would bypass the cache/probe path entirely) and instead
+// restrict PATH to a temp bin dir holding a fake `claude` script that logs
+// every invocation, so "the probe runner ran" is observable without mocking
+// any module.
+// ---------------------------------------------------------------------------
+
+const R2I1_SAFE_SYSTEM_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(path.delimiter);
+
+function writeFakeClaudeBinary(binDir, probeLogPath) {
+  const claudeScript = path.join(binDir, 'claude');
+  fs.writeFileSync(claudeScript, [
+    '#!/bin/sh',
+    `echo "invoked $1" >> "${probeLogPath}"`,
+    'if [ "$1" = "--version" ]; then echo "Claude Code v9.9.9"; exit 0; fi',
+    'if [ "$1" = "--help" ]; then echo "  --effort <level>  set reasoning effort"; exit 0; fi',
+    'exit 1',
+    '',
+  ].join('\n'));
+  if (process.platform !== 'win32') fs.chmodSync(claudeScript, 0o755);
+  return claudeScript;
+}
+
+test('R2I1: a fresh probe writes the capability cache and a subsequent run hits it, skipping the probe runner', async (t) => {
+  if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script'); return; }
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-r2i1-cache-');
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const binDir = temporaryDirectory('deep-review-r2i1-bin-');
+  const probeLog = path.join(binDir, 'probe-calls.log');
+  writeFakeClaudeBinary(binDir, probeLog);
+  const env = { PATH: `${binDir}${path.delimiter}${R2I1_SAFE_SYSTEM_PATH}`, PROBE_LOG: probeLog };
+
+  const cachePath = path.join(repo, '.deep-review', 'tmp', 'capability-cache.json');
+
+  const first = await runClassifyArtifactsCli(
+    ['--repo', repo, '--files-from0', files, '--emit-routing-plan'],
+    env,
+    {},
+  );
+  assert.ok(fs.existsSync(cachePath), 'a fresh probe must write the capability cache');
+  const firstRoute = first.routing_plan.routes.find((route) => route.reviewer_id === 'claude-opus');
+  assert.equal(firstRoute.adapter_id, 'claude-cli');
+  const invocationsAfterFirst = fs.readFileSync(probeLog, 'utf8').trim().split('\n').filter(Boolean).length;
+  assert.ok(invocationsAfterFirst > 0, 'the first run must invoke the probe runner');
+
+  // R2I1 (3): native assertion entries (claude-native-agent, codex-native-generic)
+  // must never be persisted to the on-disk cache.
+  const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+  const cachedAdapterIds = cached.capabilities.map((item) => item.adapter_id);
+  assert.equal(cachedAdapterIds.includes('claude-native-agent'), false);
+  assert.equal(cachedAdapterIds.includes('codex-native-generic'), false);
+  assert.ok(cachedAdapterIds.includes('claude-cli'));
+
+  const second = await runClassifyArtifactsCli(
+    ['--repo', repo, '--files-from0', files, '--emit-routing-plan'],
+    env,
+    {},
+  );
+  const invocationsAfterSecond = fs.readFileSync(probeLog, 'utf8').trim().split('\n').filter(Boolean).length;
+  assert.equal(invocationsAfterSecond, invocationsAfterFirst, 'a cache hit must avoid invoking the probe runner again');
+  const secondRoute = second.routing_plan.routes.find((route) => route.reviewer_id === 'claude-opus');
+  assert.equal(secondRoute.adapter_id, 'claude-cli', 'the cache hit must still resolve the correct adapter');
+});
+
+test('R2I1: a corrupt capability cache falls open to a fresh probe instead of failing the preflight', async (t) => {
+  if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script'); return; }
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-r2i1-corrupt-cache-');
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const binDir = temporaryDirectory('deep-review-r2i1-corrupt-bin-');
+  const probeLog = path.join(binDir, 'probe-calls.log');
+  writeFakeClaudeBinary(binDir, probeLog);
+  const env = { PATH: `${binDir}${path.delimiter}${R2I1_SAFE_SYSTEM_PATH}`, PROBE_LOG: probeLog };
+
+  const cachePath = path.join(repo, '.deep-review', 'tmp', 'capability-cache.json');
+  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  fs.writeFileSync(cachePath, 'not valid json {{{');
+
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--files-from0', files, '--emit-routing-plan'],
+    env,
+    {},
+  );
+  const route = result.routing_plan.routes.find((r) => r.reviewer_id === 'claude-opus');
+  assert.equal(route.adapter_id, 'claude-cli', 'a corrupt cache must fail open to a fresh probe, never a hard error');
+  const invocations = fs.readFileSync(probeLog, 'utf8').trim().split('\n').filter(Boolean).length;
+  assert.ok(invocations > 0, 'the corrupt-cache path must still invoke the probe runner');
+});

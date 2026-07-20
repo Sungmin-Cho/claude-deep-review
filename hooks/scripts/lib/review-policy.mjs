@@ -72,10 +72,14 @@ function scalar(raw, lineNumber) {
   return value;
 }
 
+const UNSAFE_MAPPING_KEY = /^(?:__proto__|constructor|prototype)$/u;
+
 function keyValue(text, lineNumber) {
   const match = /^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/u.exec(text);
   if (!match) throw new Error(`invalid YAML mapping at line ${lineNumber}`);
-  return { key: match[1], rawValue: match[2] };
+  const { 1: key } = match;
+  if (UNSAFE_MAPPING_KEY.test(key)) throw new Error(`unsafe mapping key "${key}" at line ${lineNumber}`);
+  return { key, rawValue: match[2] };
 }
 
 export function parseYamlSubset(source) {

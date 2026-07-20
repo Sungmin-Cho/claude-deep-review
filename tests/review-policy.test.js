@@ -41,6 +41,27 @@ test('review policy rejects duplicate keys, aliases, anchors, tags, and wrong sc
   assert.throws(() => parseReviewPolicy('schema_version: 1\n'), /schema_version.*2/i);
 });
 
+// R2I3: __proto__/constructor/prototype mapping keys must fail parsing with a
+// clear error naming the offending line, instead of being silently dropped by
+// deepMerge — weak defense-in-depth for a committed config file.
+test('R2I3: __proto__/constructor mapping keys are rejected as unsafe, but a benign prototype_notes key still parses', async () => {
+  const { parseReviewPolicy } = await import(policyUrl);
+  assert.throws(
+    () => parseReviewPolicy('schema_version: 2\nproviders:\n  __proto__:\n    enabled: true\n'),
+    /unsafe mapping key "__proto__"/,
+  );
+  assert.throws(
+    () => parseReviewPolicy('schema_version: 2\nconstructor: value\n'),
+    /unsafe mapping key "constructor"/,
+  );
+  assert.throws(
+    () => parseReviewPolicy('schema_version: 2\nclassification:\n  overrides:\n    - prototype: value\n'),
+    /unsafe mapping key "prototype"/,
+  );
+  const benign = parseReviewPolicy('schema_version: 2\nprototype_notes: true\n');
+  assert.equal(benign.policy.prototype_notes, true);
+});
+
 test('loaders resolve project, XDG, and Windows APPDATA config locations', async () => {
   const { loadReviewPolicy, loadUserConfig, userConfigPath } = await import(policyUrl);
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-policy-'));

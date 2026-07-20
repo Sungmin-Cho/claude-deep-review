@@ -27,7 +27,10 @@ import { detectEnvironment } from './detect-environment.mjs';
 import { CLASSIFICATION_VERSION } from './lib/target-taxonomy.mjs';
 import {
   buildCapabilities,
+  capabilityCacheKeys,
+  loadCapabilityCache,
   probeCapabilities,
+  saveCapabilityCache,
 } from './lib/capability-registry.mjs';
 import { assessRisk, buildRoutingPlan, renderRoutingExplanation } from './lib/model-router.mjs';
 import {
@@ -314,6 +317,22 @@ function defaultRoutingPlanPath(repo) {
   return resolve(repo, '.deep-review', 'tmp', 'routing-plan.json');
 }
 
+function capabilityCacheFilePath(repo) {
+  return resolve(repo, '.deep-review', 'tmp', 'capability-cache.json');
+}
+
+// Native host-assertion entries (claude-native-agent, codex-native-generic)
+// are never persisted to the capability cache — they must be rebuilt fresh
+// on every run from this run's hostAssertions. `fresh` here is a
+// buildCapabilities() call with the correct canonical adapter ordering and
+// this run's hostAssertions/detected data but no probe data; only its
+// native-adapter entries are kept, and the remaining (probe-derived) entries
+// are taken from the cached array.
+function mergeCachedCapabilities(fresh, cached) {
+  const cachedById = new Map(cached.map((item) => [item.adapter_id, item]));
+  return fresh.map((item) => cachedById.get(item.adapter_id) || item);
+}
+
 function defaultReviewers(capabilities) {
   const reviewers = [];
   const has = (adapterId) => capabilities.some((item) => item.adapter_id === adapterId && item.available === true);
@@ -346,12 +365,40 @@ async function routingInputs(repo, env, runtime, knownEnvironment) {
     detected: runtime.detected,
   };
   const detected = knownEnvironment || await detectEnvironment({ cwd: repo, env });
-  const probes = runtime.probes || await probeCapabilities({ detected, cwd: repo, env });
+  if (runtime.probes) {
+    const capabilities = buildCapabilities({ detected, probes: runtime.probes, hostAssertions: runtime.hostAssertions });
+    return { capabilities, reviewers: runtime.reviewers || defaultReviewers(capabilities), detected };
+  }
+
+  // R2I1: consult the on-disk capability cache before spawning fresh probes.
+  // The cache is keyed by the detected environment (path/mtime/known
+  // version) only — never by probe output, so the same key can be recomputed
+  // before probing (to check the cache) and after probing (to save it).
+  // Any cache IO failure must fail OPEN to a fresh probe, never a hard error.
+  const invalidationKeys = capabilityCacheKeys(detected, {});
+  let cached = null;
+  try {
+    cached = loadCapabilityCache(capabilityCacheFilePath(repo), invalidationKeys);
+  } catch {
+    cached = null;
+  }
+  if (cached) {
+    const nativeShaped = buildCapabilities({ detected, hostAssertions: runtime.hostAssertions, probes: {} });
+    const capabilities = mergeCachedCapabilities(nativeShaped, cached);
+    return { capabilities, reviewers: runtime.reviewers || defaultReviewers(capabilities), detected };
+  }
+
+  const probes = await probeCapabilities({ detected, cwd: repo, env });
   const capabilities = buildCapabilities({
     detected,
     probes,
     hostAssertions: runtime.hostAssertions,
   });
+  try {
+    saveCapabilityCache(capabilityCacheFilePath(repo), capabilities, invalidationKeys);
+  } catch {
+    // Best-effort persistence: a cache write failure must never affect this run's result.
+  }
   return { capabilities, reviewers: runtime.reviewers || defaultReviewers(capabilities), detected };
 }
 
