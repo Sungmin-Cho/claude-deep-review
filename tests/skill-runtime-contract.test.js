@@ -473,6 +473,66 @@ test('public-route loop grammar accepts the opt-in --session-doc flag; review an
   assert.match(respondRejected.error, /unknown respond argument/);
 });
 
+test('public-route review grammar accepts the artifact-aware --dry-run and --explain-routing flags (review-only, dormant)', async () => {
+  const { parsePublicRoute } = await loadPublicRoute();
+  const cwd = process.cwd();
+
+  // Each flag is accepted on the review entry and surfaced as an explicit boolean.
+  const dryRun = parsePublicRoute({ entry: 'review', argv: ['--dry-run'], host: 'claude', cwd });
+  assert.equal(dryRun.ok, true);
+  assert.equal(dryRun.route, 'review');
+  assert.equal(dryRun.dryRun, true);
+
+  const explain = parsePublicRoute({ entry: 'review', argv: ['--explain-routing'], host: 'codex', cwd });
+  assert.equal(explain.ok, true);
+  assert.equal(explain.explainRouting, true);
+
+  // Composable with existing reviewer flags without disturbing them.
+  const combined = parsePublicRoute({
+    entry: 'review', argv: ['--codex-only', '--dry-run', '--explain-routing'], host: 'claude', cwd,
+  });
+  assert.equal(combined.ok, true);
+  assert.deepEqual(combined.argv, ['--codex', '--no-opus', '--no-agy', '--dry-run', '--explain-routing']);
+  assert.equal(combined.dryRun, true);
+  assert.equal(combined.explainRouting, true);
+
+  // Dormancy: with neither flag the review route is byte-identical to today —
+  // no dryRun/explainRouting keys appear at all.
+  const bare = parsePublicRoute({ entry: 'review', argv: [], host: 'claude', cwd });
+  assert.deepEqual(bare, { ok: true, route: 'review', host: 'claude', argv: [] });
+
+  // Existing conflicts are unchanged by the new tokens' presence.
+  const stillConflicts = parsePublicRoute({
+    entry: 'review', argv: ['--ultracode', '--no-opus', '--dry-run'], host: 'claude', cwd,
+  });
+  assert.equal(stillConflicts.ok, false);
+  assert.match(stillConflicts.error, /--ultracode cannot be combined with --no-opus/);
+});
+
+test('the artifact-aware flags are review-only; loop and respond keep rejecting them', async () => {
+  const { parsePublicRoute } = await loadPublicRoute();
+  const cwd = process.cwd();
+
+  for (const flag of ['--dry-run', '--explain-routing']) {
+    const loopRejected = parsePublicRoute({ entry: 'loop', argv: [flag], host: 'claude', cwd });
+    assert.equal(loopRejected.ok, false);
+    assert.match(loopRejected.error, /unknown loop argument/);
+
+    const respondRejected = parsePublicRoute({ entry: 'review', argv: ['--respond', flag], host: 'claude', cwd });
+    assert.equal(respondRejected.ok, false);
+    assert.match(respondRejected.error, /unknown respond argument/);
+  }
+});
+
+test('the public skill wires --dry-run/--explain-routing to the classifier and never runs a reviewer', () => {
+  const publicSkill = read('skills/deep-review/SKILL.md');
+  assert.match(publicSkill, /--dry-run/);
+  assert.match(publicSkill, /--explain-routing/);
+  assert.match(publicSkill, /classify-artifacts\.mjs/);
+  // The dry-run branch is explicit that it stops before any reviewer runs.
+  assert.match(publicSkill, /(?:dryRun|dry-run|explainRouting|explain-routing)[\s\S]{0,400}(?:without running|no reviewer|리뷰어[^\n]*실행|종료)/i);
+});
+
 test('loop SKILL codifies compare-rounds consumption, no-new-verdict-on-skip, and explicit-flag prior-context handoff', () => {
   const loop = fs.readFileSync(path.join(root, 'skills', 'deep-review-loop', 'SKILL.md'), 'utf8');
 

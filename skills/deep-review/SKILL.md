@@ -2,7 +2,7 @@
 name: deep-review
 description: Public cross-runtime entrypoint for independent review, initialization, and evidence-based review response.
 user-invocable: true
-argument-hint: "[init] [--contract [SLICE-NNN]] [--entropy] [--ultracode] [--codex|--no-codex] [--no-opus] [--no-agy] [--codex-only] [--respond (REPORT_PATH | --source=pr [--pr=NNN])]"
+argument-hint: "[init] [--contract [SLICE-NNN]] [--entropy] [--ultracode] [--codex|--no-codex] [--no-opus] [--no-agy] [--codex-only] [--dry-run] [--explain-routing] [--respond (REPORT_PATH | --source=pr [--pr=NNN])]"
 ---
 
 # deep-review — public route
@@ -55,9 +55,17 @@ The runtime enforces this grammar:
 - `--qa` — terminal. Explain that App QA is reserved for a later release and
   종료 without creating state.
 - `review` — terminal for `--contract`, `--entropy`, reviewer flags, or no
-  arguments. Read the internal workflow skill and then
-  `{plugin_root}/skills/deep-review-workflow/references/review-execution.md`;
-  execute it once and 종료 with the resulting report path and verdict.
+  arguments.
+  - Artifact-aware classification (Phase 1): when the returned route sets
+    `dryRun` or `explainRouting`, do not run any reviewer. Instead run
+    `node {plugin_root}/hooks/scripts/classify-artifacts.mjs --repo PROJECT_ROOT`
+    (append `--explain-routing` when the route set `explainRouting`), print its
+    listing, and 종료 without running a reviewer. That helper only classifies
+    the change scope and writes provenance under `.deep-review/tmp/`; model and
+    effort routing itself is not yet implemented (Phase 2).
+  - Otherwise read the internal workflow skill and then
+    `{plugin_root}/skills/deep-review-workflow/references/review-execution.md`;
+    execute it once and 종료 with the resulting report path and verdict.
 
 The internal workflow and receiving skills are implementation details and are
 not public marketplace prompts.

@@ -109,6 +109,8 @@ function parseReview(argv, host, cwd) {
 
   const conflict = validateReviewerFlags(expanded);
   if (conflict) return { ...routeError(conflict), host, argv: expanded };
+  let dryRun = false;
+  let explainRouting = false;
   for (let index = 0; index < expanded.length; index += 1) {
     const token = expanded[index];
     if (REVIEW_FLAGS.has(token)) continue;
@@ -122,9 +124,24 @@ function parseReview(argv, host, cwd) {
     // this grammar only accepts the token shape. Review-only — the loop
     // entry's grammar (parseLoop) is intentionally untouched.
     if (/^--prior-rounds-file=.+$/u.test(token)) continue;
+    // Artifact-aware routing Phase 1 (§15.7): opt-in, review-only, value-less.
+    // Both are dormant — a review invocation without them is byte-identical to
+    // today. The dispatcher runs the deterministic classifier (dry-run listing
+    // / explain view) and stops before any reviewer when either is set.
+    if (token === '--dry-run') {
+      dryRun = true;
+      continue;
+    }
+    if (token === '--explain-routing') {
+      explainRouting = true;
+      continue;
+    }
     return { ...routeError(`unknown review argument: ${token}`), host, argv: expanded };
   }
-  return { ok: true, route: 'review', host, argv: expanded };
+  const route = { ok: true, route: 'review', host, argv: expanded };
+  if (dryRun) route.dryRun = true;
+  if (explainRouting) route.explainRouting = true;
+  return route;
 }
 
 function parseLoop(argv, host) {
