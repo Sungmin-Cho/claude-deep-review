@@ -86,6 +86,8 @@ test('workflow/report contracts wire conditional routing plan consumption while 
   assert.ok(execution.includes(legacyClaude), 'no-flag Claude dispatch changed');
   assert.match(execution, /--emit-routing-plan/);
   assert.match(execution, /--routing-plan \.deep-review\/tmp\/routing-plan\.json --reviewer-id/);
+  assert.match(execution, /explicit_overrides[\s\S]{0,80}apply_automatic/u);
+  assert.match(execution, /apply_automatic[^\n]{0,120}/);
   assert.match(report, /## Routing Plan/);
   assert.match(report, /## Provenance/);
   assert.match(report, /requested-but-unverified/);

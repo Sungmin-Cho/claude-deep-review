@@ -191,7 +191,9 @@ override makes this preflight mandatory and any error stops dispatch. With no
 explicit override, the plan is shadow provenance: a preflight error is a visible
 warning and dispatch continues with the existing arguments unchanged. Automatic
 routes are applied only when policy enables `automatic_model_routing` and sets
-`routing_shadow_mode: false`.
+`routing_shadow_mode: false`. When that condition holds, the emitted plan
+carries `apply_automatic: true`, and an applicable automatic plan is consumed
+by the same leaf-adapter path as explicit overrides.
 
 Treat the emitted routing plan as the dispatch authority. It carries one
 validated execution plan per canonical reviewer plus requested, resolved,
@@ -225,9 +227,10 @@ when Claude CLI exists, invoke:
 node {plugin_root}/hooks/scripts/run-claude-reviewer.mjs --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PAYLOAD_FILE --output OUTPUT_FILE --model REVIEW_MODEL --agent code-reviewer --timeout-seconds 1200
 ```
 
-Only for an explicit override plan, append
+Only when the emitted plan is applicable — `explicit_overrides: true` or
+`apply_automatic: true` — append
 `--routing-plan .deep-review/tmp/routing-plan.json --reviewer-id claude-opus`.
-With no explicit override, preserve the command above byte-for-byte.
+With a shadow-only plan, preserve the command above byte-for-byte.
 
 Do not replace a requested Claude role with a Codex identity. Record timeout,
 authentication, empty-output, or unavailable-model status exactly as emitted.
@@ -273,9 +276,10 @@ After a successful current privacy outcome, invoke:
 node {plugin_root}/hooks/scripts/run-agy-reviewer.mjs --binary AGY_FILE --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PAYLOAD_FILE --output OUTPUT_FILE --mode hybrid --model AGY_MODEL --timeout-seconds 900
 ```
 
-Only for an explicit override plan, append
-`--routing-plan .deep-review/tmp/routing-plan.json --reviewer-id agy`. With no
-explicit override, preserve the command above byte-for-byte.
+Only when the emitted plan is applicable — `explicit_overrides: true` or
+`apply_automatic: true` — append
+`--routing-plan .deep-review/tmp/routing-plan.json --reviewer-id agy`. With a
+shadow-only plan, preserve the command above byte-for-byte.
 
 The bridge revalidates privacy and fingerprint state. A `mutated` result is
 untrusted even if the process produced report text.

@@ -3,7 +3,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { isReviewerId } from './lib/reviewer-ids.mjs';
+import { isReviewerId, REVIEWER_PROVIDERS } from './lib/reviewer-ids.mjs';
 
 const REVIEW_FLAGS = new Set([
   '--entropy',
@@ -203,6 +203,18 @@ function parseReview(argv, host, cwd) {
   }
   if (expanded.includes('--no-agy') && Object.hasOwn(overrides.providers, 'agy')) {
     return { ...routeError('ERROR_CONFLICTING_REVIEWER_SELECTION: agy override conflicts with --no-agy'), host, argv: expanded };
+  }
+  for (const reviewerId of Object.keys(overrides.reviewers)) {
+    const provider = REVIEWER_PROVIDERS[reviewerId];
+    if (provider === 'claude' && expanded.includes('--no-opus')) {
+      return { ...routeError(`ERROR_CONFLICTING_REVIEWER_SELECTION: reviewer override ${reviewerId} conflicts with --no-opus/--codex-only`), host, argv: expanded };
+    }
+    if (provider === 'codex' && expanded.includes('--no-codex')) {
+      return { ...routeError(`ERROR_CONFLICTING_REVIEWER_SELECTION: reviewer override ${reviewerId} conflicts with --no-codex`), host, argv: expanded };
+    }
+    if (provider === 'agy' && expanded.includes('--no-agy')) {
+      return { ...routeError(`ERROR_CONFLICTING_REVIEWER_SELECTION: reviewer override ${reviewerId} conflicts with --no-agy`), host, argv: expanded };
+    }
   }
   const route = { ok: true, route: 'review', host, argv: expanded };
   if (dryRun) route.dryRun = true;

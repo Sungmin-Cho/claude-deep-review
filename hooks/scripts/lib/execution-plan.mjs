@@ -41,4 +41,3 @@ export function loadExecutionPlan(filePath, reviewerId) {
   catch (error) { throw new Error(`failed to read routing plan ${filePath}: ${error.message}`); }
   return parseExecutionPlanDocument(document, reviewerId);
 }
-

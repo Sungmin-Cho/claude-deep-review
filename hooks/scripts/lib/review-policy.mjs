@@ -220,4 +220,3 @@ export function mergeRoutingConfig({ defaults = {}, user = {}, project = {}, cli
   }
   return merged;
 }
-

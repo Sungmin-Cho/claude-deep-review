@@ -111,6 +111,24 @@ test('strict explicit unsupported values fail; fallback alone allows ordered sub
   assert.equal(routeReviewer(effort).resolved.effort, 'xhigh');
 });
 
+// F7: an explicit unknown effort alias (no lower supported level exists in
+// EFFORT_ORDER) must be omitted with fallback provenance under
+// allow_fallback, never silently forwarded to the adapter.
+test('F7: an explicit unknown effort value is omitted under allow_fallback and throws without it', async () => {
+  const { routeReviewer } = await import(routerUrl);
+  const unknownEffort = request({
+    capabilities: [capability({ effort_selection: { supported: true, levels: ['low', 'medium', 'high'], transport: 'flag:--effort' } })],
+  });
+  unknownEffort.overrides.providers.claude = { effort: 'turbo' };
+  assert.throws(() => routeReviewer(unknownEffort), /ERROR_UNSUPPORTED_EFFORT/);
+
+  unknownEffort.overrides.allow_fallback = true;
+  const result = routeReviewer(unknownEffort);
+  assert.equal(result.resolved.effort, null);
+  assert.equal(result.fallback.occurred, true);
+  assert.equal(result.fallback.reason, 'requested effort unsupported by adapter');
+});
+
 test('unknown transports and unavailable providers fail closed for explicit requests', async () => {
   const { routeReviewer } = await import(routerUrl);
   const unknown = request({ capabilities: [capability({ model_selection: { supported: 'unknown', aliases: [], catalog_complete: false, transport: 'unknown' } })] });

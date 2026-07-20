@@ -70,4 +70,3 @@ test('merge precedence is defaults < user < project < CLI while project enforced
   assert.deepEqual(merged.constraints.deny_models, ['forbidden']);
   assert.deepEqual(merged.constraints.allowed_providers, ['claude']);
 });
-

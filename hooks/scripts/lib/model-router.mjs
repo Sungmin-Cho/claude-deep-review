@@ -199,8 +199,7 @@ export function routeReviewer({ unit, reviewer, risk = 'low', size = 'small', po
       resolved.effort = replacement;
       fallback.occurred = true;
       fallback.reason ||= explicitEffort ? 'requested effort unsupported by adapter' : 'automatic effort mapped to nearest supported level';
-    } else if (explicitEffort && effortCapability.supported === false) {
-      if (!fallback.allowed) throw new Error(`ERROR_UNSUPPORTED_EFFORT: ${requested.effort}`);
+    } else if (explicitEffort) {
       resolved.effort = null;
       fallback.occurred = true;
       fallback.reason ||= 'requested effort unsupported by adapter';

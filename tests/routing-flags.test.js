@@ -52,6 +52,19 @@ test('routing flags reject duplicates, unknown keys, and codex-only conflicts', 
   assert.equal(parse(['--routing', 'turbo']).ok, false);
 });
 
+// F9: a reviewer-level override whose reviewer maps to a provider disabled by
+// --no-opus/--no-codex/--no-agy (including --codex-only expansion) must be
+// rejected with the same conflict error as the provider-level checks.
+test('F9: reviewer-level overrides conflicting with a disabled provider are rejected', async () => {
+  const { parsePublicRoute } = await import(routeUrl);
+  const parse = (argv) => parsePublicRoute({ entry: 'review', host: 'claude', cwd: root, argv });
+  assert.equal(parse(['--codex-only', '--reviewer-model', 'claude-opus=opus']).ok, false);
+  assert.match(parse(['--codex-only', '--reviewer-model', 'claude-opus=opus']).error, /ERROR_CONFLICTING_REVIEWER_SELECTION/);
+  assert.equal(parse(['--no-codex', '--reviewer-effort', 'codex-adversarial=high']).ok, false);
+  assert.match(parse(['--no-codex', '--reviewer-effort', 'codex-adversarial=high']).error, /ERROR_CONFLICTING_REVIEWER_SELECTION/);
+  assert.equal(parse(['--no-agy', '--reviewer-model', 'claude-opus=opus']).ok, true);
+});
+
 test('loop grammar continues to reject all new review routing flags', async () => {
   const { parsePublicRoute } = await import(routeUrl);
   for (const argv of [['--routing', 'auto'], ['--model', 'claude=x'], ['--allow-fallback'], ['--allow-classifier']]) {
