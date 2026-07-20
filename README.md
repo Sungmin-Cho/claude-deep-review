@@ -52,6 +52,8 @@ Claude Code slash commands and Codex skills are distinct host entrypoints for th
 | `/deep-review --respond --source=pr` | Respond to GitHub PR review comments |
 | `/deep-review-loop [--max=N]` | Auto-iterate review ↔ respond until convergence (also a `user-invocable` skill — `Skill({ skill: "deep-review:deep-review-loop" })` for Codex CLI / SDK consumers) |
 | `/deep-review-loop --ultracode --codex` | ultracode once (round 1) + codex every round integrated loop |
+| `/deep-review-loop --session-doc` | Maintain one consolidated per-session review document, re-rendered in place after each round (per-round reports unchanged) |
+| `/deep-review --dry-run` / `--explain-routing` | Classify review targets deterministically and print the plan without running any reviewer (artifact-aware routing Phase 1) |
 | `/deep-review init` | Initialize per-project review rules interactively |
 
 ### Codex
@@ -71,6 +73,8 @@ Claude Code slash commands and Codex skills are distinct host entrypoints for th
 - `/deep-review-loop` convergence is deterministic: each round's findings are compared with `compare-rounds` (identity matching, not a natural-language repeat judgment), and a stalled round stops with the last trusted verdict.
 - The loop passes a `--prior-rounds-file` advisory context between rounds explicitly (never by file existence) so reviewers can re-verify prior findings and rejected items.
 - The final loop summary reports a `rounds_saved` metric.
+- `--session-doc` (loop-only, opt-in) keeps one consolidated session document keyed by the loop id — current verdict, per-round history, open-vs-resolved rollup, and a final post-stop summary — while per-round reports and their fail-closed accounting stay untouched.
+- `--dry-run` / `--explain-routing` (review-only, opt-in) run the deterministic artifact classifier and stop before any reviewer; semantic classification and model/effort routing arrive in a later phase.
 
 ## Review pipeline
 

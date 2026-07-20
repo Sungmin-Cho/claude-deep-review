@@ -4,11 +4,23 @@
 
 All notable changes to deep-review are documented here. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.14.0] — 2026-07-19
+## [1.14.0] — 2026-07-20
 
 ### Added
 
-- **deep-review-loop convergence** — round-to-round finding state is now recorded and compared deterministically (`loop-state.mjs record-round` / `compare-rounds`), replacing a natural-language repeat judgment; a stalled round with no implemented change stops with the last trusted verdict instead of cycling further. A loop-bound, explicitly-flagged `--prior-rounds-file` advisory context (never keyed on file existence) lets each round's reviewers re-verify prior findings and rejected items without re-litigating them from scratch. The final loop summary now reports a `rounds_saved` metric.
+- **deep-review-loop convergence** — round-to-round finding state is recorded and compared deterministically, replacing a natural-language repeat judgment; a stalled round with no implemented change stops with the last trusted verdict instead of cycling further. A loop-bound, explicitly-flagged `--prior-rounds-file` advisory context (never keyed on file existence) lets each round's reviewers re-verify prior findings and rejected items without re-litigating them from scratch. The final loop summary reports a `rounds_saved` metric.
+- **`--session-doc` (loop, opt-in)** — one consolidated review document per loop session, keyed by the loop id and re-rendered in place after each round with the current verdict, per-round history, an open-vs-resolved rollup that tracks line drift, and a final post-stop summary; per-round reports and their fail-closed accounting are unchanged, and the aggregate is excluded from every canonical report discovery surface (response selection and recurring-findings export included).
+- **Artifact-aware routing, Phase 1** — `--dry-run` / `--explain-routing` (review-only, opt-in) deterministically classify review targets (code, design document, implementation plan, specification, ADR, test plan, runbook, config, mixed) with confidence scoring and provenance, then stop before any reviewer runs; no-flag behavior is byte-identical. Semantic classification and model/effort routing are planned for a later phase.
+
+### Fixed
+
+- Round-state cleanup in the loop now binds ownership to the durable host session instead of a transient shell process, so a live-but-idle concurrent loop's state is never deleted while crashed residue is still reclaimed; partial cleanup failures stay retryable.
+- Multi-range finding citations (`path:1-2, 83-100`) are parsed instead of dropped, and `findings_signature` agrees between round recording and metrics on the same repo-root basis.
+- `findings_signature` is platform-independent and case-preserving on Windows; win32 case-insensitive identity matching is unchanged.
+
+### Security
+
+- Artifact discovery never follows symlinks or reads outside the repository: symlinks are metadata-only, resolved paths must stay inside the repo root, and reads are no-follow with post-open verification — a committed symlink can no longer expose out-of-repo file content.
 
 ## [1.13.0] — 2026-07-11
 
