@@ -10,9 +10,10 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { canonicalizeRepoPath, extractFindings, matchFindings } from './lib/finding-identity.mjs';
+import { isSessionDocReportName } from './lib/session-doc.js';
 import { classifyLiveness, currentHostHash, processStartMs } from './mutation-protocol.mjs';
 
 const SNAPSHOT_SCHEMA = 1;
@@ -23,6 +24,7 @@ const STALLED_REPEAT_RATIO_THRESHOLD = 0.5;
 const RESIDUE_STALE_MS_DEFAULT = 3_600_000;
 const RESIDUE_STATE_PATTERN = /^loop-(.+)-round-(\d+)\.state\.json$/u;
 const RESIDUE_PRIOR_PATTERN = /^loop-(.+)-round-(\d+)\.prior\.md$/u;
+const SESSION_DOC_SCHEMA = 1;
 const TAXONOMY = new Set([
   'error-handling',
   'naming-convention',
@@ -81,7 +83,9 @@ function listReports(reportsDir) {
     throw error;
   }
   return entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith('-review.md'))
+    .filter((entry) => entry.isFile()
+      && entry.name.endsWith('-review.md')
+      && !isSessionDocReportName(entry.name))
     .map((entry) => resolve(root, entry.name))
     .sort(utf8Compare);
 }
@@ -421,6 +425,11 @@ export function recordRound(options = {}) {
     base_commit: options.baseCommit,
     verdict: verdictMatch[1].toUpperCase(),
     counts: { critical: countRed, warning: countYellow, info: countInfo },
+    // Persist the canonical report paths (additive, back-compat — older readers
+    // ignore unknown fields) so the derived session doc can link each round's
+    // review/response without re-deriving them; mirrors collectMetrics's naming.
+    round_review_report_path: reviewPath,
+    response_report_path: responsePath || null,
     findings,
     rejected,
     skipped_rejects: skippedRejects,
@@ -513,6 +522,38 @@ export function renderPriorContext(options = {}) {
 }
 
 /**
+ * Pure adjacent-round convergence summary over two findings arrays. Reuses
+ * finding-identity's `matchFindings` (never reinvents identity) and returns the
+ * code-owned `stalled`/`progressed`/`added_count` judgment plus the raw
+ * `resolved` list. `compareRounds` strips `resolved` to keep its wire shape
+ * byte-identical; `renderSessionDoc` consumes the judgment fields for the
+ * per-round Progress column and derives its CUMULATIVE resolved rollup from the
+ * same `matchFindings` SSOT (see `cumulativeResolved`) rather than an adjacent
+ * pair — so this stays the single source of truth for the "half of the larger
+ * set repeats" rule without any parallel identity logic.
+ */
+function summarizeAdjacent(previousFindings, currentFindings, { platform } = {}) {
+  const previous = Array.isArray(previousFindings) ? previousFindings : [];
+  const current = Array.isArray(currentFindings) ? currentFindings : [];
+  // Findings carry case-preserving display paths; matchFindings re-applies the
+  // win32-only case-insensitive identity fold. `platform` is undefined in
+  // production, so matchFindings falls back to `process.platform`.
+  const { repeated, resolved, added } = matchFindings(previous, current, { platform });
+  const largerSetSize = Math.max(previous.length, current.length);
+  const repeatRatio = largerSetSize > 0 ? repeated.length / largerSetSize : 0;
+  return {
+    repeated_count: repeated.length,
+    resolved_count: resolved.length,
+    added_count: added.length,
+    larger_set_size: largerSetSize,
+    repeat_ratio: repeatRatio,
+    stalled: largerSetSize > 0 && repeatRatio >= STALLED_REPEAT_RATIO_THRESHOLD,
+    progressed: resolved.length > 0,
+    resolved,
+  };
+}
+
+/**
  * Deterministic, code-owned convergence judgment between two adjacent round
  * state files (SKILL §5 condition 3's former natural-language "half of the
  * larger set repeats" rule, now this function's `stalled` output). Rejects a
@@ -536,25 +577,234 @@ export function compareRounds(options = {}) {
       current_base_commit: current.base_commit,
     });
   }
+  // Drop the raw `resolved` list so the returned wire shape is byte-identical to
+  // the pre-refactor output.
+  const { resolved, ...summary } = summarizeAdjacent(previous.findings, current.findings, { platform: options.platform });
+  return summary;
+}
 
-  const previousFindings = Array.isArray(previous.findings) ? previous.findings : [];
-  const currentFindings = Array.isArray(current.findings) ? current.findings : [];
-  // Findings carry case-preserving display paths; matchFindings re-applies the
-  // win32-only case-insensitive identity fold. `options.platform` is undefined
-  // in production, so matchFindings falls back to `process.platform`.
-  const { repeated, resolved, added } = matchFindings(previousFindings, currentFindings, { platform: options.platform });
-  const largerSetSize = Math.max(previousFindings.length, currentFindings.length);
-  const repeatRatio = largerSetSize > 0 ? repeated.length / largerSetSize : 0;
+function readSessionRounds(tmpDir, loopId) {
+  const root = absolute(tmpDir, 'tmp directory');
+  let entries;
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+  const rounds = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const match = RESIDUE_STATE_PATTERN.exec(entry.name);
+    // The greedy `(.+)` capture folds the whole id before `-round-<N>`, so a
+    // hyphenated loop id round-trips exactly. Only THIS loop's state is read;
+    // sibling loops sharing the tmp dir are ignored.
+    if (!match || match[1] !== loopId) continue;
+    const state = readRoundState(resolve(root, entry.name));
+    if (state.loop_id !== loopId) continue;
+    rounds.push(state);
+  }
+  rounds.sort((left, right) => left.round_number - right.round_number);
+  return rounds;
+}
 
-  return {
-    repeated_count: repeated.length,
-    resolved_count: resolved.length,
-    added_count: added.length,
-    larger_set_size: largerSetSize,
-    repeat_ratio: repeatRatio,
-    stalled: largerSetSize > 0 && repeatRatio >= STALLED_REPEAT_RATIO_THRESHOLD,
-    progressed: resolved.length > 0,
+function findingBullet(finding) {
+  return `- [${finding.severity}] \`${finding.path}:${finding.line}\` (${finding.category}) — ${finding.title_slug}`;
+}
+
+/**
+ * Cumulative resolved rollup across the WHOLE session: findings that appeared in
+ * some round before the latest and are no longer open in the latest round. The
+ * prior rounds fold into an identity-deduped pool via `matchFindings` (the same
+ * identity SSOT `summarizeAdjacent` wraps) — each round's `added` extends the
+ * pool, and each round's `repeated` pair REPLACES the pool's prior representative
+ * with the current round's one so the representative tracks cumulative line
+ * drift. That forward-carry is load-bearing: `matchFindings`' ±tolerance window
+ * is NON-transitive, so a finding drifting within tolerance each round but beyond
+ * it overall (e.g. line 10→16→22) would, if pinned to its first-seen line (10),
+ * no longer match the latest open line (22; distance 12 > tolerance) and be
+ * emitted as resolved while it is still open — double-listed. Chaining through
+ * the intermediate positions instead keeps a still-open drifting finding out of
+ * the resolved set, while a finding genuinely resolved between two early rounds
+ * still stays listed across later rounds and one re-added and open again is
+ * correctly excluded. Determinism holds: the pool preserves its
+ * (round-then-finding) order because `.map` replaces in place and `added` is
+ * appended in current-round order, and `matchFindings` returns `resolved` in that
+ * same pool order.
+ */
+function cumulativeResolved(rounds, openFindings) {
+  let priorUnion = [];
+  for (let index = 0; index < rounds.length - 1; index += 1) {
+    const { repeated, added } = matchFindings(priorUnion, rounds[index].findings ?? []);
+    // matchFindings is 1:1 (each prior entry matches at most one current
+    // finding), and `previous[p]` in each pair is the exact object reference held
+    // in priorUnion — so an identity-keyed Map cleanly forward-carries the latest
+    // representative without disturbing the pool's order.
+    const forwardCarry = new Map(repeated.map(([prior, current]) => [prior, current]));
+    priorUnion = priorUnion.map((entry) => forwardCarry.get(entry) ?? entry).concat(added);
+  }
+  return matchFindings(priorUnion, openFindings).resolved;
+}
+
+/**
+ * Resolve the optional, explicit final-summary input for the post-stop render
+ * pass (SKILL §5/§6). Accepts either a parsed object (`options.finalSummary`,
+ * for direct callers/tests) or a JSON file path (`options.finalSummaryFile`, the
+ * CLI form); returns null when neither is given so the default render stays
+ * byte-identical. All inputs are explicit — the function reads nothing implicit.
+ */
+function readFinalSummary(options) {
+  let summary;
+  if (options.finalSummary !== undefined && options.finalSummary !== null) {
+    summary = options.finalSummary;
+  } else if (options.finalSummaryFile !== undefined) {
+    const summaryPath = absolute(options.finalSummaryFile, 'final summary file');
+    try {
+      summary = JSON.parse(readFileSync(summaryPath, 'utf8'));
+    } catch (error) {
+      throw new LoopStateError(`cannot read final summary: ${error.message}`, 'INVALID_FINAL_SUMMARY');
+    }
+  } else {
+    return null;
+  }
+  if (!summary || typeof summary !== 'object' || Array.isArray(summary)) {
+    throw new LoopStateError('final summary must be a JSON object', 'INVALID_FINAL_SUMMARY');
+  }
+  return summary;
+}
+
+/**
+ * Render the closing `## Final summary` section from an explicit final-summary
+ * object: the stop reason plus the fields the standalone loop-summary used to
+ * carry (rounds saved, implemented total, remaining human/external work). Only
+ * present fields render, so the caller decides what the durable doc retains.
+ */
+function renderFinalSummaryLines(summary) {
+  const out = ['', '## Final summary', ''];
+  const stopReason = typeof summary.stop_reason === 'string' && summary.stop_reason.length > 0
+    ? summary.stop_reason
+    : '(unspecified)';
+  out.push(`- **Stop reason**: ${stopReason}`);
+  if (summary.rounds_saved !== undefined && summary.rounds_saved !== null) {
+    out.push(`- **Rounds saved**: ${Number(summary.rounds_saved)}`);
+  }
+  if (summary.implemented_total !== undefined && summary.implemented_total !== null) {
+    out.push(`- **Total implemented**: ${Number(summary.implemented_total)}`);
+  }
+  const remaining = Array.isArray(summary.remaining_work)
+    ? summary.remaining_work.filter((item) => typeof item === 'string' && item.length > 0)
+    : [];
+  if (remaining.length === 0) {
+    out.push('- **Remaining work**: (none)');
+  } else {
+    out.push('- **Remaining work**:');
+    for (const item of remaining) out.push(`  - ${item}`);
+  }
+  return out;
+}
+
+/**
+ * Render one derived, in-place consolidated review document for a whole loop
+ * session, keyed by `loop_id`. Pure and deterministic: the SAME sorted per-round
+ * `.state.json` inputs (and the same optional final-summary input) always yield
+ * a byte-identical body (no timestamps, no randomness), written atomically. It
+ * reuses `summarizeAdjacent` for the per-round progress column and folds the
+ * per-round finding sets (identity via `matchFindings`) into a CUMULATIVE
+ * open-vs-resolved rollup, so a finding resolved in an early round stays listed
+ * after later rounds. It never touches the per-round canonical `*-review.md`
+ * files — the session doc is an additive view, not a replacement
+ * (resolveRoundReport's delta invariant holds). Report references render as real
+ * Markdown links relative to the DOCUMENT's own directory (`reportsDir`, where
+ * the doc is written) and forward-slashed, so they stay navigable and portable.
+ * When a final-summary input is supplied — only after the loop's stop is decided
+ * (SKILL §5/§6) — a closing `## Final summary` section is appended; without it
+ * the body is byte-identical to the per-round render.
+ */
+export function renderSessionDoc(options = {}) {
+  const loopId = options.loopId;
+  if (typeof loopId !== 'string' || loopId.length === 0) {
+    throw new LoopStateError('loop id is required', 'INVALID_ARGUMENT');
+  }
+  const tmpDir = absolute(options.tmpDir, 'tmp directory');
+  const reportsDir = absolute(options.reportsDir, 'reports directory');
+  const finalSummary = readFinalSummary(options);
+  const rounds = readSessionRounds(tmpDir, loopId);
+  if (rounds.length === 0) {
+    throw new LoopStateError(`no round state for loop ${loopId}`, 'NO_ROUNDS', { loop_id: loopId });
+  }
+
+  // References resolve relative to the DOCUMENT's own directory: the session doc
+  // is always written into reportsDir, so a canonical round report resolves by
+  // bare basename and a response one directory up (../responses/…). Rendering
+  // them as real Markdown links keeps them navigable, not just readable.
+  const link = (target) => {
+    if (typeof target !== 'string' || target.length === 0) return null;
+    const rel = relative(reportsDir, target).replace(/\\/gu, '/');
+    return rel.length === 0 ? target.replace(/\\/gu, '/') : rel;
   };
+  const reportLink = (target) => {
+    const rel = link(target);
+    return rel ? `[${rel}](${rel})` : '(none)';
+  };
+
+  const latest = rounds[rounds.length - 1];
+  const openFindings = Array.isArray(latest.findings) ? latest.findings : [];
+
+  const lines = [
+    `<!-- SESSION-DOC v${SESSION_DOC_SCHEMA} loop_id=${loopId} rounds=${rounds.length} -->`,
+    '',
+    `# Deep Review session — loop ${loopId}`,
+    '',
+    `- **Latest verdict**: ${latest.verdict} (round ${latest.round_number})`,
+    `- **Rounds executed**: ${rounds.length}`,
+    `- **Base commit**: ${latest.base_commit}`,
+    '',
+    '## Round history',
+    '',
+    '| Round | Verdict | 🔴 | 🟡 | ℹ️ | Progress |',
+    '| --- | --- | --- | --- | --- | --- |',
+  ];
+  for (let index = 0; index < rounds.length; index += 1) {
+    const round = rounds[index];
+    const counts = round.counts || {};
+    let progress = '—';
+    if (index > 0) {
+      const summary = summarizeAdjacent(rounds[index - 1].findings, round.findings);
+      const parts = [];
+      if (summary.progressed) parts.push('progressed');
+      if (summary.stalled) parts.push('stalled');
+      // Findings were added with none resolved and a sub-threshold repeat ratio:
+      // neither "progressed" nor "stalled", but the set genuinely changed — label
+      // it accurately instead of the misleading "no change".
+      if (parts.length === 0 && summary.added_count > 0) parts.push(`changed (+${summary.added_count})`);
+      progress = parts.length > 0 ? parts.join(', ') : 'no change';
+    }
+    lines.push(`| ${round.round_number} | ${round.verdict} | ${counts.critical ?? 0} | ${counts.warning ?? 0} | ${counts.info ?? 0} | ${progress} |`);
+  }
+  lines.push('');
+
+  lines.push(`## Open findings (round ${latest.round_number}) — ${openFindings.length}`);
+  if (openFindings.length === 0) lines.push('- (none)');
+  else for (const finding of openFindings) lines.push(findingBullet(finding));
+  lines.push('');
+
+  const resolved = cumulativeResolved(rounds, openFindings);
+  lines.push(`## Resolved (cumulative) — ${resolved.length}`);
+  if (resolved.length === 0) lines.push('- (none)');
+  else for (const finding of resolved) lines.push(findingBullet(finding));
+  lines.push('');
+
+  lines.push('## Round reports');
+  for (const round of rounds) {
+    const reviewText = reportLink(round.round_review_report_path);
+    const responseText = reportLink(round.response_report_path);
+    lines.push(`- Round ${round.round_number} — review: ${reviewText} · response: ${responseText}`);
+  }
+
+  if (finalSummary) lines.push(...renderFinalSummaryLines(finalSummary));
+
+  const outputFile = atomicText(options.output, `${lines.join('\n')}\n`, 'output');
+  return { output_file: outputFile, loop_id: loopId, rounds: rounds.length };
 }
 
 /**
@@ -761,6 +1011,13 @@ function commandOptions(command, flags) {
       ['--previous', 'previous'],
       ['--current', 'current'],
     ]),
+    'render-session-doc': new Map([
+      ['--loop-id', 'loopId'],
+      ['--tmp-dir', 'tmpDir'],
+      ['--reports-dir', 'reportsDir'],
+      ['--output', 'output'],
+      ['--final-summary-file', 'finalSummaryFile'],
+    ]),
     'cleanup-residue': new Map([
       ['--tmp-dir', 'tmpDir'],
       ['--stale-ms', 'staleMs'],
@@ -785,6 +1042,7 @@ export function runLoopStateCli(argv = process.argv.slice(2)) {
   if (command === 'record-round') return recordRound(options);
   if (command === 'render-prior-context') return renderPriorContext(options);
   if (command === 'compare-rounds') return compareRounds(options);
+  if (command === 'render-session-doc') return renderSessionDoc(options);
   if (command === 'cleanup-residue') return cleanupResidue(options);
   return collectMetrics(options);
 }

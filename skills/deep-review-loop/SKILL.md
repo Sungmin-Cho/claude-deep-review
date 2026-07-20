@@ -2,7 +2,7 @@
 name: deep-review-loop
 description: Alternate independent review and evidence-based response until convergence on Claude Code or Codex.
 user-invocable: true
-argument-hint: "[--contract [SLICE-NNN]] [--entropy] [--ultracode] [--codex|--no-codex] [--no-opus] [--no-agy] [--codex-only] [--max=N]"
+argument-hint: "[--contract [SLICE-NNN]] [--entropy] [--ultracode] [--codex|--no-codex] [--no-opus] [--no-agy] [--codex-only] [--max=N] [--session-doc]"
 ---
 
 # deep-review-loop — Review and Respond loop
@@ -26,6 +26,9 @@ expanded `argv` without independently reparsing it.
 - `--max=N` defaults to 5 and must be a positive integer. It counts Review
   calls, not Respond work.
 - Accept `--contract [SLICE-NNN]`, `--entropy`, and all public reviewer flags.
+- Accept `--session-doc` (opt-in, **default OFF**). When present, maintain one
+  consolidated per-session review document (§4/§6); the terminal review and
+  respond routes never accept it. Default OFF is byte-identical to today.
 - Expand and validate reviewer flags exactly as the public skill does.
 
 Announce the safety maximum and that each round reports verdict, remaining
@@ -186,6 +189,32 @@ resolvable), which §1's `cleanup-residue` consults to tell a crashed loop's
 residue from a live sibling's — the live sibling's durable session process is
 still probeable, so its residue is kept.
 
+### 4a. Session doc (only when `--session-doc`)
+
+When `--session-doc` was accepted (§0), re-render this session's single
+consolidated review document **in place** right after `record-round`, keyed by
+this loop's `loop_id`:
+
+```text
+node {plugin_root}/hooks/scripts/loop-state.mjs render-session-doc --loop-id LOOP_ID --tmp-dir .deep-review/tmp --reports-dir REPORTS_DIR --output REPORTS_DIR/loop-{loop_id}-review.md
+```
+
+The document always lives at `.deep-review/reports/loop-{loop_id}-review.md`
+(no timestamp — the SAME file every round, so a session yields exactly one human
+review doc). `render-session-doc` is pure and deterministic: it reads only this
+session's sorted per-round `loop-{loop_id}-round-{N}.state.json` files (and the
+review/response paths recorded in them) and re-renders the latest verdict, the
+per-round verdict/count history with `compare-rounds` progressed/stalled, the
+open-vs-resolved findings rollup (via `matchFindings`), and per-round
+review/response links, written atomically. Because its name matches the
+`loop-<id>-review.md` session-doc pattern (not the timestamp-prefixed canonical
+`{date}-{time}-review.md`), it is **excluded** from `snapshot-reports` /
+`resolve-round-report` delta accounting — the per-round REPORT_DELTA_COUNT
+invariant (§2) still observes exactly one NEW canonical report per round. The
+session doc is a derived, additive view; it never replaces a per-round
+`*-review.md`. When `--session-doc` is absent (default), skip this step entirely
+and behave exactly as before.
+
 ## 5. Stop or continue
 
 Stop immediately when any condition holds:
@@ -241,13 +270,36 @@ in one paragraph.
 
 ## 6. Final summary
 
-Use a direct host file tool to write one unique
+**Default (no `--session-doc`)**: use a direct host file tool to write one unique
 `.deep-review/responses/{YYYY-MM-DD}-{HHmmss}-loop-summary.md`. Include each
 round's review and response paths, counts, implemented total, final verdict,
 stop reason, `rounds_saved` (the safety maximum `--max` minus the number of
 rounds that actually executed a Review), and remaining human or external
 work. Loop state is otherwise session-local; existing reports allow a later
 explicit response to resume.
+
+**When `--session-doc` is ON**: after the loop stops (§5), run one FINAL
+`render-session-doc` pass — the per-round renders (§4a) run before the stop is
+decided and never receive the closing data, so this pass supplies it explicitly
+via `--final-summary-file`:
+
+```text
+node {plugin_root}/hooks/scripts/loop-state.mjs render-session-doc --loop-id LOOP_ID --tmp-dir .deep-review/tmp --reports-dir REPORTS_DIR --output REPORTS_DIR/loop-{loop_id}-review.md --final-summary-file FINAL_SUMMARY_FILE
+```
+
+`FINAL_SUMMARY_FILE` is a private JSON object with `stop_reason`, `rounds_saved`
+(the safety maximum `--max` minus the number of rounds that actually executed a
+Review), `implemented_total` (the summed `implemented_count` across rounds), and
+`remaining_work` (an array of remaining human or external items). This final
+pass appends a `## Final summary` section, so the single durable document
+`.deep-review/reports/loop-{loop_id}-review.md` **absorbs** the loop summary — do
+**not** write a separate `*-loop-summary.md`, avoiding a duplicated
+round-by-round artifact. The doc already carries the per-round review/response
+links, the verdict/count history, and the cumulative open-vs-resolved rollup;
+the final pass adds exactly the stop reason, `rounds_saved`, implemented total,
+and remaining work the standalone summary used to hold, so nothing durable is
+lost. Omitting `--final-summary-file` renders a byte-identical doc, so the
+per-round renders (§4a) and the default-OFF path are unaffected.
 
 Delete this session's `loop-*-round-*.prior.md` advisory files with a direct
 host file tool. Leave the `.state.json` files in place — they remain

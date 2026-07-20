@@ -403,6 +403,45 @@ const EMPTY_APPROVE_REVIEW = [
   '- everything looks fine',
 ].join('\n');
 
+// Round 3 for the cumulative-resolved rollup: B (src/b.js) drops out here, so a
+// finding resolved between rounds 1→2 (C, src/c.js) and one resolved 2→3 (B)
+// must BOTH remain in the session doc's resolved rollup — the adjacent-only pair
+// would surface B alone.
+const ROUND3_REVIEW = [
+  '# Deep Review Report',
+  '## Summary',
+  '- **Verdict**: CONCERN',
+  '- **Issues**: \u{1F534} 1건, \u{1F7E1} 1건, ℹ️ 0건',
+  '### \u{1F534} Critical',
+  '- issue A at `src/a.js:10`',
+  '### \u{1F7E1} Warning',
+  '- issue D at `src/d.js:5`',
+].join('\n');
+
+// Two rounds where findings are ADDED but none resolved and the repeat ratio
+// stays below the stall threshold: neither progressed nor stalled, yet the set
+// changed (+2) — the Round-history Progress cell must say so, not "no change".
+const CHANGED_ROUND1 = [
+  '# Deep Review Report',
+  '## Summary',
+  '- **Verdict**: REQUEST_CHANGES',
+  '- **Issues**: \u{1F534} 1건, \u{1F7E1} 0건, ℹ️ 0건',
+  '### \u{1F534} Critical',
+  '- issue A at `src/a.js:10`',
+].join('\n');
+
+const CHANGED_ROUND2 = [
+  '# Deep Review Report',
+  '## Summary',
+  '- **Verdict**: REQUEST_CHANGES',
+  '- **Issues**: \u{1F534} 1건, \u{1F7E1} 2건, ℹ️ 0건',
+  '### \u{1F534} Critical',
+  '- issue A at `src/a.js:10`',
+  '### \u{1F7E1} Warning',
+  '- issue E at `src/e.js:200`',
+  '- issue F at `src/f.js:300`',
+].join('\n');
+
 function recordTwoRounds(root, review1, review2) {
   const reportsDir = join(root, '.deep-review', 'reports');
   mkdirSync(reportsDir, { recursive: true });
@@ -989,4 +1028,418 @@ test('cleanup-residue missing tmp dir early-return includes a uniform errors:[] 
   const result = runCli(['cleanup-residue', '--tmp-dir', tmpDir]);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.json.errors, []);
+});
+
+// --- ws-02: opt-in per-session single review document (render-session-doc) ----
+// A derived, in-place consolidated review doc keyed by loop_id. It NEVER
+// replaces per-round canonical `*-review.md` files (resolveRoundReport's
+// fail-closed REPORT_DELTA_COUNT invariant stays intact); the session doc lives
+// in the same reports dir with a `loop-<id>-review.md` name and must be excluded
+// from listReports so snapshot/resolve delta accounting never miscounts it.
+const { readdirSync } = require('node:fs');
+
+function makeSessionFixtures(root) {
+  const reportsDir = join(root, '.deep-review', 'reports');
+  const responsesDir = join(root, '.deep-review', 'responses');
+  const tmpDir = join(root, '.deep-review', 'tmp');
+  mkdirSync(reportsDir, { recursive: true });
+  mkdirSync(responsesDir, { recursive: true });
+  mkdirSync(tmpDir, { recursive: true });
+  return { reportsDir, responsesDir, tmpDir };
+}
+
+function recordSessionRound(dirs, { round, loopId, review, response }) {
+  const reviewPath = join(dirs.reportsDir, `2026-07-19-09${String(round).padStart(2, '0')}00-review.md`);
+  writeFileSync(reviewPath, review);
+  let responsePath;
+  if (response) {
+    responsePath = join(dirs.responsesDir, `2026-07-19-09${String(round).padStart(2, '0')}30-response.md`);
+    writeFileSync(responsePath, response);
+  }
+  const args = [
+    'record-round', '--round-number', String(round), '--review-report', reviewPath,
+    '--loop-id', loopId, '--base-commit', 'deadbeef', '--state-dir', dirs.tmpDir,
+  ];
+  if (responsePath) args.push('--response-report', responsePath);
+  const result = runCli(args);
+  assert.equal(result.status, 0, result.stderr);
+  return { reviewPath, responsePath, stateFile: result.json.state_file };
+}
+
+const SD_RESPONSE = [
+  '# Response Report',
+  '## Summary',
+  '- **Items**: 수락 1건, 반박 0건, 보류 0건',
+  '- **implemented_count**: 1',
+  '- **halted**: false',
+].join('\n');
+
+test('record-round persists the round review/response report paths so the session doc can link them', async () => {
+  const { recordRound } = await loadLoopState();
+  const root = temporaryDirectory();
+  const { reviewPath, responsePath, tmpDir } = writeFixtures(root);
+  const result = recordRound({
+    roundNumber: 1,
+    reviewReport: reviewPath,
+    responseReport: responsePath,
+    baseCommit: 'deadbeef',
+    stateDir: tmpDir,
+  });
+  const persisted = JSON.parse(readFileSync(result.state_file, 'utf8'));
+  assert.equal(persisted.round_review_report_path, resolve(reviewPath));
+  assert.equal(persisted.response_report_path, resolve(responsePath));
+});
+
+test('record-round with no response report records response_report_path=null', async () => {
+  const { recordRound } = await loadLoopState();
+  const root = temporaryDirectory();
+  const { reviewPath, tmpDir } = writeFixtures(root);
+  const result = recordRound({
+    roundNumber: 1, reviewReport: reviewPath, baseCommit: 'deadbeef', stateDir: tmpDir,
+  });
+  const persisted = JSON.parse(readFileSync(result.state_file, 'utf8'));
+  assert.equal(persisted.round_review_report_path, resolve(reviewPath));
+  assert.equal(persisted.response_report_path, null);
+});
+
+test('default OFF: record-round writes NO session doc into the reports dir (loop-<id>-review.md absent)', () => {
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  recordSessionRound(dirs, { round: 1, loopId: 'off-loop', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  const reportFiles = readdirSync(dirs.reportsDir);
+  assert.equal(reportFiles.some((name) => /^loop-.+-review\.md$/u.test(name)), false);
+});
+
+test('render-session-doc renders latest verdict, per-round history, and round report links (deterministic body)', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  const r1 = recordSessionRound(dirs, { round: 1, loopId: 'sess-A', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  const r2 = recordSessionRound(dirs, { round: 2, loopId: 'sess-A', review: ROUND2_REVIEW, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-sess-A-review.md');
+  const rendered = renderSessionDoc({
+    loopId: 'sess-A', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output,
+  });
+  assert.equal(rendered.output_file, output);
+  assert.equal(rendered.rounds, 2);
+  const body = readFileSync(output, 'utf8');
+  assert.match(body, /^<!-- SESSION-DOC v1 loop_id=sess-A rounds=2 -->/u);
+  // Latest verdict is round 2's CONCERN, never synthesized.
+  assert.match(body, /Latest verdict.*CONCERN.*round 2/u);
+  // Per-round history rows for both rounds.
+  assert.match(body, /\| 1 \| REQUEST_CHANGES \|/u);
+  assert.match(body, /\| 2 \| CONCERN \|/u);
+  // Report references are REAL Markdown links relative to the document's own
+  // directory (.deep-review/reports): a canonical round report resolves by bare
+  // basename, a response one directory up (../responses/…), forward-slashed.
+  assert.match(body, /\[2026-07-19-090100-review\.md\]\(2026-07-19-090100-review\.md\)/u);
+  assert.match(
+    body,
+    /\[\.\.\/responses\/2026-07-19-090230-response\.md\]\(\.\.\/responses\/2026-07-19-090230-response\.md\)/u,
+  );
+  // Round 1's absolute review path from state must not leak as an absolute link.
+  assert.equal(body.includes(r1.reviewPath), false);
+  assert.equal(body.includes(r2.stateFile), false);
+});
+
+test('render-session-doc open vs resolved rollup reuses matchFindings (B resolved, A repeated, D added)', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  // Round 1: A(src/a.js:10) B(src/b.js:20) C(src/c.js:30)
+  // Round 2: A(src/a.js:10) B(src/b.js:23, within tolerance→repeated) D(src/d.js:5)
+  recordSessionRound(dirs, { round: 1, loopId: 'sess-B', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  recordSessionRound(dirs, { round: 2, loopId: 'sess-B', review: ROUND2_REVIEW, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-sess-B-review.md');
+  renderSessionDoc({ loopId: 'sess-B', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output });
+  const body = readFileSync(output, 'utf8');
+  // Open findings = latest (round 2): a.js:10, b.js:23, d.js:5.
+  assert.match(body, /## Open findings \(round 2\) — 3/u);
+  assert.match(body, /`src\/d\.js:5`/u);
+  // C (src/c.js:30) was in round 1 only → resolved. The rollup is cumulative
+  // across the whole session; with two rounds it counts exactly 1.
+  assert.match(body, /## Resolved \(cumulative\) — 1/u);
+  assert.match(body, /`src\/c\.js:30`/u);
+});
+
+test('render-session-doc resolved rollup is CUMULATIVE — a finding resolved in an early round stays listed across later rounds', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  // R1: A,B,C  →  R2: A,B',D (C resolved 1→2)  →  R3: A,D (B resolved 2→3)
+  recordSessionRound(dirs, { round: 1, loopId: 'sess-cum', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  recordSessionRound(dirs, { round: 2, loopId: 'sess-cum', review: ROUND2_REVIEW, response: SD_RESPONSE });
+  recordSessionRound(dirs, { round: 3, loopId: 'sess-cum', review: ROUND3_REVIEW, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-sess-cum-review.md');
+  renderSessionDoc({ loopId: 'sess-cum', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output });
+  const body = readFileSync(output, 'utf8');
+  // Both the 1→2 resolution (C) and the 2→3 resolution (B) are present after
+  // round 3; the old adjacent-only rollup would have dropped C entirely.
+  assert.match(body, /## Resolved \(cumulative\) — 2/u);
+  assert.match(body, /`src\/c\.js:30`/u);
+  // B drifted src/b.js:20→23 before it was resolved (R2→R3): the cumulative
+  // rollup carries the LATEST matched representative forward, so the resolved
+  // entry shows its last-seen-open line (23), not the stale first-seen line (20).
+  assert.match(body, /`src\/b\.js:23`/u);
+});
+
+// --- W-1 regression: cumulative resolved must track NON-TRANSITIVE line drift --
+// matchFindings' ±6-line window is non-transitive: a single finding drifting ≤6
+// lines per round (10→16→22) matches adjacently, but its FIRST-seen
+// representative (10) vs the LATEST open line (22) differ by 12 > 6. Folding the
+// union while retaining the first-seen representative therefore emits a
+// still-open finding as BOTH open AND resolved (false-resolved). Carrying the
+// LATEST matched representative forward chains the comparison through the
+// intermediate position, so the drift is tracked and the open finding is never
+// mis-resolved — while a genuinely resolved early-round finding still stays
+// listed. The prior fixed-line cumulative tests never exercise drift.
+const DRIFT_ROUND1 = [
+  '# Deep Review Report',
+  '## Summary',
+  '- **Verdict**: REQUEST_CHANGES',
+  '- **Issues**: \u{1F534} 0건, \u{1F7E1} 2건, ℹ️ 0건',
+  '### \u{1F7E1} Warning',
+  '- persistent drift issue at `src/drift.js:10`',
+  '- early resolved issue at `src/gone.js:5`',
+].join('\n');
+
+const DRIFT_ROUND2 = [
+  '# Deep Review Report',
+  '## Summary',
+  '- **Verdict**: CONCERN',
+  '- **Issues**: \u{1F534} 0건, \u{1F7E1} 1건, ℹ️ 0건',
+  '### \u{1F7E1} Warning',
+  '- persistent drift issue at `src/drift.js:16`',
+].join('\n');
+
+const DRIFT_ROUND3 = [
+  '# Deep Review Report',
+  '## Summary',
+  '- **Verdict**: CONCERN',
+  '- **Issues**: \u{1F534} 0건, \u{1F7E1} 1건, ℹ️ 0건',
+  '### \u{1F7E1} Warning',
+  '- persistent drift issue at `src/drift.js:22`',
+].join('\n');
+
+// Isolate the "## Resolved (cumulative)" section body (up to the next heading) so
+// a finding that legitimately appears in the Open section cannot satisfy a
+// resolved-section assertion by accident.
+function resolvedSection(body) {
+  const start = body.indexOf('## Resolved (cumulative)');
+  assert.notEqual(start, -1, 'resolved section present');
+  const end = body.indexOf('## Round reports', start);
+  return body.slice(start, end === -1 ? undefined : end);
+}
+
+test('render-session-doc resolved rollup tracks non-transitive line drift: a still-open finding drifting >tolerance cumulatively is NOT false-resolved, while a genuinely resolved early finding remains', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  // P drifts src/drift.js:10 → 16 → 22 (≤6 per round, 12 > 6 cumulatively) and
+  // stays OPEN in round 3; R (src/gone.js:5) is genuinely resolved after round 1.
+  recordSessionRound(dirs, { round: 1, loopId: 'sess-drift', review: DRIFT_ROUND1, response: SD_RESPONSE });
+  recordSessionRound(dirs, { round: 2, loopId: 'sess-drift', review: DRIFT_ROUND2, response: SD_RESPONSE });
+  recordSessionRound(dirs, { round: 3, loopId: 'sess-drift', review: DRIFT_ROUND3, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-sess-drift-review.md');
+  renderSessionDoc({ loopId: 'sess-drift', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output });
+  const body = readFileSync(output, 'utf8');
+  // The drifting finding is OPEN at its latest position in round 3.
+  assert.match(body, /## Open findings \(round 3\) — 1/u);
+  assert.match(body, /`src\/drift\.js:22`/u);
+  // (a) It must NOT be double-listed as resolved (the false-resolved regression).
+  const resolved = resolvedSection(body);
+  assert.equal(resolved.includes('src/drift.js'), false);
+  // (b) The genuinely resolved early-round finding still appears.
+  assert.match(resolved, /`src\/gone\.js:5`/u);
+  assert.match(body, /## Resolved \(cumulative\) — 1/u);
+});
+
+test('render-session-doc Progress cell labels a changed-but-neither-progressed-nor-stalled round as "changed (+N)"', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  // R1: A only  →  R2: A repeated + E,F added (ratio 1/3 < 0.5, 0 resolved).
+  recordSessionRound(dirs, { round: 1, loopId: 'sess-chg', review: CHANGED_ROUND1, response: SD_RESPONSE });
+  recordSessionRound(dirs, { round: 2, loopId: 'sess-chg', review: CHANGED_ROUND2, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-sess-chg-review.md');
+  renderSessionDoc({ loopId: 'sess-chg', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output });
+  const body = readFileSync(output, 'utf8');
+  assert.match(body, /changed \(\+2\)/u);
+  // The round-2 history row must NOT be mislabeled "no change".
+  const round2Row = body.split('\n').find((line) => /^\| 2 \|/u.test(line));
+  assert.ok(round2Row, 'round 2 history row present');
+  assert.equal(round2Row.includes('no change'), false);
+});
+
+test('render-session-doc appends a Final summary section only when a final-summary file is given (additive, prefix byte-identical)', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  recordSessionRound(dirs, { round: 1, loopId: 'sess-fin', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  recordSessionRound(dirs, { round: 2, loopId: 'sess-fin', review: ROUND2_REVIEW, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-sess-fin-review.md');
+
+  renderSessionDoc({ loopId: 'sess-fin', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output });
+  const withoutFinal = readFileSync(output, 'utf8');
+  assert.equal(withoutFinal.includes('## Final summary'), false);
+
+  const finalSummaryFile = join(dirs.tmpDir, 'final-summary.json');
+  writeFileSync(finalSummaryFile, JSON.stringify({
+    stop_reason: 'APPROVE with zero blocking issues',
+    rounds_saved: 3,
+    implemented_total: 4,
+    remaining_work: ['manual: bump version at release', 'external: confirm CI green'],
+  }));
+  renderSessionDoc({
+    loopId: 'sess-fin', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output, finalSummaryFile,
+  });
+  const withFinal = readFileSync(output, 'utf8');
+  // Additive: everything the default render produced is an exact prefix.
+  assert.ok(withFinal.startsWith(withoutFinal.slice(0, -1)));
+  assert.match(withFinal, /## Final summary/u);
+  assert.match(withFinal, /\*\*Stop reason\*\*: APPROVE with zero blocking issues/u);
+  assert.match(withFinal, /\*\*Rounds saved\*\*: 3/u);
+  assert.match(withFinal, /\*\*Total implemented\*\*: 4/u);
+  assert.match(withFinal, /manual: bump version at release/u);
+  assert.match(withFinal, /external: confirm CI green/u);
+});
+
+test('render-session-doc --final-summary-file CLI round trip renders the Final summary', () => {
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  recordSessionRound(dirs, { round: 1, loopId: 'sess-fincli', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  const finalSummaryFile = join(dirs.tmpDir, 'final-cli.json');
+  writeFileSync(finalSummaryFile, JSON.stringify({
+    stop_reason: 'reached --max', rounds_saved: 0, implemented_total: 2, remaining_work: [],
+  }));
+  const output = join(dirs.reportsDir, 'loop-sess-fincli-review.md');
+  const result = runCli([
+    'render-session-doc', '--loop-id', 'sess-fincli', '--tmp-dir', dirs.tmpDir,
+    '--reports-dir', dirs.reportsDir, '--output', output, '--final-summary-file', finalSummaryFile,
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  const body = readFileSync(output, 'utf8');
+  assert.match(body, /## Final summary/u);
+  assert.match(body, /\*\*Stop reason\*\*: reached --max/u);
+  assert.match(body, /\*\*Remaining work\*\*: \(none\)/u);
+});
+
+test('render-session-doc is idempotent — same state inputs produce a byte-identical doc', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  recordSessionRound(dirs, { round: 1, loopId: 'sess-C', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  recordSessionRound(dirs, { round: 2, loopId: 'sess-C', review: ROUND2_REVIEW, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-sess-C-review.md');
+  renderSessionDoc({ loopId: 'sess-C', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output });
+  const first = readFileSync(output, 'utf8');
+  renderSessionDoc({ loopId: 'sess-C', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output });
+  const second = readFileSync(output, 'utf8');
+  assert.equal(first, second);
+});
+
+test('render-session-doc atomic write leaves no .tmp residue in the reports dir', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  recordSessionRound(dirs, { round: 1, loopId: 'sess-D', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-sess-D-review.md');
+  renderSessionDoc({ loopId: 'sess-D', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output });
+  const names = readdirSync(dirs.reportsDir);
+  assert.equal(names.some((name) => name.includes('.tmp.')), false);
+  assert.equal(names.includes('loop-sess-D-review.md'), true);
+});
+
+test('render-session-doc throws NO_ROUNDS when the loop id has no round state', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  const output = join(dirs.reportsDir, 'loop-missing-review.md');
+  assert.throws(
+    () => renderSessionDoc({ loopId: 'missing', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output }),
+    (error) => error.code === 'NO_ROUNDS',
+  );
+});
+
+test('render-session-doc CLI is registered and produces the file (round trip)', () => {
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  recordSessionRound(dirs, { round: 1, loopId: 'sess-cli', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-sess-cli-review.md');
+  const result = runCli([
+    'render-session-doc', '--loop-id', 'sess-cli', '--tmp-dir', dirs.tmpDir,
+    '--reports-dir', dirs.reportsDir, '--output', output,
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.json.ok, true);
+  assert.equal(result.json.output_file, output);
+  assert.match(readFileSync(output, 'utf8'), /SESSION-DOC v1/u);
+});
+
+test('render-session-doc only reads THIS loop\'s round state, ignoring sibling loops in the same tmp dir', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  recordSessionRound(dirs, { round: 1, loopId: 'mine', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  recordSessionRound(dirs, { round: 1, loopId: 'other', review: ROUND2_REVIEW, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-mine-review.md');
+  const rendered = renderSessionDoc({ loopId: 'mine', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output });
+  assert.equal(rendered.rounds, 1);
+  const body = readFileSync(output, 'utf8');
+  assert.match(body, /loop_id=mine/u);
+  // The sibling loop's distinctive finding (src/d.js:5) must not appear.
+  assert.equal(body.includes('src/d.js:5'), false);
+});
+
+// --- ws-02: session doc is excluded from the report-set delta accounting -------
+test('snapshotReports excludes a loop-<id>-review.md session doc while keeping canonical timestamped reports', async () => {
+  const { snapshotReports } = await loadLoopState();
+  const root = temporaryDirectory();
+  const reportsDir = join(root, '.deep-review', 'reports');
+  mkdirSync(reportsDir, { recursive: true });
+  const canonical = join(reportsDir, '2026-07-19-100000-review.md');
+  writeFileSync(canonical, '# canonical\n');
+  writeFileSync(join(reportsDir, 'loop-sess-X-review.md'), '# session doc\n');
+  const snap = snapshotReports({ reportsDir });
+  assert.deepEqual(snap.reports, [resolve(canonical)]);
+});
+
+test('resolveRoundReport delta stays exactly 1 even when a session doc is present across the round window (invariant preserved)', () => {
+  const root = temporaryDirectory();
+  const reportsDir = join(root, '.deep-review', 'reports');
+  const snapshot = join(root, '.deep-review', 'tmp', 'snap.json');
+  mkdirSync(reportsDir, { recursive: true });
+  mkdirSync(join(root, '.deep-review', 'tmp'), { recursive: true });
+  // Pre-existing canonical report + a session doc already present.
+  writeFileSync(join(reportsDir, '2026-07-19-100000-review.md'), '# old\n');
+  writeFileSync(join(reportsDir, 'loop-sess-Y-review.md'), '# session doc pre\n');
+  const before = runCli(['snapshot-reports', '--reports-dir', reportsDir, '--output', snapshot]);
+  assert.equal(before.status, 0, before.stderr);
+  // The round creates exactly one new canonical report; the session doc is
+  // ALSO re-rendered in place (same path, still present) — it must not count.
+  const newCanonical = join(reportsDir, '2026-07-19-100100-review.md');
+  writeFileSync(newCanonical, '# new canonical\n');
+  writeFileSync(join(reportsDir, 'loop-sess-Y-review.md'), '# session doc post\n');
+  const resolved = runCli(['resolve-round-report', '--reports-dir', reportsDir, '--snapshot-file', snapshot]);
+  assert.equal(resolved.status, 0, resolved.stderr);
+  assert.equal(resolved.json.report_path, resolve(newCanonical));
+  assert.equal(resolved.json.count, 1);
+});
+
+test('resolveRoundReport does NOT treat a newly-created session doc as the round report (a session doc alone is delta 0 → terminal)', () => {
+  const root = temporaryDirectory();
+  const reportsDir = join(root, '.deep-review', 'reports');
+  const snapshot = join(root, '.deep-review', 'tmp', 'snap.json');
+  mkdirSync(reportsDir, { recursive: true });
+  mkdirSync(join(root, '.deep-review', 'tmp'), { recursive: true });
+  writeFileSync(join(reportsDir, '2026-07-19-100000-review.md'), '# old\n');
+  const before = runCli(['snapshot-reports', '--reports-dir', reportsDir, '--output', snapshot]);
+  assert.equal(before.status, 0, before.stderr);
+  // Only a session doc appears — no NEW canonical report. Delta must be 0
+  // (terminal REPORT_DELTA_COUNT), never mistaking the session doc for a report.
+  writeFileSync(join(reportsDir, 'loop-sess-Z-review.md'), '# session only\n');
+  const resolved = runCli(['resolve-round-report', '--reports-dir', reportsDir, '--snapshot-file', snapshot]);
+  assert.notEqual(resolved.status, 0);
+  assert.equal(resolved.json.error.code, 'REPORT_DELTA_COUNT');
+  assert.equal(resolved.json.error.count, 0);
 });

@@ -144,6 +144,10 @@ function parseLoop(argv, host) {
       if (/^SLICE-[0-9]+$/u.test(expanded[index + 1] || '')) index += 1;
       continue;
     }
+    // Opt-in per-session single review document. Loop-only (default OFF keeps
+    // today's byte-identical behavior); the terminal review/respond routes keep
+    // rejecting it. Value-less boolean flag.
+    if (token === '--session-doc') continue;
     return { ...routeError(`unknown loop argument: ${token}`), host, argv: expanded };
   }
   return { ok: true, route: 'loop', host, argv: expanded };

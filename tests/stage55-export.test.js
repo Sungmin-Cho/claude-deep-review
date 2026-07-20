@@ -81,6 +81,22 @@ test('Stage 5.5 discovers the canonical receipt and newest 20 reports without a 
   assert.equal(sources[1].run_id, '01J00000000000000000000002', 'explicit source run_id overrides discovery');
 });
 
+test('discoverSources excludes the opt-in session doc from recurring-findings provenance', () => {
+  const { discoverSources } = require(wrapper);
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-stage55-sd-'));
+  const project = path.join(parent, 'proj');
+  const reportsDir = path.join(project, '.deep-review', 'reports');
+  fs.mkdirSync(reportsDir, { recursive: true });
+  const canonical = path.join(reportsDir, '2026-07-19-100000-review.md');
+  const sessionDoc = path.join(reportsDir, 'loop-sess-Q-review.md');
+  fs.writeFileSync(canonical, '# canonical\n');
+  fs.writeFileSync(sessionDoc, '# derived session aggregate\n');
+
+  const discovered = discoverSources(project);
+  assert.deepEqual(discovered.reports, [canonical]);
+  assert.equal(discovered.reports.includes(sessionDoc), false);
+});
+
 test('Stage 5.5 executable reference is shell-free and delegates discovery to the wrapper', () => {
   const source = fs.readFileSync(
     path.join(root, 'skills', 'deep-review-workflow', 'references', 'recurring-findings-export.md'),

@@ -19,6 +19,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { resolveExecutable, runProcess } from './lib/process.mjs';
+import { isSessionDocReportName } from './lib/session-doc.js';
 
 const REVIEW_SUFFIX = '-review.md';
 const DEFAULT_REPORT_LIMIT = 3;
@@ -67,7 +68,12 @@ export function listReviewReports({ repo, limit } = {}) {
 
   const reports = [];
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(REVIEW_SUFFIX)) continue;
+    // The opt-in per-session review doc (`loop-<id>-review.md`) shares this dir
+    // and the `-review.md` suffix but is a derived aggregate, not a canonical
+    // round report; it is re-rendered last each round so it usually has the
+    // newest mtime. Exclude it (shared predicate) so a later pathless
+    // `--respond` never resumes off the un-parseable aggregate.
+    if (!entry.isFile() || !entry.name.endsWith(REVIEW_SUFFIX) || isSessionDocReportName(entry.name)) continue;
     const filePath = resolve(reportsDirectory, entry.name);
     let stat;
     try {
