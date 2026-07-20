@@ -616,18 +616,32 @@ function findingBullet(finding) {
  * Cumulative resolved rollup across the WHOLE session: findings that appeared in
  * some round before the latest and are no longer open in the latest round. The
  * prior rounds fold into an identity-deduped pool via `matchFindings` (the same
- * identity SSOT `summarizeAdjacent` wraps) — folding each round's `added` keeps
- * the first-seen identity — and that pool is then diffed against the latest open
- * set. So a finding resolved between two early rounds stays listed across later
- * rounds, while one that was re-added and is open again is correctly excluded.
- * The returned order follows the pool's (round-then-finding) order, so the
- * rollup is deterministic.
+ * identity SSOT `summarizeAdjacent` wraps) — each round's `added` extends the
+ * pool, and each round's `repeated` pair REPLACES the pool's prior representative
+ * with the current round's one so the representative tracks cumulative line
+ * drift. That forward-carry is load-bearing: `matchFindings`' ±tolerance window
+ * is NON-transitive, so a finding drifting within tolerance each round but beyond
+ * it overall (e.g. line 10→16→22) would, if pinned to its first-seen line (10),
+ * no longer match the latest open line (22; distance 12 > tolerance) and be
+ * emitted as resolved while it is still open — double-listed. Chaining through
+ * the intermediate positions instead keeps a still-open drifting finding out of
+ * the resolved set, while a finding genuinely resolved between two early rounds
+ * still stays listed across later rounds and one re-added and open again is
+ * correctly excluded. Determinism holds: the pool preserves its
+ * (round-then-finding) order because `.map` replaces in place and `added` is
+ * appended in current-round order, and `matchFindings` returns `resolved` in that
+ * same pool order.
  */
 function cumulativeResolved(rounds, openFindings) {
   let priorUnion = [];
   for (let index = 0; index < rounds.length - 1; index += 1) {
-    const { added } = matchFindings(priorUnion, rounds[index].findings ?? []);
-    priorUnion = priorUnion.concat(added);
+    const { repeated, added } = matchFindings(priorUnion, rounds[index].findings ?? []);
+    // matchFindings is 1:1 (each prior entry matches at most one current
+    // finding), and `previous[p]` in each pair is the exact object reference held
+    // in priorUnion — so an identity-keyed Map cleanly forward-carries the latest
+    // representative without disturbing the pool's order.
+    const forwardCarry = new Map(repeated.map(([prior, current]) => [prior, current]));
+    priorUnion = priorUnion.map((entry) => forwardCarry.get(entry) ?? entry).concat(added);
   }
   return matchFindings(priorUnion, openFindings).resolved;
 }

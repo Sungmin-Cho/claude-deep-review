@@ -3,6 +3,20 @@
 Run after a review report is written. Skip when fewer than two canonical
 `*-review.md` reports exist.
 
+> **Canonical excludes the derived session aggregate.** The opt-in
+> `--session-doc` per-session document is written into the same
+> `.deep-review/reports/` directory and also ends in `-review.md`, but it is a
+> derived, in-place aggregate keyed by loop id (filename `loop-<id>-review.md`),
+> not a per-round canonical report. It is NOT canonical: exclude it from both the
+> "two canonical reports" gate above and the occurrence counting below, or a
+> single real round report plus the aggregate could trip the ≥2 gate, and the
+> aggregate's re-listed round findings could inflate occurrence totals. The rule
+> is the shared predicate `hooks/scripts/lib/session-doc.js`
+> `isSessionDocReportName` (the same one the Node enumerators use): any report
+> whose basename matches `loop-<id>-review.md` (the `loop-` prefix — canonical
+> round reports are always timestamp-prefixed, `{YYYY-MM-DD}-{HHmmss}-review.md`)
+> is excluded.
+
 ## Taxonomy
 
 Classify all Critical and Warning issues in one pass into exactly one of:

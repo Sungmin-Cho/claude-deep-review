@@ -1177,7 +1177,81 @@ test('render-session-doc resolved rollup is CUMULATIVE — a finding resolved in
   // round 3; the old adjacent-only rollup would have dropped C entirely.
   assert.match(body, /## Resolved \(cumulative\) — 2/u);
   assert.match(body, /`src\/c\.js:30`/u);
-  assert.match(body, /`src\/b\.js:20`/u);
+  // B drifted src/b.js:20→23 before it was resolved (R2→R3): the cumulative
+  // rollup carries the LATEST matched representative forward, so the resolved
+  // entry shows its last-seen-open line (23), not the stale first-seen line (20).
+  assert.match(body, /`src\/b\.js:23`/u);
+});
+
+// --- W-1 regression: cumulative resolved must track NON-TRANSITIVE line drift --
+// matchFindings' ±6-line window is non-transitive: a single finding drifting ≤6
+// lines per round (10→16→22) matches adjacently, but its FIRST-seen
+// representative (10) vs the LATEST open line (22) differ by 12 > 6. Folding the
+// union while retaining the first-seen representative therefore emits a
+// still-open finding as BOTH open AND resolved (false-resolved). Carrying the
+// LATEST matched representative forward chains the comparison through the
+// intermediate position, so the drift is tracked and the open finding is never
+// mis-resolved — while a genuinely resolved early-round finding still stays
+// listed. The prior fixed-line cumulative tests never exercise drift.
+const DRIFT_ROUND1 = [
+  '# Deep Review Report',
+  '## Summary',
+  '- **Verdict**: REQUEST_CHANGES',
+  '- **Issues**: \u{1F534} 0건, \u{1F7E1} 2건, ℹ️ 0건',
+  '### \u{1F7E1} Warning',
+  '- persistent drift issue at `src/drift.js:10`',
+  '- early resolved issue at `src/gone.js:5`',
+].join('\n');
+
+const DRIFT_ROUND2 = [
+  '# Deep Review Report',
+  '## Summary',
+  '- **Verdict**: CONCERN',
+  '- **Issues**: \u{1F534} 0건, \u{1F7E1} 1건, ℹ️ 0건',
+  '### \u{1F7E1} Warning',
+  '- persistent drift issue at `src/drift.js:16`',
+].join('\n');
+
+const DRIFT_ROUND3 = [
+  '# Deep Review Report',
+  '## Summary',
+  '- **Verdict**: CONCERN',
+  '- **Issues**: \u{1F534} 0건, \u{1F7E1} 1건, ℹ️ 0건',
+  '### \u{1F7E1} Warning',
+  '- persistent drift issue at `src/drift.js:22`',
+].join('\n');
+
+// Isolate the "## Resolved (cumulative)" section body (up to the next heading) so
+// a finding that legitimately appears in the Open section cannot satisfy a
+// resolved-section assertion by accident.
+function resolvedSection(body) {
+  const start = body.indexOf('## Resolved (cumulative)');
+  assert.notEqual(start, -1, 'resolved section present');
+  const end = body.indexOf('## Round reports', start);
+  return body.slice(start, end === -1 ? undefined : end);
+}
+
+test('render-session-doc resolved rollup tracks non-transitive line drift: a still-open finding drifting >tolerance cumulatively is NOT false-resolved, while a genuinely resolved early finding remains', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  // P drifts src/drift.js:10 → 16 → 22 (≤6 per round, 12 > 6 cumulatively) and
+  // stays OPEN in round 3; R (src/gone.js:5) is genuinely resolved after round 1.
+  recordSessionRound(dirs, { round: 1, loopId: 'sess-drift', review: DRIFT_ROUND1, response: SD_RESPONSE });
+  recordSessionRound(dirs, { round: 2, loopId: 'sess-drift', review: DRIFT_ROUND2, response: SD_RESPONSE });
+  recordSessionRound(dirs, { round: 3, loopId: 'sess-drift', review: DRIFT_ROUND3, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-sess-drift-review.md');
+  renderSessionDoc({ loopId: 'sess-drift', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output });
+  const body = readFileSync(output, 'utf8');
+  // The drifting finding is OPEN at its latest position in round 3.
+  assert.match(body, /## Open findings \(round 3\) — 1/u);
+  assert.match(body, /`src\/drift\.js:22`/u);
+  // (a) It must NOT be double-listed as resolved (the false-resolved regression).
+  const resolved = resolvedSection(body);
+  assert.equal(resolved.includes('src/drift.js'), false);
+  // (b) The genuinely resolved early-round finding still appears.
+  assert.match(resolved, /`src\/gone\.js:5`/u);
+  assert.match(body, /## Resolved \(cumulative\) — 1/u);
 });
 
 test('render-session-doc Progress cell labels a changed-but-neither-progressed-nor-stalled round as "changed (+N)"', async () => {
