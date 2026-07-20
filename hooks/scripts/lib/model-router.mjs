@@ -232,8 +232,15 @@ function maxClass(values, order) {
   return values.reduce((highest, value) => order.indexOf(value) > order.indexOf(highest) ? value : highest, order[0]);
 }
 
-export function buildRoutingPlan({ artifacts = [], reviewers = [], policy = {}, overrides = {}, capabilities = [] } = {}) {
-  const risk = assessRisk(artifacts);
+export function buildRoutingPlan({
+  artifacts = [], reviewers = [], policy = {}, overrides = {}, capabilities = [], riskFloor,
+} = {}) {
+  // H3: riskFloor is an optional additive override — when the caller has
+  // independently derived 'high' risk from the actual change patch (removed
+  // high-risk content, a deleted high-risk file), it wins over the
+  // per-artifact assessment without weakening it. Leaving riskFloor
+  // undefined preserves every existing caller's behavior exactly.
+  const risk = riskFloor === 'high' ? 'high' : assessRisk(artifacts);
   const sizes = artifacts.map((artifact) => assessSize(artifact, policy.classification?.size_thresholds));
   const size = sizes.length ? maxClass(sizes, SIZE_NAMES) : 'tiny';
   const unit = artifacts.length === 1 ? artifacts[0] : { target_kind: artifacts.length ? 'mixed' : 'unknown' };

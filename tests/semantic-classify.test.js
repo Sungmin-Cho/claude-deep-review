@@ -158,6 +158,45 @@ test('clear cases never call semantic; ambiguous malformed/timeout cases retain 
   assert.equal(timedOut.semantic_status, 'failed');
 });
 
+// ---------------------------------------------------------------------------
+// H2: fitPayload must trim sibling_paths and then heading_index once the
+// snippets can no longer be shrunk, and classifyWithSemantic must fail closed
+// (never transmit) when even that is not enough to fit maxBytes.
+// ---------------------------------------------------------------------------
+
+test('H2: oversized sibling_paths and heading_index are progressively trimmed after snippets are exhausted, keeping the payload within maxBytes', async () => {
+  const { buildSemanticPayload } = await import(semanticUrl);
+  const maxBytes = 900;
+  const longSiblingPaths = Array.from({ length: 100 }, (_, index) => (
+    `very/long/sibling/path/number-${index}/${'segment-'.repeat(10)}.md`
+  ));
+  const manyHeadings = Array.from({ length: 40 }, (_, index) => `## Heading Number ${index}`).join('\n');
+  const payload = buildSemanticPayload(descriptor({
+    content: manyHeadings,
+    sibling_paths: longSiblingPaths,
+  }), provisional(), { maxBytes });
+
+  assert.ok(payload, 'the payload must remain usable once the trimmable arrays are reduced');
+  assert.ok(Buffer.byteLength(JSON.stringify(payload), 'utf8') <= maxBytes, 'the fully serialized payload must respect maxBytes');
+  assert.ok(payload.sibling_paths.length < longSiblingPaths.length, 'sibling_paths must be visibly trimmed');
+  assert.ok(payload.heading_index.length <= 40, 'heading_index must never exceed the sampled heading count');
+});
+
+test('H2: a payload whose non-trimmable fields alone exceed maxBytes fails closed as skipped-oversized without invoking the adapter', async () => {
+  const { classifyWithSemantic } = await import(semanticUrl);
+  let calls = 0;
+  const adapter = async () => { calls += 1; return {}; };
+  const hugePath = `docs/${'x'.repeat(2000)}.md`;
+  const result = await classifyWithSemantic({
+    descriptor: descriptor({ path: hugePath, content: 'short body text', sibling_paths: [] }),
+    classification: provisional(), repoRoot: root, pluginRoot: root, adapter,
+    maxBytes: 128,
+  });
+  assert.equal(result.semantic_status, 'skipped-oversized');
+  assert.equal(calls, 0, 'the adapter must never be invoked for an oversized payload');
+  assert.doesNotMatch(JSON.stringify(result), new RegExp('x'.repeat(2000)), 'the oversized path must never be transmitted onward in the result');
+});
+
 test('semantic adapter selection is capability-based with native assertion priority', async () => {
   const { selectSemanticAdapter } = await import(semanticUrl);
   const native = async () => ({});

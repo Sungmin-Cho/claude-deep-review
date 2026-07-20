@@ -260,6 +260,29 @@ test('I2: buildRoutingPlan honors policy.classification.size_thresholds for docu
   assert.match(customPlan.routes[0].route_explanation, /\/small\//, 'the policy-supplied document thresholds must reclassify the same artifact as small');
 });
 
+// H3: buildRoutingPlan must honor an additive riskFloor derived from the
+// actual change patch (removed high-risk content, a deleted high-risk file)
+// even when every artifact's own assessment reads low, without regressing
+// callers that never pass riskFloor.
+test('H3: buildRoutingPlan honors an additive riskFloor even when artifacts assess low; omitting riskFloor preserves current behavior', async () => {
+  const { buildRoutingPlan } = await import(routerUrl);
+  const reviewers = [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }];
+  const lowRiskArtifacts = [{ target_kind: 'code-change', path: 'src/service.js', content: 'a harmless rename', changed_lines: 5 }];
+  const baseArgs = {
+    artifacts: lowRiskArtifacts,
+    reviewers,
+    policy: { routing: { policy: 'auto' } },
+    overrides: { protocol_version: '2.0', routing_policy: 'auto', allow_fallback: false, providers: {}, reviewers: {} },
+    capabilities: [capability()],
+  };
+
+  const withoutFloor = buildRoutingPlan(baseArgs);
+  assert.match(withoutFloor.routes[0].route_explanation, /\/low\//, 'omitting riskFloor must preserve the existing low-risk assessment');
+
+  const withFloor = buildRoutingPlan({ ...baseArgs, riskFloor: 'high' });
+  assert.match(withFloor.routes[0].route_explanation, /\/high\//, 'riskFloor: \'high\' must raise the routed risk even though the artifacts alone assess low');
+});
+
 test('buildRoutingPlan preserves the eligible reviewer set and emits protocol 2.0', async () => {
   const { buildRoutingPlan, renderRoutingExplanation } = await import(routerUrl);
   const reviewers = [

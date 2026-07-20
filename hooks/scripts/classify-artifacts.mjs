@@ -17,6 +17,7 @@ import { pathToFileURL } from 'node:url';
 import { classifyArtifact, classifyScope } from './lib/artifact-classify.mjs';
 import { discoverArtifacts } from './lib/artifact-discover.mjs';
 import { readArtifactWindows } from './lib/artifact-discover.mjs';
+import { gitSync } from './lib/git.mjs';
 import {
   classifyWithSemantic,
   createClaudeCliSemanticAdapter,
@@ -414,6 +415,42 @@ function routingPolicy(repo, env, overrides, runtime) {
   return { ...merged, user, project };
 }
 
+// H3: per-artifact content_risk is derived from path + current working-tree
+// content only, so a change that removes high-risk terms (or deletes a
+// high-risk file entirely) erases the evidence before assessment. Deriving
+// one bounded risk-floor scalar from the actual patch — removed lines and
+// deleted-file content included — closes that gap without persisting any
+// raw diff text: only the resulting 'high'/undefined outcome is ever kept,
+// and it feeds buildRoutingPlan as an additive floor alongside the existing
+// per-artifact assessment. Any git failure (unexpected states, no HEAD, a
+// hostile/corrupt repo) fails open to undefined — i.e. today's behavior.
+function changeStateDiffArgs(changeState, reviewBase) {
+  if (changeState === 'clean') return ['diff', `${reviewBase}..HEAD`];
+  if (changeState === 'staged') return ['diff', '--cached'];
+  return ['diff', 'HEAD'];
+}
+
+function computeChangeRiskFloor(repo, changeState, reviewBase) {
+  if (changeState === 'non-git') return undefined;
+  try {
+    const args = changeStateDiffArgs(changeState, reviewBase);
+    let result = gitSync(repo, args, { maxBuffer: 4 * 1024 * 1024 });
+    // Only the HEAD-based bucket (unstaged/mixed/initial/untracked-only) has a
+    // defined fallback: a repository with no HEAD yet (no commits) cannot
+    // diff against it, so retry against the bare working tree diff.
+    if (result.code !== 0 && args[1] === 'HEAD') {
+      result = gitSync(repo, ['diff'], { maxBuffer: 4 * 1024 * 1024 });
+    }
+    if (result.code !== 0) return undefined;
+    // Bound the scanned text well below the maxBuffer capture ceiling — the
+    // patch itself is discarded immediately after this local scan.
+    const patchText = result.stdout.toString('utf8').slice(0, 512 * 1024);
+    return assessRisk([{ diff: patchText }]) === 'high' ? 'high' : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env = process.env, runtime = {}) {
   const options = parseArguments(argv);
   const repo = resolve(options.repo);
@@ -548,7 +585,10 @@ export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env 
       throw new Error(`ERROR_PROVIDER_UNAVAILABLE: explicit reviewer ${reviewerId} is not eligible`);
     }
   }
-  const routingPlan = buildRoutingPlan({ artifacts: result.artifacts, reviewers: eligibleReviewers, policy, overrides, capabilities });
+  const riskFloor = computeChangeRiskFloor(repo, changeState, reviewBase);
+  const routingPlan = buildRoutingPlan({
+    artifacts: result.artifacts, reviewers: eligibleReviewers, policy, overrides, capabilities, riskFloor,
+  });
   routingPlan.explicit_overrides = explicit;
   routingPlan.apply_automatic = policy.features?.automatic_model_routing === true
     && policy.features?.routing_shadow_mode === false;

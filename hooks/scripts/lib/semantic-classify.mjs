@@ -37,13 +37,31 @@ function headingIndex(text) {
     .map((heading) => heading.slice(0, 200));
 }
 
+function payloadByteLength(payload) {
+  return Buffer.byteLength(JSON.stringify(payload), 'utf8');
+}
+
+// H2: shrink the snippets first (existing behavior), then — only once the
+// snippets can no longer be reduced — progressively drop entries from
+// sibling_paths (from the end) and then heading_index, rechecking the fully
+// serialized payload size at every step. If the payload still exceeds
+// maxBytes after all three trimmable channels are empty, the remaining
+// fields (path, metadata, deterministic block) alone are too large to
+// transmit within the bound: return null so the caller fails closed instead
+// of transmitting an oversized payload.
 function fitPayload(payload, maxBytes) {
-  while (Buffer.byteLength(JSON.stringify(payload), 'utf8') > maxBytes) {
+  while (payloadByteLength(payload) > maxBytes) {
     const key = Object.entries(payload.snippets).sort((left, right) => right[1].length - left[1].length)[0]?.[0];
     if (!key || payload.snippets[key].length === 0) break;
     payload.snippets[key] = payload.snippets[key].slice(0, Math.floor(payload.snippets[key].length * 0.8));
   }
-  return payload;
+  while (payloadByteLength(payload) > maxBytes && payload.sibling_paths.length > 0) {
+    payload.sibling_paths.pop();
+  }
+  while (payloadByteLength(payload) > maxBytes && payload.heading_index.length > 0) {
+    payload.heading_index.pop();
+  }
+  return payloadByteLength(payload) > maxBytes ? null : payload;
 }
 
 export function buildSemanticPayload(descriptor, classification, { maxBytes = 24_576 } = {}) {
@@ -214,6 +232,10 @@ export async function classifyWithSemantic({ descriptor, classification, pluginR
 
   const payload = buildSemanticPayload(descriptor, classification, { maxBytes });
   if (containsSecretSignature(payload)) return deterministicResult(classification, 'skipped-sensitive-content');
+  // H2: fitPayload returns null when the payload cannot be trimmed under
+  // maxBytes even with snippets, sibling_paths, and heading_index all empty —
+  // fail closed rather than transmit an oversized payload.
+  if (!payload) return deterministicResult(classification, 'skipped-oversized');
   if (!adapter) return deterministicResult(classification, 'unavailable');
   const fingerprint = semanticFingerprint(payload, { thresholds });
   const cached = cache ? getCachedSemantic(cache, fingerprint) : null;

@@ -999,3 +999,79 @@ test('R2I1: a corrupt capability cache falls open to a fresh probe instead of fa
   const invocations = fs.readFileSync(probeLog, 'utf8').trim().split('\n').filter(Boolean).length;
   assert.ok(invocations > 0, 'the corrupt-cache path must still invoke the probe runner');
 });
+
+// ---------------------------------------------------------------------------
+// H3: content_risk/assessRisk must consider the actual change patch (removed
+// lines, deleted-file content), not just the current working-tree content, so
+// a change that erases high-risk terms from a neutrally named file — or
+// deletes a high-risk file outright — still routes '/high/'.
+// ---------------------------------------------------------------------------
+
+function h3RoutingRuntime() {
+  const capabilities = [{
+    protocol_version: '2.0', adapter_id: 'claude-cli', provider: 'claude', available: true,
+    roles: ['standard', 'classifier'],
+    model_selection: { supported: true, aliases: ['swift', 'steady', 'deep', 'best'], catalog_complete: false, transport: 'flag:--model' },
+    effort_selection: { supported: true, levels: ['low', 'medium', 'high', 'xhigh', 'max'], transport: 'flag:--effort' },
+    structured_output: true, read_only_enforcement: 'process-contract',
+  }];
+  const reviewers = [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }];
+  return { capabilities, reviewers };
+}
+
+test('H3: removing a high-risk line from a neutrally named file still routes /high/ via the actual patch', async () => {
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = createGitFixture('h3-removed-content', { initialCommit: false });
+
+  fs.writeFileSync(
+    path.join(repo, 'session-notes.md'),
+    '# Session Notes\n\nRemember to check the authorization guard before merging.\n',
+  );
+  git(repo, ['add', '--', 'session-notes.md']);
+  git(repo, ['commit', '--quiet', '-m', 'base with a high-risk line']);
+  const baseSha = git(repo, ['rev-parse', 'HEAD']);
+
+  fs.writeFileSync(path.join(repo, 'session-notes.md'), '# Session Notes\n\nAll clear.\n');
+  git(repo, ['add', '--', 'session-notes.md']);
+  git(repo, ['commit', '--quiet', '-m', 'remove the high-risk line']);
+
+  const { capabilities, reviewers } = h3RoutingRuntime();
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'clean', '--review-base', baseSha, '--emit-routing-plan'],
+    {},
+    { capabilities, reviewers },
+  );
+  const route = result.routing_plan.routes.find((item) => item.reviewer_id === 'claude-opus');
+  assert.match(route.route_explanation, /\/high\//, 'the removed authorization line must still raise the routed risk floor to high');
+  assert.doesNotMatch(JSON.stringify(result), /authorization guard/, 'raw diff text must never be persisted into provenance or the routing plan');
+});
+
+test('H3: deleting a file whose base content held a high-risk term still routes /high/ via the actual patch', async () => {
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = createGitFixture('h3-deleted-file', { initialCommit: false });
+
+  fs.writeFileSync(
+    path.join(repo, 'ops-notes.md'),
+    '# Ops Notes\n\nRun the database migration script overnight.\n',
+  );
+  git(repo, ['add', '--', 'ops-notes.md']);
+  git(repo, ['commit', '--quiet', '-m', 'base with a high-risk file']);
+  const baseSha = git(repo, ['rev-parse', 'HEAD']);
+
+  // Delete the high-risk file and add an unrelated file so the 'clean' scope
+  // still has at least one classifiable artifact after the deletion.
+  fs.rmSync(path.join(repo, 'ops-notes.md'));
+  fs.writeFileSync(path.join(repo, 'readme.md'), '# Readme\n\nNothing special here.\n');
+  git(repo, ['add', '-A']);
+  git(repo, ['commit', '--quiet', '-m', 'delete the high-risk file, add an unrelated file']);
+
+  const { capabilities, reviewers } = h3RoutingRuntime();
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'clean', '--review-base', baseSha, '--emit-routing-plan'],
+    {},
+    { capabilities, reviewers },
+  );
+  const route = result.routing_plan.routes.find((item) => item.reviewer_id === 'claude-opus');
+  assert.match(route.route_explanation, /\/high\//, 'deleting a file whose base content held a high-risk term must still raise the routed risk floor to high');
+  assert.doesNotMatch(JSON.stringify(result), /database migration/, 'raw diff text must never be persisted into provenance or the routing plan');
+});
