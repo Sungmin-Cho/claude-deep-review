@@ -51,6 +51,19 @@ test('buildCapabilities emits five distinct protocol 2.0 adapter contracts', asy
   assert.notEqual(capabilities[2].adapter_id, capabilities[3].adapter_id);
 });
 
+// F4: codex-native-generic must fail closed on model overrides — no dispatch
+// path today transmits a model to the native generic subagent.
+test('F4: codex-native-generic declares no model transport, matching the honest codex-companion contract', async () => {
+  const { buildCapabilities } = await import(registryUrl);
+  const capabilities = buildCapabilities({
+    detected: detected(),
+    hostAssertions: { claudeNativeAgent: true, codexNativeGeneric: true },
+  });
+  const codexNativeGeneric = capabilities.find((item) => item.adapter_id === 'codex-native-generic');
+  assert.equal(codexNativeGeneric.model_selection.supported, false);
+  assert.equal(codexNativeGeneric.model_selection.transport, 'none');
+});
+
 test('host assertions are injected per run and absent assertions remain unknown', async () => {
   const { buildCapabilities } = await import(registryUrl);
   const absent = buildCapabilities({ detected: detected() });

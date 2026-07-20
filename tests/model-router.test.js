@@ -38,6 +38,15 @@ test('risk and size classifiers use deterministic high-risk signals and configur
   assert.equal(assessSize({ target_kind: 'code-change', changed_lines: 42 }, { code: [10, 20, 30] }), 'large');
 });
 
+// F3: preserved content-derived risk/size evidence must feed routing even when
+// the reduced artifact carries no raw content or diff text.
+test('F3: assessRisk honours a precomputed content_risk flag and assessSize falls back to line_count for code', async () => {
+  const { assessRisk, assessSize } = await import(routerUrl);
+  assert.equal(assessRisk([{ path: 'src/service.js', content_risk: 'high' }]), 'high');
+  assert.equal(assessRisk([{ path: 'src/service.js', content_risk: 'low' }]), 'low');
+  assert.equal(assessSize({ target_kind: 'code-change', line_count: 500 }), 'medium');
+});
+
 test('auto matrix routes kind × risk × size × role with symbolic tiers', async () => {
   const { routeReviewer } = await import(routerUrl);
   const cases = [
@@ -124,6 +133,47 @@ test('tier resolution follows project > user > adapter aliases and none aliases 
   assert.equal(routeReviewer(project).resolved.model, 'project-quality');
   project.overrides.providers.claude = { effort: 'none' };
   assert.equal(routeReviewer(project).requested.effort, 'minimal');
+});
+
+// F4: codex-native-generic now honestly declares no verified model transport
+// (model_selection.supported: false, transport: 'none', aliases: []). An
+// explicit override must fail closed — with no adapter-alias or tier-map
+// substitute available, it fails closed even when allow_fallback is set,
+// which is a stricter (and still correct) reading of "fail closed until a
+// verified transport exists". Automatic (non-explicit) routing is unaffected
+// and keeps resolving to the provider default.
+function codexNativeGenericCapability() {
+  return {
+    protocol_version: '2.0', adapter_id: 'codex-native-generic', provider: 'codex', available: true,
+    roles: ['standard', 'adversarial'], read_only_enforcement: 'agent-tool-allowlist',
+    model_selection: { supported: false, aliases: [], catalog_complete: false, transport: 'none' },
+    effort_selection: { supported: 'unknown', levels: ['minimal', 'low', 'medium', 'high', 'xhigh'], transport: 'unknown' },
+  };
+}
+
+test('F4: an explicit model override targeting codex-native-generic fails closed; automatic routing is unaffected', async () => {
+  const { routeReviewer } = await import(routerUrl);
+  const reviewer = { id: 'codex-review', provider: 'codex', role: 'standard', adapter_id: 'codex-native-generic' };
+  const explicit = request({
+    unit: { target_kind: 'code-change' }, reviewer,
+    overrides: { protocol_version: '2.0', routing_policy: 'auto', allow_fallback: false, providers: { codex: { model: 'gpt-explicit' } }, reviewers: {} },
+    capabilities: [codexNativeGenericCapability()],
+  });
+  assert.throws(() => routeReviewer(explicit), /ERROR_UNSUPPORTED_MODEL/);
+
+  // No adapter-alias or tier-map substitute is known for this adapter, so
+  // allow_fallback cannot silently swap in an unverified model either.
+  const withFallback = structuredClone(explicit);
+  withFallback.overrides.allow_fallback = true;
+  assert.throws(() => routeReviewer(withFallback), /ERROR_UNSUPPORTED_MODEL/);
+
+  const automatic = request({
+    unit: { target_kind: 'code-change' }, reviewer,
+    overrides: { protocol_version: '2.0', routing_policy: 'auto', allow_fallback: false, providers: {}, reviewers: {} },
+    capabilities: [codexNativeGenericCapability()],
+  });
+  const automaticResult = routeReviewer(automatic);
+  assert.equal(automaticResult.resolved.model, null);
 });
 
 test('buildRoutingPlan preserves the eligible reviewer set and emits protocol 2.0', async () => {

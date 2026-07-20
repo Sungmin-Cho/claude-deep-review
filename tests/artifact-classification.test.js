@@ -763,3 +763,63 @@ test('W3: a genuine design filename still fires the strong path signal', async (
   assert.ok(result.scores['design-document'] !== undefined, 'design filename must still score');
   assert.ok(result.signals.some((s) => s.type === 'filename'), 'expected a filename signal');
 });
+
+// ---------------------------------------------------------------------------
+// F2: preflight semantic classification stays gated behind explicit opt-in —
+// `--emit-routing-plan` alone (the flag the supported review preflight always
+// passes) must never enable the external classifier.
+// ---------------------------------------------------------------------------
+
+test('F2: --emit-routing-plan alone never enables semantic classification; explicit allow_classifier does', async () => {
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-f2-preflight-');
+  fs.writeFileSync(path.join(repo, 'ambiguous-notes.md'), fixture('ambiguous-notes.md'));
+  const listPath = path.join(repo, 'targets.z');
+  fs.writeFileSync(listPath, 'ambiguous-notes.md\0');
+
+  const capabilities = [{
+    protocol_version: '2.0', adapter_id: 'claude-cli', provider: 'claude', available: true,
+    roles: ['standard', 'classifier'],
+    model_selection: { supported: true, aliases: ['swift', 'steady', 'deep', 'best'], catalog_complete: false, transport: 'flag:--model' },
+    effort_selection: { supported: true, levels: ['low', 'medium', 'high', 'xhigh', 'max'], transport: 'flag:--effort' },
+    structured_output: true, read_only_enforcement: 'process-contract',
+  }];
+  const reviewers = [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }];
+
+  let defaultCalls = 0;
+  const defaultResult = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', listPath, '--emit-routing-plan'],
+    {},
+    {
+      capabilities, reviewers,
+      semanticAdapter: async () => { defaultCalls += 1; return {}; },
+    },
+  );
+  assert.equal(defaultCalls, 0, 'the classifier must never run on plain --emit-routing-plan preflight');
+  const deferredArtifact = defaultResult.artifacts.find((artifact) => artifact.path === 'ambiguous-notes.md');
+  assert.equal(deferredArtifact.needs_semantic, true);
+  assert.equal(deferredArtifact.semantic_status, 'deferred');
+
+  let optInCalls = 0;
+  const overridesJson = JSON.stringify({
+    protocol_version: '2.0', routing_policy: 'auto', allow_fallback: false, allow_classifier: true,
+    providers: {}, reviewers: {},
+  });
+  const optInResult = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', listPath, '--emit-routing-plan', '--overrides-json', overridesJson],
+    {},
+    {
+      capabilities, reviewers,
+      semanticAdapter: async () => {
+        optInCalls += 1;
+        return {
+          classification_version: '1.0', target_kind: 'research-note', confidence: 0.9,
+          signals: [], alternative_kinds: [], uncertainty_action: 'proceed', notes: '',
+        };
+      },
+    },
+  );
+  assert.equal(optInCalls, 1, 'explicit allow_classifier must enable the semantic path');
+  const optInArtifact = optInResult.artifacts.find((artifact) => artifact.path === 'ambiguous-notes.md');
+  assert.notEqual(optInArtifact.semantic_status, 'deferred');
+});

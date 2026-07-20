@@ -57,7 +57,7 @@ export function buildSemanticPayload(descriptor, classification, { maxBytes = 24
       line_count: descriptor.line_count || 0,
       extension: descriptor.extension || '',
     },
-    heading_index: [...new Set(headingIndex(`${descriptor.content || ''}\n${combined}`))],
+    heading_index: [...new Set(headingIndex(combined))],
     snippets: { head: snippets.head || '', middle: snippets.middle || '', tail: snippets.tail || '' },
     sibling_paths: Array.isArray(descriptor.sibling_paths) ? descriptor.sibling_paths.slice(0, 100) : [],
     deterministic: {
@@ -71,8 +71,13 @@ export function buildSemanticPayload(descriptor, classification, { maxBytes = 24
 }
 
 export function containsSecretSignature(payload) {
-  const snippets = Object.values(payload?.snippets || {}).join('\n');
-  return SECRET_SIGNATURES.some((pattern) => pattern.test(snippets));
+  const text = [
+    ...Object.values(payload?.snippets || {}),
+    ...(payload?.heading_index || []),
+    ...(payload?.sibling_paths || []),
+    payload?.path || '',
+  ].join('\n');
+  return SECRET_SIGNATURES.some((pattern) => pattern.test(text));
 }
 
 export function selectSemanticAdapter(capabilities = [], adapters = {}) {

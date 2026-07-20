@@ -83,6 +83,57 @@ test('secret signatures and sensitive paths skip adapter invocation without payl
   assert.equal(calls, 0);
 });
 
+// ---------------------------------------------------------------------------
+// F1: heading_index must be bounded to the sampled windows, and the secret
+// guard must scan every transmitted channel (snippets, heading_index,
+// sibling_paths, path) as raw text — not just the snippet windows.
+// ---------------------------------------------------------------------------
+
+test('F1: heading_index only reflects the bounded sampled windows, never content outside them', async () => {
+  const { buildSemanticPayload } = await import(semanticUrl);
+  const maxBytes = 300; // chunk = 100 bytes per window
+  const before = `${'x'.repeat(199)}\n`; // bytes [0,200) — outside the head window ends at 100
+  const secretHeading = '## api_key = "supersecretvalue123"\n';
+  const afterLength = 1000 - before.length - secretHeading.length;
+  const after = 'y'.repeat(Math.max(0, afterLength));
+  const content = before + secretHeading + after;
+  assert.equal(Buffer.byteLength(content), 1000, 'fixture must be exactly 1000 bytes for the window math below');
+
+  const payload = buildSemanticPayload(descriptor({ content, byte_size: 1000 }), provisional(), { maxBytes });
+  // head = [0,100), middle = [450,550), tail = [900,1000) — the heading at
+  // byte offset 200 falls strictly in the [100,450) gap between windows.
+  assert.equal(payload.heading_index.includes('api_key = "supersecretvalue123"'), false);
+  assert.doesNotMatch(JSON.stringify(payload), /supersecretvalue123/);
+});
+
+test('F1: containsSecretSignature scans heading_index, sibling_paths, and path even when snippets alone would not match', async () => {
+  const { containsSecretSignature } = await import(semanticUrl);
+  const clean = { snippets: { head: 'nothing sensitive here', middle: '', tail: '' }, heading_index: [], sibling_paths: [], path: 'docs/notes.md' };
+  assert.equal(containsSecretSignature(clean), false);
+
+  const headingLeak = { ...clean, heading_index: ['api_key = "supersecretvalue123"'] };
+  assert.equal(containsSecretSignature(headingLeak), true);
+
+  const siblingLeak = { ...clean, sibling_paths: ['config/api_key = "supersecretvalue123".md'] };
+  assert.equal(containsSecretSignature(siblingLeak), true);
+
+  const pathLeak = { ...clean, path: 'secret = "supersecretvalue123"' };
+  assert.equal(containsSecretSignature(pathLeak), true);
+});
+
+test('F1: a secret-like heading sampled inside a window is caught before the adapter is invoked', async () => {
+  const { classifyWithSemantic } = await import(semanticUrl);
+  let calls = 0;
+  const adapter = async () => { calls += 1; return {}; };
+  const result = await classifyWithSemantic({
+    descriptor: descriptor({ content: '## api_key = "supersecretvalue123"\nSome bounded text.\n' }),
+    classification: provisional(), repoRoot: root, pluginRoot: root, adapter,
+  });
+  assert.equal(result.semantic_status, 'skipped-sensitive-content');
+  assert.equal(calls, 0);
+  assert.doesNotMatch(JSON.stringify(result), /supersecretvalue123/);
+});
+
 test('clear cases never call semantic; ambiguous malformed/timeout cases retain deterministic result', async () => {
   const { classifyWithSemantic } = await import(semanticUrl);
   let calls = 0;

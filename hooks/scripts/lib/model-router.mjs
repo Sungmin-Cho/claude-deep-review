@@ -15,6 +15,7 @@ const SIZE_NAMES = Object.freeze(['tiny', 'small', 'medium', 'large']);
 const EFFORT_ORDER = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 
 export function assessRisk(artifacts = []) {
+  if (artifacts.some((artifact) => artifact.content_risk === 'high')) return 'high';
   const text = artifacts.map((artifact) => [
     artifact.path, artifact.diff, artifact.content, artifact.signal_summary,
   ].filter(Boolean).join('\n')).join('\n');
@@ -25,7 +26,9 @@ export function assessSize(artifact = {}, thresholds = {}) {
   const codeThresholds = thresholds.code || [100, 400, 1500];
   const documentThresholds = thresholds.document || [10 * 1024, 30 * 1024, 100 * 1024];
   const isCode = artifact.target_kind === 'code-change' || Number.isFinite(artifact.changed_lines);
-  const value = isCode ? Number(artifact.changed_lines || 0) : Number(artifact.byte_size || 0);
+  const value = isCode
+    ? Number(Number.isFinite(artifact.changed_lines) ? artifact.changed_lines : (artifact.line_count ?? 0))
+    : Number(artifact.byte_size || 0);
   const limits = isCode ? codeThresholds : documentThresholds;
   const index = limits.findIndex((limit) => value <= limit);
   return SIZE_NAMES[index < 0 ? 3 : index];

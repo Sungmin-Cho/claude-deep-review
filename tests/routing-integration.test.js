@@ -11,6 +11,7 @@ const root = path.resolve(__dirname, '..');
 const classifyUrl = pathToFileURL(path.join(root, 'hooks/scripts/classify-artifacts.mjs')).href;
 const routeUrl = pathToFileURL(path.join(root, 'hooks/scripts/public-route.mjs')).href;
 const claudeUrl = pathToFileURL(path.join(root, 'hooks/scripts/run-claude-reviewer.mjs')).href;
+const modelRouterUrl = pathToFileURL(path.join(root, 'hooks/scripts/lib/model-router.mjs')).href;
 
 function claudeCapability() {
   return {
@@ -88,4 +89,38 @@ test('workflow/report contracts wire conditional routing plan consumption while 
   assert.match(report, /## Routing Plan/);
   assert.match(report, /## Provenance/);
   assert.match(report, /requested-but-unverified/);
+});
+
+// F3: risk assessment must see artifact content evidence even though the
+// reduced provenance artifacts only carry non-sensitive scalar fields.
+test('F3: high-risk content under a neutral filename still routes as high risk', async () => {
+  const { classifyArtifactsScope } = await import(classifyUrl);
+  const { buildRoutingPlan } = await import(modelRouterUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-f3-content-risk-'));
+  fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
+  fs.writeFileSync(
+    path.join(repo, 'src', 'service.js'),
+    '// runs the payment migration workflow\nfunction run() { return true; }\n',
+  );
+
+  const result = classifyArtifactsScope({ repo, changeState: 'non-git', filesFromZ: Buffer.from('src/service.js\0') });
+  const artifact = result.artifacts.find((item) => item.path === 'src/service.js');
+  assert.equal(artifact.content_risk, 'high', 'neutral filename must still carry high content risk');
+  assert.doesNotMatch(JSON.stringify(artifact), /payment migration workflow/, 'reduced artifact must not persist raw content');
+
+  const reviewers = [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }];
+  const capabilities = [{
+    protocol_version: '2.0', adapter_id: 'claude-cli', provider: 'claude', available: true,
+    roles: ['standard'],
+    model_selection: { supported: true, aliases: ['swift', 'steady', 'deep', 'best'], catalog_complete: false, transport: 'flag:--model' },
+    effort_selection: { supported: true, levels: ['low', 'medium', 'high', 'xhigh', 'max'], transport: 'flag:--effort' },
+    structured_output: true, read_only_enforcement: 'process-contract',
+  }];
+  const plan = buildRoutingPlan({
+    artifacts: result.artifacts, reviewers,
+    policy: { routing: { policy: 'auto' } },
+    overrides: { protocol_version: '2.0', routing_policy: 'auto', allow_fallback: false, providers: {}, reviewers: {} },
+    capabilities,
+  });
+  assert.match(plan.routes[0].route_explanation, /\/high\//);
 });

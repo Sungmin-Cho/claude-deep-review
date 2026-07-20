@@ -91,7 +91,7 @@ export function buildCapabilities({ detected = {}, hostAssertions = {}, probes =
     baseCapability({
       adapterId: 'codex-native-generic', provider: 'codex',
       available: assertion(hostAssertions.codexNativeGeneric), invocationModes: ['generic-review'],
-      modelSelection: { supported: true, aliases: [], catalog_complete: false, transport: 'agent-parameter' },
+      modelSelection: { supported: false, aliases: [], catalog_complete: false, transport: 'none' },
       effortSelection: { supported: 'unknown', levels: ['minimal', 'low', 'medium', 'high', 'xhigh'], transport: 'unknown' },
       background: false, readOnlyEnforcement: 'agent-tool-allowlist',
     }),

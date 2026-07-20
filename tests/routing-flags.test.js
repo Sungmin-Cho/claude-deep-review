@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 const { pathToFileURL } = require('node:url');
 
 const root = path.resolve(__dirname, '..');
@@ -74,4 +75,73 @@ test('public skill forwards normalized routing overrides as one compact JSON arg
   assert.match(skill, /--overrides-json/);
   assert.match(skill, /JSON\.stringify\(route\.overrides\)/);
   assert.match(skill, /single argv\s+value|single argument/i);
+});
+
+// ---------------------------------------------------------------------------
+// F5: an explicit non-default --routing policy must become an applicable
+// execution override; a policy-file-only routing policy (or --routing auto)
+// must not.
+// ---------------------------------------------------------------------------
+
+function routingTestCapabilities() {
+  return [{
+    protocol_version: '2.0', adapter_id: 'claude-cli', provider: 'claude', available: true,
+    roles: ['standard'],
+    model_selection: { supported: true, aliases: ['swift', 'steady', 'deep', 'best'], catalog_complete: false, transport: 'flag:--model' },
+    effort_selection: { supported: true, levels: ['low', 'medium', 'high', 'xhigh', 'max'], transport: 'flag:--effort' },
+    structured_output: true, read_only_enforcement: 'process-contract',
+  }];
+}
+
+const routingTestReviewers = [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }];
+
+test('F5: an explicit CLI --routing quality marks the plan explicit and upgrades the resolved tier', async () => {
+  const { parsePublicRoute } = await import(routeUrl);
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-f5-cli-routing-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const route = parsePublicRoute({ entry: 'review', host: 'claude', cwd: repo, argv: ['--routing', 'quality'] });
+  assert.equal(route.ok, true);
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', files, '--overrides-json', JSON.stringify(route.overrides), '--emit-routing-plan'],
+    {},
+    { capabilities: routingTestCapabilities(), reviewers: routingTestReviewers },
+  );
+  assert.equal(result.routing_plan.explicit_overrides, true);
+  const [firstRoute] = result.routing_plan.routes;
+  assert.ok(
+    ['quality', 'maximum'].includes(firstRoute.requested.model_tier) || /quality|maximum/.test(firstRoute.route_explanation),
+    'quality routing policy must upgrade the resolved tier',
+  );
+});
+
+test('F5: a policy-file-only routing policy and --routing auto stay non-explicit', async () => {
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-f5-policy-routing-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const policyOnly = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', files, '--emit-routing-plan'],
+    {},
+    {
+      capabilities: routingTestCapabilities(), reviewers: routingTestReviewers,
+      projectPolicy: { routing: { policy: 'quality' } },
+    },
+  );
+  assert.equal(policyOnly.routing_plan.explicit_overrides, false);
+
+  const { parsePublicRoute } = await import(routeUrl);
+  const autoRoute = parsePublicRoute({ entry: 'review', host: 'claude', cwd: repo, argv: ['--routing', 'auto'] });
+  assert.equal(autoRoute.ok, true);
+  const autoResult = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', files, '--overrides-json', JSON.stringify(autoRoute.overrides), '--emit-routing-plan'],
+    {},
+    { capabilities: routingTestCapabilities(), reviewers: routingTestReviewers },
+  );
+  assert.equal(autoResult.routing_plan.explicit_overrides, false);
 });

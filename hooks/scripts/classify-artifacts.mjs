@@ -29,7 +29,7 @@ import {
   buildCapabilities,
   probeCapabilities,
 } from './lib/capability-registry.mjs';
-import { buildRoutingPlan, renderRoutingExplanation } from './lib/model-router.mjs';
+import { assessRisk, buildRoutingPlan, renderRoutingExplanation } from './lib/model-router.mjs';
 import {
   loadReviewPolicy,
   loadUserConfig,
@@ -93,6 +93,9 @@ export function classifyArtifactsScope(options = {}) {
       signal_summary: signalSummary(classification),
       signals: classification.signals,
       alternatives: classification.alternatives,
+      byte_size: descriptor.byte_size,
+      line_count: descriptor.line_count,
+      content_risk: assessRisk([{ path: descriptor.path, content: descriptor.content, signal_summary: signalSummary(classification) }]),
     };
   });
 
@@ -292,6 +295,7 @@ function hasExecutionOverride(overrides) {
   return Boolean(overrides && (
     Object.values(overrides.providers || {}).some((value) => value.model !== undefined || value.effort !== undefined)
     || Object.values(overrides.reviewers || {}).some((value) => value.model !== undefined || value.effort !== undefined)
+    || (overrides.routing_policy !== undefined && overrides.routing_policy !== 'auto')
   ));
 }
 
@@ -374,7 +378,9 @@ export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env 
     });
   }
   const semanticEnabled = policy.features?.semantic_classifier !== false
-    && (options.emitRoutingPlan || options.overrides?.allow_classifier);
+    && (options.overrides?.allow_classifier === true
+      || policy.user?.features?.semantic_classifier === true
+      || policy.project?.features?.semantic_classifier === true);
   let result = semanticEnabled
     ? await classifyArtifactsScopeWithSemantic({
       ...classificationOptions,
@@ -404,7 +410,7 @@ export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env 
     allow_fallback: Boolean(policy.routing?.allow_fallback), allow_classifier: false,
     providers: {}, reviewers: {},
   };
-  const explicit = hasExecutionOverride(overrides);
+  const explicit = hasExecutionOverride(options.overrides);
   for (const provider of Object.keys(overrides.providers || {})) {
     if (explicit && !reviewers.some((reviewer) => reviewer.provider === provider)) {
       throw new Error(`ERROR_PROVIDER_UNAVAILABLE: no eligible reviewer for explicit ${provider} override`);
