@@ -37,11 +37,20 @@ function stripDotSegments(pathText) {
 
 /**
  * Normalize a report-extracted path into a repo-relative, slash-delimited
- * identity key. Mirrors loop-state.mjs `assertSamePath`'s win32-only
- * case-fold rule; canonicalization otherwise never resolves against the
- * filesystem (pure string handling).
+ * key. Mirrors loop-state.mjs `assertSamePath`'s win32-only case-fold rule;
+ * canonicalization otherwise never resolves against the filesystem (pure
+ * string handling).
+ *
+ * `caseFold` (default true) governs ONLY the final win32 lowercasing that
+ * produces a case-insensitive IDENTITY key. The repoRoot prefix match always
+ * folds case on win32 — a case-insensitive filesystem has one root regardless
+ * of the citation's case — but slices from the case-preserving path, so
+ * `caseFold: false` returns a case-PRESERVING DISPLAY path (repo-relativized
+ * and separator-normalized, but otherwise verbatim) for `findings_signature`
+ * and advisory rendering that must read identically on win32 and posix. The
+ * win32 case-insensitive identity match then lives in `matchFindings`.
  */
-export function canonicalizeRepoPath(rawPath, { repoRoot, platform = process.platform } = {}) {
+export function canonicalizeRepoPath(rawPath, { repoRoot, platform = process.platform, caseFold = true } = {}) {
   assertNonEmptyString(rawPath, 'path');
   const isWin = platform === 'win32';
   let normalized = rawPath.replace(/\\/gu, '/');
@@ -57,7 +66,7 @@ export function canonicalizeRepoPath(rawPath, { repoRoot, platform = process.pla
   }
 
   normalized = stripDotSegments(normalized);
-  if (isWin) normalized = normalized.toLowerCase();
+  if (isWin && caseFold) normalized = normalized.toLowerCase();
   return normalized;
 }
 
@@ -87,8 +96,15 @@ function severityAt(lineText) {
  * review report's Critical/Warning sections. Reuses loop-state.mjs
  * `signatures()`'s backtick + bare file:line detection so identity stays
  * aligned with the existing (vestigial) findings_signature extraction.
+ *
+ * `path` is a case-PRESERVING display path (`caseFold: false`): repo-relative
+ * and slash-normalized, but never lowercased, so `findings_signature` and the
+ * prior-context advisory render byte-identically on win32 and posix. The
+ * win32-only case-insensitive IDENTITY comparison happens later in
+ * `matchFindings`; `platform` is threaded through only so tests can pin win32
+ * behavior from a posix host.
  */
-export function extractFindings(markdown, { repoRoot } = {}) {
+export function extractFindings(markdown, { repoRoot, platform = process.platform } = {}) {
   if (typeof markdown !== 'string') throw new TypeError('markdown must be a string');
   const findings = [];
   let severity = '';
@@ -117,7 +133,7 @@ export function extractFindings(markdown, { repoRoot } = {}) {
     for (const match of matches) {
       findings.push({
         severity,
-        path: canonicalizeRepoPath(match[1], { repoRoot }),
+        path: canonicalizeRepoPath(match[1], { repoRoot, platform, caseFold: false }),
         line: Number(match[2]),
         title_slug: slug,
       });
@@ -132,18 +148,26 @@ export function extractFindings(markdown, { repoRoot } = {}) {
  * an exact title_slug match outranks a closer line distance so an unrelated
  * finding at the same edited hunk is not mismatched. Unmatched entries are
  * conservatively classified resolved (previous-only) or added (current-only).
+ *
+ * Findings carry case-PRESERVING display paths (see `extractFindings`), so the
+ * win32-only case-insensitive IDENTITY match lives here: on win32 the path
+ * comparison folds case — preserving the case-insensitive-filesystem semantics
+ * the old extract-time fold provided — while posix stays case-sensitive.
+ * `platform` is injectable for tests; production defaults to `process.platform`.
  */
-export function matchFindings(previous = [], current = [], { tolerance = 6 } = {}) {
+export function matchFindings(previous = [], current = [], { tolerance = 6, platform = process.platform } = {}) {
   if (!Array.isArray(previous) || !Array.isArray(current)) {
     throw new TypeError('previous and current must be arrays');
   }
+  const isWin = platform === 'win32';
+  const foldPath = (value) => (isWin && typeof value === 'string' ? value.toLowerCase() : value);
   const candidates = [];
   for (let p = 0; p < previous.length; p += 1) {
     const prevFinding = previous[p];
     for (let c = 0; c < current.length; c += 1) {
       const currFinding = current[c];
       if (prevFinding.severity !== currFinding.severity) continue;
-      if (prevFinding.path !== currFinding.path) continue;
+      if (foldPath(prevFinding.path) !== foldPath(currFinding.path)) continue;
       const distance = Math.abs(prevFinding.line - currFinding.line);
       if (distance > tolerance) continue;
       const slugMatch = Boolean(prevFinding.title_slug) && prevFinding.title_slug === currFinding.title_slug;

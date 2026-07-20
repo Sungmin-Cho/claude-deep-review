@@ -188,9 +188,12 @@ function categoryFor(findings, file, line) {
  * `repoRoot` is threaded straight into `extractFindings` so paths canonicalize
  * on the SAME basis as `record-round` (single source of truth): with a repo
  * root an absolute `/repo/src/a.js` and a `./src/a.js` both fold to `src/a.js`,
- * and without one the legacy relative-path signature is unchanged. Each entry
- * buckets the line into a 7-line window and tags it with the recurring-findings
- * category; the set is deterministically sorted.
+ * and without one the legacy relative-path signature is unchanged. Because
+ * `extractFindings` yields case-PRESERVING display paths (no win32 lowercasing),
+ * the signature reads byte-identically on win32 and posix; cross-round identity
+ * folding lives in `matchFindings`, never here. Each entry buckets the line
+ * into a 7-line window and tags it with the recurring-findings category; the
+ * set is deterministically sorted.
  */
 function signatures(review, recurringFindings, { repoRoot } = {}) {
   const result = new Set();
@@ -278,6 +281,10 @@ function actionReason(blockText) {
  * line only) location token anywhere in its block is conservatively excluded
  * and counted in `skippedRejects` — session-only, advisory-only memory never
  * silently invents a location.
+ *
+ * The stored `path` is a case-PRESERVING display path (`caseFold: false`):
+ * rejected items are rendered verbatim in the prior-context advisory and never
+ * identity-matched, so they read identically on win32 and posix.
  */
 function parseRejectedItems(response, { repoRoot } = {}) {
   if (!response) return { rejected: [], skippedRejects: 0 };
@@ -291,7 +298,7 @@ function parseRejectedItems(response, { repoRoot } = {}) {
       continue;
     }
     rejected.push({
-      path: canonicalizeRepoPath(location.path, { repoRoot }),
+      path: canonicalizeRepoPath(location.path, { repoRoot, caseFold: false }),
       line: location.line,
       reason: actionReason(block),
     });
@@ -532,7 +539,10 @@ export function compareRounds(options = {}) {
 
   const previousFindings = Array.isArray(previous.findings) ? previous.findings : [];
   const currentFindings = Array.isArray(current.findings) ? current.findings : [];
-  const { repeated, resolved, added } = matchFindings(previousFindings, currentFindings);
+  // Findings carry case-preserving display paths; matchFindings re-applies the
+  // win32-only case-insensitive identity fold. `options.platform` is undefined
+  // in production, so matchFindings falls back to `process.platform`.
+  const { repeated, resolved, added } = matchFindings(previousFindings, currentFindings, { platform: options.platform });
   const largerSetSize = Math.max(previousFindings.length, currentFindings.length);
   const repeatRatio = largerSetSize > 0 ? repeated.length / largerSetSize : 0;
 
