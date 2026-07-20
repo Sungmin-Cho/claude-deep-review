@@ -990,3 +990,249 @@ test('cleanup-residue missing tmp dir early-return includes a uniform errors:[] 
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.json.errors, []);
 });
+
+// --- ws-02: opt-in per-session single review document (render-session-doc) ----
+// A derived, in-place consolidated review doc keyed by loop_id. It NEVER
+// replaces per-round canonical `*-review.md` files (resolveRoundReport's
+// fail-closed REPORT_DELTA_COUNT invariant stays intact); the session doc lives
+// in the same reports dir with a `loop-<id>-review.md` name and must be excluded
+// from listReports so snapshot/resolve delta accounting never miscounts it.
+const { readdirSync } = require('node:fs');
+
+function makeSessionFixtures(root) {
+  const reportsDir = join(root, '.deep-review', 'reports');
+  const responsesDir = join(root, '.deep-review', 'responses');
+  const tmpDir = join(root, '.deep-review', 'tmp');
+  mkdirSync(reportsDir, { recursive: true });
+  mkdirSync(responsesDir, { recursive: true });
+  mkdirSync(tmpDir, { recursive: true });
+  return { reportsDir, responsesDir, tmpDir };
+}
+
+function recordSessionRound(dirs, { round, loopId, review, response }) {
+  const reviewPath = join(dirs.reportsDir, `2026-07-19-09${String(round).padStart(2, '0')}00-review.md`);
+  writeFileSync(reviewPath, review);
+  let responsePath;
+  if (response) {
+    responsePath = join(dirs.responsesDir, `2026-07-19-09${String(round).padStart(2, '0')}30-response.md`);
+    writeFileSync(responsePath, response);
+  }
+  const args = [
+    'record-round', '--round-number', String(round), '--review-report', reviewPath,
+    '--loop-id', loopId, '--base-commit', 'deadbeef', '--state-dir', dirs.tmpDir,
+  ];
+  if (responsePath) args.push('--response-report', responsePath);
+  const result = runCli(args);
+  assert.equal(result.status, 0, result.stderr);
+  return { reviewPath, responsePath, stateFile: result.json.state_file };
+}
+
+const SD_RESPONSE = [
+  '# Response Report',
+  '## Summary',
+  '- **Items**: 수락 1건, 반박 0건, 보류 0건',
+  '- **implemented_count**: 1',
+  '- **halted**: false',
+].join('\n');
+
+test('record-round persists the round review/response report paths so the session doc can link them', async () => {
+  const { recordRound } = await loadLoopState();
+  const root = temporaryDirectory();
+  const { reviewPath, responsePath, tmpDir } = writeFixtures(root);
+  const result = recordRound({
+    roundNumber: 1,
+    reviewReport: reviewPath,
+    responseReport: responsePath,
+    baseCommit: 'deadbeef',
+    stateDir: tmpDir,
+  });
+  const persisted = JSON.parse(readFileSync(result.state_file, 'utf8'));
+  assert.equal(persisted.round_review_report_path, resolve(reviewPath));
+  assert.equal(persisted.response_report_path, resolve(responsePath));
+});
+
+test('record-round with no response report records response_report_path=null', async () => {
+  const { recordRound } = await loadLoopState();
+  const root = temporaryDirectory();
+  const { reviewPath, tmpDir } = writeFixtures(root);
+  const result = recordRound({
+    roundNumber: 1, reviewReport: reviewPath, baseCommit: 'deadbeef', stateDir: tmpDir,
+  });
+  const persisted = JSON.parse(readFileSync(result.state_file, 'utf8'));
+  assert.equal(persisted.round_review_report_path, resolve(reviewPath));
+  assert.equal(persisted.response_report_path, null);
+});
+
+test('default OFF: record-round writes NO session doc into the reports dir (loop-<id>-review.md absent)', () => {
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  recordSessionRound(dirs, { round: 1, loopId: 'off-loop', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  const reportFiles = readdirSync(dirs.reportsDir);
+  assert.equal(reportFiles.some((name) => /^loop-.+-review\.md$/u.test(name)), false);
+});
+
+test('render-session-doc renders latest verdict, per-round history, and round report links (deterministic body)', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  const r1 = recordSessionRound(dirs, { round: 1, loopId: 'sess-A', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  const r2 = recordSessionRound(dirs, { round: 2, loopId: 'sess-A', review: ROUND2_REVIEW, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-sess-A-review.md');
+  const rendered = renderSessionDoc({
+    loopId: 'sess-A', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output,
+  });
+  assert.equal(rendered.output_file, output);
+  assert.equal(rendered.rounds, 2);
+  const body = readFileSync(output, 'utf8');
+  assert.match(body, /^<!-- SESSION-DOC v1 loop_id=sess-A rounds=2 -->/u);
+  // Latest verdict is round 2's CONCERN, never synthesized.
+  assert.match(body, /Latest verdict.*CONCERN.*round 2/u);
+  // Per-round history rows for both rounds.
+  assert.match(body, /\| 1 \| REQUEST_CHANGES \|/u);
+  assert.match(body, /\| 2 \| CONCERN \|/u);
+  // Report links are relativized against the .deep-review root, forward-slashed.
+  assert.match(body, /reports\/2026-07-19-090100-review\.md/u);
+  assert.match(body, /responses\/2026-07-19-090230-response\.md/u);
+  // Round 1's absolute review path from state must not leak as an absolute link.
+  assert.equal(body.includes(r1.reviewPath), false);
+  assert.equal(body.includes(r2.stateFile), false);
+});
+
+test('render-session-doc open vs resolved rollup reuses matchFindings (B resolved, A repeated, D added)', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  // Round 1: A(src/a.js:10) B(src/b.js:20) C(src/c.js:30)
+  // Round 2: A(src/a.js:10) B(src/b.js:23, within tolerance→repeated) D(src/d.js:5)
+  recordSessionRound(dirs, { round: 1, loopId: 'sess-B', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  recordSessionRound(dirs, { round: 2, loopId: 'sess-B', review: ROUND2_REVIEW, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-sess-B-review.md');
+  renderSessionDoc({ loopId: 'sess-B', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output });
+  const body = readFileSync(output, 'utf8');
+  // Open findings = latest (round 2): a.js:10, b.js:23, d.js:5.
+  assert.match(body, /## Open findings \(round 2\) — 3/u);
+  assert.match(body, /`src\/d\.js:5`/u);
+  // C (src/c.js:30) was in round 1 only → resolved. Section counts exactly 1.
+  assert.match(body, /## Resolved since round 1 — 1/u);
+  assert.match(body, /`src\/c\.js:30`/u);
+});
+
+test('render-session-doc is idempotent — same state inputs produce a byte-identical doc', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  recordSessionRound(dirs, { round: 1, loopId: 'sess-C', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  recordSessionRound(dirs, { round: 2, loopId: 'sess-C', review: ROUND2_REVIEW, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-sess-C-review.md');
+  renderSessionDoc({ loopId: 'sess-C', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output });
+  const first = readFileSync(output, 'utf8');
+  renderSessionDoc({ loopId: 'sess-C', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output });
+  const second = readFileSync(output, 'utf8');
+  assert.equal(first, second);
+});
+
+test('render-session-doc atomic write leaves no .tmp residue in the reports dir', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  recordSessionRound(dirs, { round: 1, loopId: 'sess-D', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-sess-D-review.md');
+  renderSessionDoc({ loopId: 'sess-D', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output });
+  const names = readdirSync(dirs.reportsDir);
+  assert.equal(names.some((name) => name.includes('.tmp.')), false);
+  assert.equal(names.includes('loop-sess-D-review.md'), true);
+});
+
+test('render-session-doc throws NO_ROUNDS when the loop id has no round state', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  const output = join(dirs.reportsDir, 'loop-missing-review.md');
+  assert.throws(
+    () => renderSessionDoc({ loopId: 'missing', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output }),
+    (error) => error.code === 'NO_ROUNDS',
+  );
+});
+
+test('render-session-doc CLI is registered and produces the file (round trip)', () => {
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  recordSessionRound(dirs, { round: 1, loopId: 'sess-cli', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-sess-cli-review.md');
+  const result = runCli([
+    'render-session-doc', '--loop-id', 'sess-cli', '--tmp-dir', dirs.tmpDir,
+    '--reports-dir', dirs.reportsDir, '--output', output,
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.json.ok, true);
+  assert.equal(result.json.output_file, output);
+  assert.match(readFileSync(output, 'utf8'), /SESSION-DOC v1/u);
+});
+
+test('render-session-doc only reads THIS loop\'s round state, ignoring sibling loops in the same tmp dir', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  recordSessionRound(dirs, { round: 1, loopId: 'mine', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  recordSessionRound(dirs, { round: 1, loopId: 'other', review: ROUND2_REVIEW, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-mine-review.md');
+  const rendered = renderSessionDoc({ loopId: 'mine', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output });
+  assert.equal(rendered.rounds, 1);
+  const body = readFileSync(output, 'utf8');
+  assert.match(body, /loop_id=mine/u);
+  // The sibling loop's distinctive finding (src/d.js:5) must not appear.
+  assert.equal(body.includes('src/d.js:5'), false);
+});
+
+// --- ws-02: session doc is excluded from the report-set delta accounting -------
+test('snapshotReports excludes a loop-<id>-review.md session doc while keeping canonical timestamped reports', async () => {
+  const { snapshotReports } = await loadLoopState();
+  const root = temporaryDirectory();
+  const reportsDir = join(root, '.deep-review', 'reports');
+  mkdirSync(reportsDir, { recursive: true });
+  const canonical = join(reportsDir, '2026-07-19-100000-review.md');
+  writeFileSync(canonical, '# canonical\n');
+  writeFileSync(join(reportsDir, 'loop-sess-X-review.md'), '# session doc\n');
+  const snap = snapshotReports({ reportsDir });
+  assert.deepEqual(snap.reports, [resolve(canonical)]);
+});
+
+test('resolveRoundReport delta stays exactly 1 even when a session doc is present across the round window (invariant preserved)', () => {
+  const root = temporaryDirectory();
+  const reportsDir = join(root, '.deep-review', 'reports');
+  const snapshot = join(root, '.deep-review', 'tmp', 'snap.json');
+  mkdirSync(reportsDir, { recursive: true });
+  mkdirSync(join(root, '.deep-review', 'tmp'), { recursive: true });
+  // Pre-existing canonical report + a session doc already present.
+  writeFileSync(join(reportsDir, '2026-07-19-100000-review.md'), '# old\n');
+  writeFileSync(join(reportsDir, 'loop-sess-Y-review.md'), '# session doc pre\n');
+  const before = runCli(['snapshot-reports', '--reports-dir', reportsDir, '--output', snapshot]);
+  assert.equal(before.status, 0, before.stderr);
+  // The round creates exactly one new canonical report; the session doc is
+  // ALSO re-rendered in place (same path, still present) — it must not count.
+  const newCanonical = join(reportsDir, '2026-07-19-100100-review.md');
+  writeFileSync(newCanonical, '# new canonical\n');
+  writeFileSync(join(reportsDir, 'loop-sess-Y-review.md'), '# session doc post\n');
+  const resolved = runCli(['resolve-round-report', '--reports-dir', reportsDir, '--snapshot-file', snapshot]);
+  assert.equal(resolved.status, 0, resolved.stderr);
+  assert.equal(resolved.json.report_path, resolve(newCanonical));
+  assert.equal(resolved.json.count, 1);
+});
+
+test('resolveRoundReport does NOT treat a newly-created session doc as the round report (a session doc alone is delta 0 → terminal)', () => {
+  const root = temporaryDirectory();
+  const reportsDir = join(root, '.deep-review', 'reports');
+  const snapshot = join(root, '.deep-review', 'tmp', 'snap.json');
+  mkdirSync(reportsDir, { recursive: true });
+  mkdirSync(join(root, '.deep-review', 'tmp'), { recursive: true });
+  writeFileSync(join(reportsDir, '2026-07-19-100000-review.md'), '# old\n');
+  const before = runCli(['snapshot-reports', '--reports-dir', reportsDir, '--output', snapshot]);
+  assert.equal(before.status, 0, before.stderr);
+  // Only a session doc appears — no NEW canonical report. Delta must be 0
+  // (terminal REPORT_DELTA_COUNT), never mistaking the session doc for a report.
+  writeFileSync(join(reportsDir, 'loop-sess-Z-review.md'), '# session only\n');
+  const resolved = runCli(['resolve-round-report', '--reports-dir', reportsDir, '--snapshot-file', snapshot]);
+  assert.notEqual(resolved.status, 0);
+  assert.equal(resolved.json.error.code, 'REPORT_DELTA_COUNT');
+  assert.equal(resolved.json.error.count, 0);
+});

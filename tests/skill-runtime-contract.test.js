@@ -443,6 +443,36 @@ test('public-route loop grammar is unchanged (does not accept --prior-rounds-fil
   assert.match(rejected.error, /unknown loop argument/);
 });
 
+test('public-route loop grammar accepts the opt-in --session-doc flag; review and respond keep rejecting it', async () => {
+  const { parsePublicRoute } = await loadPublicRoute();
+  const cwd = process.cwd();
+
+  // Loop entry accepts --session-doc (value-less opt-in), alone and combined.
+  const loopAlone = parsePublicRoute({ entry: 'loop', argv: ['--session-doc'], host: 'claude', cwd });
+  assert.equal(loopAlone.ok, true);
+  assert.equal(loopAlone.route, 'loop');
+
+  const loopCombined = parsePublicRoute({
+    entry: 'loop', argv: ['--max=3', '--entropy', '--session-doc'], host: 'claude', cwd,
+  });
+  assert.equal(loopCombined.ok, true);
+
+  // Default OFF is byte-identical to today: no flag → same accepted loop route.
+  const loopBare = parsePublicRoute({ entry: 'loop', argv: [], host: 'claude', cwd });
+  assert.equal(loopBare.ok, true);
+  assert.equal(loopBare.route, 'loop');
+
+  // The review entry (terminal single-review route) must NOT accept it.
+  const reviewRejected = parsePublicRoute({ entry: 'review', argv: ['--session-doc'], host: 'claude', cwd });
+  assert.equal(reviewRejected.ok, false);
+  assert.match(reviewRejected.error, /unknown review argument/);
+
+  // The respond branch must NOT accept it either.
+  const respondRejected = parsePublicRoute({ entry: 'review', argv: ['--respond', '--session-doc'], host: 'claude', cwd });
+  assert.equal(respondRejected.ok, false);
+  assert.match(respondRejected.error, /unknown respond argument/);
+});
+
 test('loop SKILL codifies compare-rounds consumption, no-new-verdict-on-skip, and explicit-flag prior-context handoff', () => {
   const loop = fs.readFileSync(path.join(root, 'skills', 'deep-review-loop', 'SKILL.md'), 'utf8');
 
@@ -463,6 +493,20 @@ test('loop SKILL codifies compare-rounds consumption, no-new-verdict-on-skip, an
   // rounds_saved bookkeeping and loop_id/record-round wiring.
   assert.match(loop, /rounds_saved/);
   assert.match(loop, /record-round/);
+});
+
+test('loop SKILL documents the opt-in --session-doc single per-session review document flow', () => {
+  const loop = fs.readFileSync(path.join(root, 'skills', 'deep-review-loop', 'SKILL.md'), 'utf8');
+
+  // The flag is advertised in the argument hint and the validate section.
+  assert.match(loop, /--session-doc/);
+  // ON path calls render-session-doc keyed by loop_id, in the reports dir.
+  assert.match(loop, /render-session-doc/);
+  assert.match(loop, /loop-\{loop_id\}-review\.md/);
+  // The end-of-loop summary is absorbed into the session doc to avoid dup.
+  assert.match(loop, /absorb|absorbed|흡수/i);
+  // Default OFF preserves today's per-round + loop-summary behavior.
+  assert.match(loop, /(?:default|기본).{0,40}(?:OFF|off|없)/i);
 });
 
 test('review-execution Stage 2 forwards --prior-rounds-file to build-reviewer-payload only when explicitly provided', () => {
