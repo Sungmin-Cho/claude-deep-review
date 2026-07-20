@@ -68,6 +68,9 @@ Claude Code slash commands and Codex skills are distinct host entrypoints for th
 - `--codex` / `--no-codex` / `--no-opus` / `--no-agy`, and `--codex-only` (= `--codex --no-opus --no-agy`).
 - `/deep-review-loop --ultracode --codex`: ultracode once (round 1) + codex every round.
 - No-flag behavior is 100% unchanged.
+- `/deep-review-loop` convergence is deterministic: each round's findings are compared with `compare-rounds` (identity matching, not a natural-language repeat judgment), and a stalled round stops with the last trusted verdict.
+- The loop passes a `--prior-rounds-file` advisory context between rounds explicitly (never by file existence) so reviewers can re-verify prior findings and rejected items.
+- The final loop summary reports a `rounds_saved` metric.
 
 ## Review pipeline
 

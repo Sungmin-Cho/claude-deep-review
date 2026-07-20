@@ -162,13 +162,13 @@ test('both workflows cover every release-relevant path class', () => {
   }
 });
 
-test('release version is exactly 1.13.0 on all three package surfaces', () => {
+test('release version is exactly 1.14.0 on all three package surfaces', () => {
   const versions = [
     JSON.parse(read('.claude-plugin/plugin.json')).version,
     JSON.parse(read('.codex-plugin/plugin.json')).version,
     JSON.parse(read('package.json')).version,
   ];
-  assert.deepEqual(versions, ['1.13.0', '1.13.0', '1.13.0']);
+  assert.deepEqual(versions, ['1.14.0', '1.14.0', '1.14.0']);
 });
 
 test('evergreen bilingual READMEs advertise both native hosts and portable runtime', () => {
@@ -227,6 +227,28 @@ test('bilingual 1.13.0 changelogs are structurally paired and user-observable', 
     assert.match(block, /Node 22/u);
     assert.match(block, /Windows 11/u);
     assert.match(block, /Stage 5\.5/u);
+    assert.doesNotMatch(
+      block,
+      /\b\d+\s*\/\s*\d+\b|\b\d+\s+tests?\b|npm test|self-review|dogfood|review-loop round|commit [0-9a-f]{7,}/iu,
+    );
+  }
+});
+
+function releaseBlockAnyDate(source, version) {
+  const escaped = version.replaceAll('.', '\\.');
+  const matches = [...source.matchAll(new RegExp(`^## \\[${escaped}\\] — \\d{4}-\\d{2}-\\d{2}$`, 'gmu'))];
+  assert.equal(matches.length, 1, `${version} release header must occur exactly once`);
+  const start = matches[0].index;
+  const next = source.slice(start + 1).search(/^## \[/mu);
+  return next < 0 ? source.slice(start) : source.slice(start, start + 1 + next);
+}
+
+test('bilingual 1.14.0 changelogs are structurally paired and carry the convergence content anchor', () => {
+  const english = releaseBlockAnyDate(read('CHANGELOG.md'), '1.14.0');
+  const korean = releaseBlockAnyDate(read('CHANGELOG.ko.md'), '1.14.0');
+  assert.match(english, /compare-rounds|convergence/u);
+  assert.match(korean, /수렴/u);
+  for (const block of [english, korean]) {
     assert.doesNotMatch(
       block,
       /\b\d+\s*\/\s*\d+\b|\b\d+\s+tests?\b|npm test|self-review|dogfood|review-loop round|commit [0-9a-f]{7,}/iu,
