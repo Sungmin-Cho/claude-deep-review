@@ -171,6 +171,51 @@ test('H4: agy with an execution plan whose model is explicitly set still lands i
   assert.deepEqual(invocation.args.slice(invocation.args.indexOf('--model'), invocation.args.indexOf('--model') + 2), ['--model', 'explicit-plan-model']);
 });
 
+// ---------------------------------------------------------------------------
+// H4B: parity with the agy fix (d0459e9) — a Claude execution plan's resolved
+// model is authoritative, including null (provider default) — the legacy
+// options.model must never resurrect a stale --model value once a plan is
+// present.
+// ---------------------------------------------------------------------------
+
+test('H4B: claude with an execution plan whose resolved model is null never falls back to legacy options.model', async () => {
+  const { runClaudeReviewer } = await import(claudeUrl);
+  const fixture = workspace();
+  let invocation;
+  const result = await runClaudeReviewer({
+    ...fixture, pluginRoot: root, binary: '/fake/claude', timeoutSeconds: 5,
+    model: 'sonnet',
+    executionPlan: { model: null, effort: null, source: 'cli-provider', allowFallback: true },
+    processRunner: async (binary, args, options) => { invocation = { binary, args, options }; return processResult(); },
+  });
+  assert.equal(invocation.args.includes('--model'), false);
+  assert.equal(result.resolved_model, null);
+});
+
+test('H4B: claude without an execution plan still honors the legacy options.model default', async () => {
+  const { runClaudeReviewer } = await import(claudeUrl);
+  const fixture = workspace();
+  let invocation;
+  await runClaudeReviewer({
+    ...fixture, pluginRoot: root, binary: '/fake/claude', timeoutSeconds: 5,
+    processRunner: async (binary, args, options) => { invocation = { binary, args, options }; return processResult(); },
+  });
+  assert.deepEqual(invocation.args.slice(invocation.args.indexOf('--model'), invocation.args.indexOf('--model') + 2), ['--model', 'opus']);
+});
+
+test('H4B: claude with an execution plan whose model is explicitly set still lands in argv', async () => {
+  const { runClaudeReviewer } = await import(claudeUrl);
+  const fixture = workspace();
+  let invocation;
+  await runClaudeReviewer({
+    ...fixture, pluginRoot: root, binary: '/fake/claude', timeoutSeconds: 5,
+    model: 'sonnet',
+    executionPlan: { model: 'explicit-plan-model', effort: null, source: 'cli-provider', allowFallback: true },
+    processRunner: async (binary, args, options) => { invocation = { binary, args, options }; return processResult(); },
+  });
+  assert.deepEqual(invocation.args.slice(invocation.args.indexOf('--model'), invocation.args.indexOf('--model') + 2), ['--model', 'explicit-plan-model']);
+});
+
 test('native Claude documentation states the real model-only override boundary', () => {
   const source = fs.readFileSync(path.join(root, 'skills/deep-review-workflow/references/review-execution.md'), 'utf8');
   assert.match(source, /Agent\(code-reviewer\)[\s\S]{0,500}model parameter/i);

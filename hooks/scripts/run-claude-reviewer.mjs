@@ -54,7 +54,15 @@ export async function runClaudeReviewer(options = {}) {
   const promptFile = resolve(requiredString(options.promptFile, 'promptFile'));
   const outputFile = resolve(requiredString(options.outputFile, 'outputFile'));
   const executionPlan = options.executionPlan || null;
-  const model = requiredString(executionPlan?.model ?? options.model ?? 'opus', 'model');
+  // H4B: when an execution plan is supplied, its resolved model is
+  // authoritative — including null (provider default). The legacy
+  // options.model ?? 'opus' only applies when no plan is present; it must
+  // never resurrect a stale model once a plan deliberately resolved to null.
+  // Mirrors the agy fix (d0459e9) in run-agy-reviewer.mjs.
+  const model = executionPlan
+    ? (executionPlan.model ?? '')
+    : requiredString(options.model ?? 'opus', 'model');
+  if (typeof model !== 'string') throw new TypeError('model must be a string');
   const agent = requiredString(options.agent ?? 'code-reviewer', 'agent');
   const timeoutSeconds = positiveSeconds(options.timeoutSeconds ?? 1200);
   const env = { ...(options.env ?? process.env) };
@@ -68,8 +76,8 @@ export async function runClaudeReviewer(options = {}) {
     '-p',
     '--plugin-dir', pluginRoot,
     '--agent', agent,
-    '--model', model,
   ];
+  if (model) args.push('--model', model);
   let resolvedEffort = executionPlan?.effort ?? null;
   let executionFallback = null;
   if (resolvedEffort) {
@@ -111,8 +119,8 @@ export async function runClaudeReviewer(options = {}) {
     stdout: processResult.stdout.toString('utf8'),
     stderr: processResult.stderr.toString('utf8'),
     outputFile,
-    requested_model: executionPlan?.requestedModel ?? executionPlan?.model ?? model,
-    resolved_model: model,
+    requested_model: executionPlan?.requestedModel ?? executionPlan?.model ?? (model || null),
+    resolved_model: model || null,
     applied_model: null,
     requested_effort: executionPlan?.requestedEffort ?? executionPlan?.effort ?? null,
     resolved_effort: resolvedEffort,

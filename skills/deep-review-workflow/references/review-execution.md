@@ -182,7 +182,7 @@ Immediately before Stage 4, invoke the reviewer-free preflight with argv-array
 transport:
 
 ```text
-node {plugin_root}/hooks/scripts/classify-artifacts.mjs --repo PROJECT_ROOT --emit-routing-plan --routing-plan-out .deep-review/tmp/routing-plan.json --host-assertions-json {"claudeNativeAgent":true,"codexNativeGeneric":false}
+node {plugin_root}/hooks/scripts/classify-artifacts.mjs --repo PROJECT_ROOT --emit-routing-plan --routing-plan-out .deep-review/tmp/routing-plan.json --host-assertions-json '{"claudeNativeAgent":true,"codexNativeGeneric":false}'
 ```
 
 Because this subprocess cannot observe the orchestrating host directly, always
