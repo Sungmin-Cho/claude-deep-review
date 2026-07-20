@@ -11,7 +11,7 @@
 // `run-*-reviewer` runner. That structural boundary is what makes `--dry-run`
 // safe: there is no reviewer code path to reach.
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { classifyArtifact, classifyScope } from './lib/artifact-classify.mjs';
@@ -51,7 +51,9 @@ function formatConfidence(value) {
  * Synchronous: the caller supplies `changeState` (and `reviewBase` for `clean`).
  */
 export function classifyArtifactsScope(options = {}) {
-  const { repo, changeState, reviewBase = '', filesFromZ, thresholds } = options;
+  const {
+    repo, changeState, reviewBase = '', filesFromZ, thresholds, generatedAt,
+  } = options;
   const descriptors = discoverArtifacts({ repo, changeState, reviewBase, filesFromZ });
 
   const artifacts = descriptors.map((descriptor) => {
@@ -78,7 +80,7 @@ export function classifyArtifactsScope(options = {}) {
 
   return {
     classification_version: CLASSIFICATION_VERSION,
-    generated_at: new Date().toISOString(),
+    generated_at: generatedAt ?? new Date().toISOString(),
     scope: classifyScope(artifacts),
     artifacts,
   };
@@ -138,7 +140,19 @@ const VALUE_FLAGS = {
   '--review-base': 'reviewBase',
   '--out': 'out',
   '--format': 'format',
+  '--files-from0': 'filesFrom',
 };
+
+// I3: allow provenance to be byte-identical across runs when a caller pins the
+// timestamp via SOURCE_DATE_EPOCH (reproducible-builds convention). Unset ⇒
+// wall-clock time as before.
+function deterministicTimestamp(env) {
+  const raw = env.SOURCE_DATE_EPOCH;
+  if (raw === undefined || raw === '') return undefined;
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds < 0) return undefined;
+  return new Date(seconds * 1000).toISOString();
+}
 
 function parseArguments(argv) {
   const options = { repo: '.', explainRouting: false, format: 'text' };
@@ -170,7 +184,32 @@ export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env 
     reviewBase = reviewBase ?? environment.review_base;
   }
 
-  const result = classifyArtifactsScope({ repo, changeState, reviewBase });
+  // Explicit NUL-delimited target list (git `--pathspec-file-nul` convention).
+  const filesFromZ = options.filesFrom === undefined
+    ? undefined
+    : readFileSync(resolve(options.filesFrom));
+  const hasExplicitTargets = filesFromZ !== undefined && filesFromZ.length > 0;
+
+  // W2: a non-git workspace has no diff to derive a scope from. Refuse to
+  // materialize an empty `mixed` provenance file — require an explicit target
+  // list and fail closed otherwise.
+  if (changeState === 'non-git' && !hasExplicitTargets) {
+    throw new Error(
+      'non-git workspace has no git change scope to classify. '
+      + 'Provide an explicit NUL-delimited target list via --files-from0 <file>.',
+    );
+  }
+
+  const result = classifyArtifactsScope({
+    repo, changeState, reviewBase, filesFromZ, generatedAt: deterministicTimestamp(env),
+  });
+
+  // Never persist an unresolved empty non-git scope, even if the target list
+  // resolved to nothing (all excluded / out-of-repo / binary-only-dropped).
+  if (changeState === 'non-git' && result.artifacts.length === 0) {
+    throw new Error('non-git target list resolved to zero classifiable artifacts; nothing to write.');
+  }
+
   const outPath = options.out ? resolve(options.out) : defaultProvenancePath(repo);
   writeProvenance(result, outPath);
 

@@ -10,6 +10,7 @@ const { spawnSync } = require('node:child_process');
 const {
   cleanupGitFixtures,
   createGitFixture,
+  fixtureRootFor,
   git,
 } = require('./helpers/git-fixture.js');
 
@@ -497,4 +498,266 @@ test('the classify-artifacts CLI supports --explain-routing and defers routing t
   );
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, /Phase 2|not yet implemented|not implemented/i);
+});
+
+// ---------------------------------------------------------------------------
+// C1 (security): symlink / out-of-repo containment — discovery must never read
+// content through a symlink or from a path that resolves outside the repo root.
+// ---------------------------------------------------------------------------
+
+const SECRET_HEADING = '# TOP-SECRET-CREDENTIAL-HEADING';
+const SECRET_BODY = `${SECRET_HEADING}\n\n## Context\n\nAKIA-EXFIL-EXAMPLE-KEY\n`;
+
+test('C1: an untracked symlink pointing outside the repo is metadata-only and leaks no content', async () => {
+  const { discoverArtifacts } = await loadDiscover();
+  const repo = createGitFixture('symlink-untracked');
+  const secret = path.join(fixtureRootFor(repo), 'outside-secret-1.md');
+  fs.writeFileSync(secret, SECRET_BODY);
+  fs.symlinkSync(secret, path.join(repo, 'leaked.md'));
+
+  const descriptors = discoverArtifacts({ repo, changeState: 'untracked-only' });
+  const leaked = descriptors.find((d) => d.path === 'leaked.md');
+  assert.ok(leaked, 'symlink descriptor missing');
+  assert.equal(leaked.content, '', 'symlink content must not be read');
+  assert.equal(leaked.payload_strategy, 'metadata-only');
+  assert.equal(leaked.is_symlink, true);
+  assert.equal(leaked.digest, null);
+  assert.doesNotMatch(
+    JSON.stringify(descriptors),
+    /TOP-SECRET|AKIA-EXFIL/,
+    'out-of-repo secret leaked into descriptors',
+  );
+});
+
+test('C1: a committed (tracked) symlink to an out-of-repo target stays metadata-only', async () => {
+  const { discoverArtifacts } = await loadDiscover();
+  const repo = createGitFixture('symlink-tracked');
+  const base = git(repo, ['rev-parse', 'HEAD']);
+  const secret = path.join(fixtureRootFor(repo), 'outside-secret-2.md');
+  fs.writeFileSync(secret, SECRET_BODY);
+  fs.symlinkSync(secret, path.join(repo, 'leaked.md'));
+  git(repo, ['add', '--', 'leaked.md']);
+  git(repo, ['commit', '--quiet', '-m', 'add symlink']);
+
+  const descriptors = discoverArtifacts({ repo, changeState: 'clean', reviewBase: base });
+  const leaked = descriptors.find((d) => d.path === 'leaked.md');
+  assert.ok(leaked, 'symlink descriptor missing');
+  assert.equal(leaked.content, '');
+  assert.equal(leaked.is_symlink, true);
+  assert.doesNotMatch(JSON.stringify(descriptors), /AKIA-EXFIL/);
+});
+
+test('C1: an explicit out-of-repo target (non-git list) is rejected by realpath containment', async () => {
+  const { discoverArtifacts } = await loadDiscover();
+  const repo = createGitFixture('containment');
+  const secret = path.join(fixtureRootFor(repo), 'outside-secret-3.md');
+  fs.writeFileSync(secret, SECRET_BODY);
+
+  const descriptors = discoverArtifacts({
+    repo,
+    changeState: 'non-git',
+    filesFromZ: Buffer.from(`${secret}\0`),
+  });
+  const leaked = descriptors.find((d) => d.path.endsWith('outside-secret-3.md'));
+  assert.ok(leaked, 'explicit target descriptor missing');
+  assert.equal(leaked.content, '', 'out-of-repo content must not be read');
+  assert.equal(leaked.payload_strategy, 'metadata-only');
+  assert.doesNotMatch(JSON.stringify(descriptors), /AKIA-EXFIL/);
+});
+
+test('C1: an in-repo file is still fully read after containment checks', async () => {
+  const { discoverArtifacts } = await loadDiscover();
+  const repo = createGitFixture('containment-in-repo');
+  fs.writeFileSync(path.join(repo, 'design.md'), fixture('design-en.md'));
+
+  const descriptors = discoverArtifacts({ repo, changeState: 'untracked-only' });
+  const design = descriptors.find((d) => d.path === 'design.md');
+  assert.ok(design, 'in-repo descriptor missing');
+  assert.ok(design.content.includes('## Architecture'), 'in-repo content must still be read');
+  assert.equal(design.is_symlink, false);
+});
+
+// ---------------------------------------------------------------------------
+// W1: binary changes must be reachable (unsupported-binary), never dropped into
+// an empty/misleading `mixed` scope.
+// ---------------------------------------------------------------------------
+
+const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]);
+
+test('W1: discovery preserves binaries as metadata-only descriptors', async () => {
+  const { discoverArtifacts } = await loadDiscover();
+  const repo = createGitFixture('binary-desc');
+  fs.writeFileSync(path.join(repo, 'logo.png'), PNG_BYTES);
+
+  const descriptors = discoverArtifacts({ repo, changeState: 'untracked-only' });
+  const png = descriptors.find((d) => d.path === 'logo.png');
+  assert.ok(png, 'binary descriptor missing');
+  assert.equal(png.is_binary, true);
+  assert.equal(png.payload_strategy, 'metadata-only');
+  assert.equal(png.content, '');
+});
+
+test('W1: a binary-only untracked change classifies as unsupported-binary, not empty mixed', async () => {
+  const { classifyArtifactsScope } = await loadScope();
+  const repo = createGitFixture('binary-only');
+  fs.writeFileSync(path.join(repo, 'logo.png'), PNG_BYTES);
+
+  const result = classifyArtifactsScope({ repo, changeState: 'untracked-only' });
+  assert.equal(result.artifacts.length, 1, 'binary should be discovered as an artifact');
+  assert.equal(result.artifacts[0].target_kind, 'unsupported-binary');
+  assert.equal(result.scope, 'unsupported-binary');
+});
+
+test('W1: a staged binary is discovered as unsupported-binary', async () => {
+  const { classifyArtifactsScope } = await loadScope();
+  const repo = createGitFixture('binary-staged');
+  fs.writeFileSync(path.join(repo, 'logo.png'), Buffer.concat([PNG_BYTES, Buffer.from([0x00, 0x01])]));
+  git(repo, ['add', '--', 'logo.png']);
+
+  const result = classifyArtifactsScope({ repo, changeState: 'staged' });
+  const png = result.artifacts.find((a) => a.path === 'logo.png');
+  assert.ok(png, 'staged binary missing');
+  assert.equal(png.target_kind, 'unsupported-binary');
+});
+
+test('W1: a committed binary is discovered as unsupported-binary in a clean scope', async () => {
+  const { classifyArtifactsScope } = await loadScope();
+  const repo = createGitFixture('binary-committed');
+  const base = git(repo, ['rev-parse', 'HEAD']);
+  fs.writeFileSync(path.join(repo, 'logo.png'), Buffer.concat([PNG_BYTES, Buffer.from([0x00, 0x02])]));
+  git(repo, ['add', '--', 'logo.png']);
+  git(repo, ['commit', '--quiet', '-m', 'add binary']);
+
+  const result = classifyArtifactsScope({ repo, changeState: 'clean', reviewBase: base });
+  const png = result.artifacts.find((a) => a.path === 'logo.png');
+  assert.ok(png, 'committed binary missing');
+  assert.equal(png.target_kind, 'unsupported-binary');
+});
+
+test('W1: a mixed binary + document change keeps both members and reports mixed', async () => {
+  const { classifyArtifactsScope } = await loadScope();
+  const repo = createGitFixture('binary-mixed');
+  fs.writeFileSync(path.join(repo, 'design.md'), fixture('design-en.md'));
+  fs.writeFileSync(path.join(repo, 'logo.png'), PNG_BYTES);
+
+  const result = classifyArtifactsScope({ repo, changeState: 'untracked-only' });
+  const paths = result.artifacts.map((a) => a.path).sort();
+  assert.deepEqual(paths, ['design.md', 'logo.png']);
+  assert.equal(result.scope, 'mixed');
+  const png = result.artifacts.find((a) => a.path === 'logo.png');
+  assert.equal(png.target_kind, 'unsupported-binary');
+});
+
+test('W1: classifyScope reports unknown (not mixed) for an empty artifact set', async () => {
+  const { classifyScope } = await loadClassify();
+  assert.equal(classifyScope([]), 'unknown');
+});
+
+// ---------------------------------------------------------------------------
+// W2: a non-git dry-run must never materialize an empty `mixed` scope — it
+// either classifies an explicit target list or fails closed.
+// ---------------------------------------------------------------------------
+
+test('W2: classifyArtifactsScope on non-git with no explicit targets is an empty unknown scope', async () => {
+  const { classifyArtifactsScope } = await loadScope();
+  const repo = createGitFixture('nongit-empty');
+  const result = classifyArtifactsScope({ repo, changeState: 'non-git' });
+  assert.equal(result.artifacts.length, 0);
+  assert.equal(result.scope, 'unknown');
+});
+
+test('W2: the CLI fails closed on a non-git target with no explicit list and writes no provenance', () => {
+  const repo = createGitFixture('nongit-cli');
+  const run = spawnSync(
+    process.execPath,
+    [classifyCliPath, '--repo', repo, '--change-state', 'non-git'],
+    { encoding: 'utf8' },
+  );
+  assert.notEqual(run.status, 0, 'expected a non-zero fail-closed exit');
+  assert.match(run.stderr, /non-git|target/i);
+  const provenancePath = path.join(repo, '.deep-review', 'tmp', 'artifact-classification.json');
+  assert.equal(fs.existsSync(provenancePath), false, 'provenance must not be materialized');
+});
+
+test('W2: the CLI classifies an explicit non-git target list via --files-from0', () => {
+  const repo = createGitFixture('nongit-cli-list');
+  fs.writeFileSync(path.join(repo, 'design.md'), fixture('design-en.md'));
+  const listPath = path.join(repo, 'targets.z');
+  fs.writeFileSync(listPath, 'design.md\0');
+
+  const run = spawnSync(
+    process.execPath,
+    [classifyCliPath, '--repo', repo, '--change-state', 'non-git', '--files-from0', listPath],
+    { encoding: 'utf8' },
+  );
+  assert.equal(run.status, 0, run.stderr);
+  const provenancePath = path.join(repo, '.deep-review', 'tmp', 'artifact-classification.json');
+  assert.ok(fs.existsSync(provenancePath), 'provenance JSON not written');
+  const provenance = JSON.parse(fs.readFileSync(provenancePath, 'utf8'));
+  assert.equal(provenance.artifacts.length, 1);
+  assert.equal(provenance.artifacts[0].path, 'design.md');
+});
+
+// ---------------------------------------------------------------------------
+// W3: `type:'filename'` strong rules must match only their declared surface and
+// respect word boundaries (no spurious +0.30 from embedded path substrings).
+// ---------------------------------------------------------------------------
+
+test('W3: an inspector path does not spuriously match the spec filename rule', async () => {
+  const { classifyArtifact } = await loadClassify();
+  const result = classifyArtifact({
+    path: 'src/inspector/notes.md',
+    extension: '.md',
+    content: '# Notes\n\nsome unstructured notes about the module\n',
+    isBinary: false,
+  });
+  assert.equal(
+    result.scores['requirements-specification'],
+    undefined,
+    'inspector path must not produce a requirements-specification signal',
+  );
+  assert.notEqual(result.target_kind, 'requirements-specification');
+});
+
+test('W3: a redesign path does not spuriously match the design filename rule', async () => {
+  const { classifyArtifact } = await loadClassify();
+  const result = classifyArtifact({
+    path: 'packages/redesign/README.md',
+    extension: '.md',
+    content: '# Readme\n\ngeneral overview text\n',
+    isBinary: false,
+  });
+  assert.equal(result.scores['design-document'], undefined);
+});
+
+test('W3: a researcher path does not spuriously match the research filename rule', async () => {
+  const { classifyArtifact } = await loadClassify();
+  const result = classifyArtifact({
+    path: 'apps/researcher/log.md',
+    extension: '.md',
+    content: '# Log\n\nchronological entries\n',
+    isBinary: false,
+  });
+  assert.equal(result.scores['research-note'], undefined);
+});
+
+test('W3: an embedded keyword in a basename needs a word boundary to match', async () => {
+  const { classifyArtifact } = await loadClassify();
+  // Each basename embeds a rule keyword (in-spec-tor, re-design) with no boundary.
+  const spec = classifyArtifact({ path: 'src/inspector.md', extension: '.md', content: '# x\n', isBinary: false });
+  assert.equal(spec.scores['requirements-specification'], undefined, 'inspector.md basename must not match spec');
+  const design = classifyArtifact({ path: 'src/redesign.md', extension: '.md', content: '# x\n', isBinary: false });
+  assert.equal(design.scores['design-document'], undefined, 'redesign.md basename must not match design');
+});
+
+test('W3: a genuine design filename still fires the strong path signal', async () => {
+  const { classifyArtifact } = await loadClassify();
+  const result = classifyArtifact({
+    path: 'docs/design-notes.md',
+    extension: '.md',
+    content: '# Design\n\n## Architecture\n\n## Trade-offs\n',
+    isBinary: false,
+  });
+  assert.ok(result.scores['design-document'] !== undefined, 'design filename must still score');
+  assert.ok(result.signals.some((s) => s.type === 'filename'), 'expected a filename signal');
 });

@@ -18,6 +18,7 @@ import {
   GENERIC_DOCUMENT_KIND,
   GENERIC_TEXT_KIND,
   SCOPE_KIND_MIXED,
+  UNKNOWN_KIND,
   UNSUPPORTED_BINARY_KIND,
 } from './target-taxonomy.mjs';
 
@@ -50,21 +51,24 @@ const MARKDOWN_EXTENSIONS = new Set([
   '.md', '.markdown', '.mdx', '.rst', '.adoc', '.asciidoc', '.org',
 ]);
 
-// Strong filename/path signals (§8.5.2). `type` distinguishes a basename match
-// ('filename') from a directory-path match ('path'); both carry W_STRONG_PATH.
+// Strong filename/path signals (§8.5.2). `type` selects the surface each rule is
+// tested against — 'filename' against the basename, 'path' against the whole
+// path — and both carry W_STRONG_PATH. Bare-substring keywords are anchored to
+// separator/word boundaries (`[-_. /]` or string edges) so an unrelated path
+// segment like `inspector` or `redesign` cannot false-fire a strong signal.
 const STRONG_PATH_RULES = [
   { kind: 'architecture-decision-record', type: 'path', re: /(?:^|\/)adr\//i },
-  { kind: 'architecture-decision-record', type: 'filename', re: /(?:^|\/)adr[-_]?\d+/i },
+  { kind: 'architecture-decision-record', type: 'filename', re: /(?:^|[-_.])adr[-_]?\d+/i },
   { kind: 'design-document', type: 'path', re: /(?:^|\/)rfc\//i },
-  { kind: 'design-document', type: 'filename', re: /rfc[-_]?\d+/i },
+  { kind: 'design-document', type: 'filename', re: /(?:^|[-_.])rfc[-_]?\d+/i },
   { kind: 'implementation-plan', type: 'filename', re: /implementation.*plan/i },
-  { kind: 'implementation-plan', type: 'filename', re: /handoff/i },
-  { kind: 'test-plan', type: 'filename', re: /(?:test|qa).*plan/i },
-  { kind: 'design-document', type: 'filename', re: /design|architecture/i },
-  { kind: 'requirements-specification', type: 'filename', re: /spec|requirements/i },
-  { kind: 'runbook-operations', type: 'filename', re: /runbook|operations|on-?call/i },
-  { kind: 'research-note', type: 'filename', re: /research/i },
-  { kind: 'configuration-infrastructure', type: 'filename', re: /dockerfile/i },
+  { kind: 'implementation-plan', type: 'filename', re: /(?:^|[-_.])handoff(?:[-_.]|$)/i },
+  { kind: 'test-plan', type: 'filename', re: /(?:^|[-_.])(?:test|qa).*plan/i },
+  { kind: 'design-document', type: 'filename', re: /(?:^|[-_.])(?:designs?|architectures?)(?:[-_.]|$)/i },
+  { kind: 'requirements-specification', type: 'filename', re: /(?:^|[-_.])(?:specs?|specification|requirements?)(?:[-_.]|$)/i },
+  { kind: 'runbook-operations', type: 'filename', re: /(?:^|[-_.])(?:runbooks?|operations?|on-?call)(?:[-_.]|$)/i },
+  { kind: 'research-note', type: 'filename', re: /(?:^|[-_.])research(?:[-_.]|$)/i },
+  { kind: 'configuration-infrastructure', type: 'filename', re: /(?:^|[-_.])dockerfile(?:[-_.]|$)/i },
 ];
 
 // Heading fingerprints (§8.5.3). Matching is substring-based on the lowercased
@@ -340,8 +344,9 @@ export function classifyArtifact(input = {}) {
   if (fmKind) add(fmKind, 'frontmatter', fmKind, W_FRONTMATTER, true);
 
   for (const rule of STRONG_PATH_RULES) {
-    if (rule.re.test(name) || rule.re.test(String(path))) {
-      add(rule.kind, rule.type, name, W_STRONG_PATH, true);
+    const haystack = rule.type === 'path' ? String(path) : name;
+    if (rule.re.test(haystack)) {
+      add(rule.kind, rule.type, haystack, W_STRONG_PATH, true);
     }
   }
 
@@ -442,9 +447,12 @@ export function classifyArtifact(input = {}) {
 }
 
 /**
- * Scope classification (§8.7): one shared kind, or `mixed`.
+ * Scope classification (§8.7): one shared kind, or `mixed`. An empty set is
+ * `unknown`, never `mixed` — `mixed` for zero artifacts is a misleading scope
+ * (W1) that hides a discovery gap behind a plausible-looking classification.
  */
 export function classifyScope(classifications) {
+  if (classifications.length === 0) return UNKNOWN_KIND;
   const kinds = new Set(classifications.map((c) => c.target_kind));
   if (kinds.size === 1) return [...kinds][0];
   return SCOPE_KIND_MIXED;

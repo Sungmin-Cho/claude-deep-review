@@ -181,6 +181,7 @@ export function buildChangeFiles(options = {}) {
     changeState,
     reviewBase = '',
     filesFromZ,
+    includeBinary = false,
   } = options;
   if (typeof repo !== 'string' || repo.length === 0) {
     throw new TypeError('repo must be a non-empty string');
@@ -196,14 +197,18 @@ export function buildChangeFiles(options = {}) {
   const seenPathIds = new Set();
   let binaryPaths = new Set();
 
+  // When `includeBinary` is false (the review/payload default) binaries are
+  // dropped exactly as before. When true (artifact discovery) they are kept and
+  // tagged `is_binary` so downstream can classify them as unsupported-binary.
   const addRecord = (rawPath, record) => {
     const pathId = rawPathId(rawPath);
     if (seenPathIds.has(pathId)) return;
-    if (isExcludedPath(record.path) || binaryPaths.has(pathId)) return;
-    if (
-      ['untracked', 'initial', 'session', 'non-git'].includes(record.status)
-      && looksLikeUntrackedBinary(repo, rawPath)
-    ) return;
+    if (isExcludedPath(record.path)) return;
+    const untrackedFamily = ['untracked', 'initial', 'session', 'non-git'].includes(record.status);
+    const isBinary = binaryPaths.has(pathId)
+      || (untrackedFamily && looksLikeUntrackedBinary(repo, rawPath));
+    if (isBinary && !includeBinary) return;
+    if (isBinary) record.is_binary = true;
     const key = Buffer.from(rawPath);
     rawRecords.set(key, record);
     seenPathIds.add(pathId);
