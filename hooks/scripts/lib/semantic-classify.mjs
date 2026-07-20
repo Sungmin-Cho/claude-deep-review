@@ -16,6 +16,12 @@ const SECRET_SIGNATURES = Object.freeze([
   /\b(?:ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{16,})\b/u,
   /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/u,
   /\b(?:password|secret|api[_-]?key)\s*[:=]\s*['"][^'"]{8,}['"]/iu,
+  // J5: quoting is not required to be a secret — catch common unquoted
+  // credential assignments (KEY=value and key: value forms) too. The
+  // [:=] operator must sit immediately after the keyword (no space in
+  // between, aside from the mandated \s* around the operator itself) so
+  // ordinary prose like "the api key rotates monthly" never matches.
+  /\b(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)\b\s*[:=]\s*[^\s'"]{8,}/iu,
 ]);
 
 function boundedWindows(content, maxBytes) {

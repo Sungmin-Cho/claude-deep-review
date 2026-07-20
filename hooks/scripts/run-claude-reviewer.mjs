@@ -9,6 +9,11 @@ import { atomicWriteFile, resolvePluginRoot } from './lib/runtime-context.mjs';
 import { loadExecutionPlan } from './lib/execution-plan.mjs';
 
 const AUTH_PATTERN = /Reauthentication required|do not currently have an active account|OAuth token expired|Please run.*claude.*login|Not signed in|Authentication failed/iu;
+// J4: mirrors run-agy-reviewer.mjs's UNSUPPORTED_MODEL_PATTERN so an explicit
+// catalog-incomplete Claude model that passes preflight but is rejected by
+// the CLI at execution time can be retried once without --model when the
+// execution plan authorizes fallback.
+const UNSUPPORTED_MODEL_PATTERN = /unsupported[^\n]*(?:model|--model)|unknown[^\n]*(?:model|--model)|invalid[^\n]*model|unrecognized[^\n]*--model/iu;
 
 function requiredString(value, name) {
   if (typeof value !== 'string' || value.length === 0 || value.includes('\0')) {
@@ -27,6 +32,14 @@ function positiveSeconds(value) {
 
 function stderrTail(stderr) {
   return stderr.split(/\r?\n/u).filter(Boolean).slice(-5).join('\n');
+}
+
+// J4: remove a --model FLAG_VALUE pair from an already-built argv array so
+// the retry invocation falls through to the provider default.
+function stripModelFlag(args) {
+  const index = args.indexOf('--model');
+  if (index === -1) return args;
+  return [...args.slice(0, index), ...args.slice(index + 2)];
 }
 
 function classify(result) {
@@ -104,12 +117,41 @@ export async function runClaudeReviewer(options = {}) {
     '--tools', 'Read,Glob,Grep,Bash',
     '--output-format', 'text',
   );
-  const processResult = await processRunner(binary, args, {
+  let processResult = await processRunner(binary, args, {
     cwd: projectRoot,
     env,
     input: prompt,
     timeoutMs: timeoutSeconds * 1000,
   });
+  // J4: when the CLI rejects an explicit model at execution time (not a
+  // preflight rejection), retry exactly once without --model — but only when
+  // the execution plan authorizes fallback. A strict cli- source without
+  // allow_fallback keeps the single-run failure; auth/timeout/empty-output
+  // failures are never retried.
+  let modelFallback = null;
+  const firstStderr = processResult.stderr.toString('utf8');
+  if (
+    model
+    && processResult.code !== 0
+    && processResult.code !== 124
+    && !processResult.timedOut
+    && !AUTH_PATTERN.test(firstStderr)
+    && UNSUPPORTED_MODEL_PATTERN.test(firstStderr)
+    && executionPlan?.allowFallback === true
+  ) {
+    processResult = await processRunner(binary, stripModelFlag(args), {
+      cwd: projectRoot,
+      env,
+      input: prompt,
+      timeoutMs: timeoutSeconds * 1000,
+    });
+    modelFallback = {
+      occurred: true,
+      requested: { model },
+      applied: { model: null },
+      reason: 'claude rejected requested model; retried without --model',
+    };
+  }
   const status = classify(processResult);
   publishResult(outputFile, processResult, status);
   return {
@@ -120,13 +162,13 @@ export async function runClaudeReviewer(options = {}) {
     stderr: processResult.stderr.toString('utf8'),
     outputFile,
     requested_model: executionPlan?.requestedModel ?? executionPlan?.model ?? (model || null),
-    resolved_model: model || null,
+    resolved_model: modelFallback ? null : (model || null),
     applied_model: null,
     requested_effort: executionPlan?.requestedEffort ?? executionPlan?.effort ?? null,
     resolved_effort: resolvedEffort,
     applied_effort: null,
-    verification_status: executionFallback ? 'fallback' : 'provider-did-not-report',
-    fallback: executionFallback || executionPlan?.routingFallback || { occurred: false },
+    verification_status: (executionFallback || modelFallback) ? 'fallback' : 'provider-did-not-report',
+    fallback: modelFallback || executionFallback || executionPlan?.routingFallback || { occurred: false },
   };
 }
 

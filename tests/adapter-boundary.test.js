@@ -216,6 +216,68 @@ test('H4B: claude with an execution plan whose model is explicitly set still lan
   assert.deepEqual(invocation.args.slice(invocation.args.indexOf('--model'), invocation.args.indexOf('--model') + 2), ['--model', 'explicit-plan-model']);
 });
 
+// ---------------------------------------------------------------------------
+// J4: when a catalog-incomplete explicit Claude model passes preflight but
+// the CLI rejects it at execution time, --allow-fallback (executionPlan
+// .allowFallback) authorizes exactly one retry without --model, mirroring
+// run-agy-reviewer.mjs's UNSUPPORTED_MODEL_PATTERN + retry logic.
+// ---------------------------------------------------------------------------
+
+test('J4: Claude CLI model rejection retries once without --model when the execution plan authorizes fallback', async () => {
+  const { runClaudeReviewer } = await import(claudeUrl);
+  const fixture = workspace();
+  let calls = 0;
+  const result = await runClaudeReviewer({
+    ...fixture, pluginRoot: root, binary: '/fake/claude', timeoutSeconds: 5,
+    executionPlan: { model: 'opaque-x', effort: null, source: 'cli-provider', allowFallback: true },
+    processRunner: async (binary, args) => {
+      calls += 1;
+      return args.includes('--model')
+        ? processResult({ code: 1, stdout: Buffer.alloc(0), stderr: Buffer.from('unknown model: opaque-x\n') })
+        : processResult();
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.status, 'success');
+  assert.equal(result.fallback.occurred, true);
+  assert.equal(result.resolved_model, null);
+  assert.equal(result.verification_status, 'fallback');
+});
+
+test('J4: Claude CLI model rejection is not retried when the execution plan forbids fallback', async () => {
+  const { runClaudeReviewer } = await import(claudeUrl);
+  const fixture = workspace();
+  let calls = 0;
+  const result = await runClaudeReviewer({
+    ...fixture, pluginRoot: root, binary: '/fake/claude', timeoutSeconds: 5,
+    executionPlan: { model: 'opaque-x', effort: null, source: 'cli-provider', allowFallback: false },
+    processRunner: async () => {
+      calls += 1;
+      return processResult({ code: 1, stdout: Buffer.alloc(0), stderr: Buffer.from('unknown model: opaque-x\n') });
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.fallback.occurred, false);
+});
+
+test('J4: an auth-failure stderr never triggers a Claude CLI model-rejection retry even when it also mentions model', async () => {
+  const { runClaudeReviewer } = await import(claudeUrl);
+  const fixture = workspace();
+  let calls = 0;
+  const result = await runClaudeReviewer({
+    ...fixture, pluginRoot: root, binary: '/fake/claude', timeoutSeconds: 5,
+    executionPlan: { model: 'opaque-x', effort: null, source: 'cli-provider', allowFallback: true },
+    processRunner: async () => {
+      calls += 1;
+      return processResult({ code: 1, stdout: Buffer.alloc(0), stderr: Buffer.from('Not signed in: unknown model requested\n') });
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.status, 'not_authenticated');
+  assert.equal(result.fallback.occurred, false);
+});
+
 test('native Claude documentation states the real model-only override boundary', () => {
   const source = fs.readFileSync(path.join(root, 'skills/deep-review-workflow/references/review-execution.md'), 'utf8');
   assert.match(source, /Agent\(code-reviewer\)[\s\S]{0,500}model parameter/i);

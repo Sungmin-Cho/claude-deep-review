@@ -197,6 +197,50 @@ test('H2: a payload whose non-trimmable fields alone exceed maxBytes fails close
   assert.doesNotMatch(JSON.stringify(result), new RegExp('x'.repeat(2000)), 'the oversized path must never be transmitted onward in the result');
 });
 
+// ---------------------------------------------------------------------------
+// J5: SECRET_SIGNATURES must also catch unquoted credential assignments
+// (KEY=value and key: value forms) with sufficiently long values, while
+// leaving ordinary prose untouched.
+// ---------------------------------------------------------------------------
+
+test('J5: containsSecretSignature detects unquoted credential assignments', async () => {
+  const { containsSecretSignature } = await import(semanticUrl);
+  const envStyle = { snippets: { head: 'API_KEY=supersecretvalue123', middle: '', tail: '' }, heading_index: [], sibling_paths: [], path: 'docs/notes.md' };
+  assert.equal(containsSecretSignature(envStyle), true);
+
+  const yamlStyle = { snippets: { head: 'password: hunter2value', middle: '', tail: '' }, heading_index: [], sibling_paths: [], path: 'docs/notes.md' };
+  assert.equal(containsSecretSignature(yamlStyle), true);
+});
+
+test('J5: containsSecretSignature does not flag benign prose mentioning secrets or keys', async () => {
+  const { containsSecretSignature } = await import(semanticUrl);
+  const proseOne = { snippets: { head: 'the api key rotates monthly', middle: '', tail: '' }, heading_index: [], sibling_paths: [], path: 'docs/notes.md' };
+  assert.equal(containsSecretSignature(proseOne), false);
+
+  const proseTwo = { snippets: { head: 'the secret to good tests', middle: '', tail: '' }, heading_index: [], sibling_paths: [], path: 'docs/notes.md' };
+  assert.equal(containsSecretSignature(proseTwo), false);
+});
+
+test('J5: classifyWithSemantic skips the adapter for unquoted credential assignments', async () => {
+  const { classifyWithSemantic } = await import(semanticUrl);
+  let calls = 0;
+  const adapter = async () => { calls += 1; return {}; };
+
+  const envStyle = await classifyWithSemantic({
+    descriptor: descriptor({ content: 'API_KEY=supersecretvalue123' }),
+    classification: provisional(), repoRoot: root, pluginRoot: root, adapter,
+  });
+  assert.equal(envStyle.semantic_status, 'skipped-sensitive-content');
+  assert.equal(calls, 0);
+
+  const yamlStyle = await classifyWithSemantic({
+    descriptor: descriptor({ content: 'password: hunter2value' }),
+    classification: provisional(), repoRoot: root, pluginRoot: root, adapter,
+  });
+  assert.equal(yamlStyle.semantic_status, 'skipped-sensitive-content');
+  assert.equal(calls, 0);
+});
+
 test('semantic adapter selection is capability-based with native assertion priority', async () => {
   const { selectSemanticAdapter } = await import(semanticUrl);
   const native = async () => ({});
