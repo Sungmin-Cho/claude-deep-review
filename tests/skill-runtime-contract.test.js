@@ -150,6 +150,25 @@ test('runtime dispatch SSOT is capability-based and defines the exact role matri
   assert.match(dispatch, /--no-codex.{0,120}(?:both|둘 다)/is);
   assert.match(dispatch, /pre.{0,20}post.{0,80}fingerprint/is);
   assert.match(dispatch, /untrusted.{0,80}excluded/is);
+  assert.match(dispatch, /capability-registry\.mjs/u);
+  assert.match(dispatch, /executable capability contract.{0,120}authoritative/isu);
+});
+
+test('public review skill documents every Phase 2 routing override', () => {
+  const publicSkill = read('skills/deep-review/SKILL.md');
+  const hint = publicSkill.match(/^argument-hint: (.+)$/mu)?.[1] ?? '';
+  for (const flag of [
+    '--reviewer',
+    '--model',
+    '--reviewer-model',
+    '--effort',
+    '--routing',
+    '--allow-fallback',
+    '--allow-classifier',
+  ]) assert.match(hint, new RegExp(flag));
+  assert.match(publicSkill, /--allow-classifier.{0,240}semantic/isu);
+  assert.match(publicSkill, /review-policy\.yaml/u);
+  assert.match(publicSkill, /shadow/iu);
 });
 
 test('supported runtime references use Node/direct tools and the runtime-root contract', () => {

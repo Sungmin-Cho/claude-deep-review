@@ -123,6 +123,15 @@ builder warning in the final report.
 
 Resolve reviewer flags before any privacy work:
 
+Build the current adapter set with `buildCapabilities` from
+`{plugin_root}/hooks/scripts/lib/capability-registry.mjs`, combining detected
+executables and fresh host assertions. Feed those protocol `2.0` capability
+objects, normalized public-route overrides, merged review policy, and artifact
+classification directly to `buildRoutingPlan` in
+`{plugin_root}/hooks/scripts/lib/model-router.mjs`. Do not infer support from a
+host label, duplicate the routing matrix in prose, or move model IDs through a
+shell string.
+
 1. Expand `--codex-only` to `--codex --no-opus --no-agy`.
 2. Reject `--ultracode` with `--no-opus`; reject `--codex` with `--no-codex`.
 3. `--no-opus` disables `claude-opus`; `--no-codex` disables both
@@ -183,6 +192,12 @@ explicit override, the plan is shadow provenance: a preflight error is a visible
 warning and dispatch continues with the existing arguments unchanged. Automatic
 routes are applied only when policy enables `automatic_model_routing` and sets
 `routing_shadow_mode: false`.
+
+Treat the emitted routing plan as the dispatch authority. It carries one
+validated execution plan per canonical reviewer plus requested, resolved,
+applied, fallback, and semantic provenance. Stage 4 leaf adapters consume that
+plan by path and reviewer id; they do not reinterpret provider or reviewer
+flags.
 
 ## 4. Dispatch independent reviewers
 
