@@ -123,6 +123,15 @@ builder warning in the final report.
 
 Resolve reviewer flags before any privacy work:
 
+Build the current adapter set with `buildCapabilities` from
+`{plugin_root}/hooks/scripts/lib/capability-registry.mjs`, combining detected
+executables and fresh host assertions. Feed those protocol `2.0` capability
+objects, normalized public-route overrides, merged review policy, and artifact
+classification directly to `buildRoutingPlan` in
+`{plugin_root}/hooks/scripts/lib/model-router.mjs`. Do not infer support from a
+host label, duplicate the routing matrix in prose, or move model IDs through a
+shell string.
+
 1. Expand `--codex-only` to `--codex --no-opus --no-agy`.
 2. Reject `--ultracode` with `--no-opus`; reject `--codex` with `--no-codex`.
 3. `--no-opus` disables `claude-opus`; `--no-codex` disables both
@@ -167,6 +176,48 @@ Keep the returned owner token private for Stage 5 restoration. A generic Codex
 subagent reads the payload and allowed project paths directly and never causes
 index mutation merely because Codex is the host.
 
+### 3.3 artifact classification and routing preflight
+
+Immediately before Stage 4, invoke the reviewer-free preflight with argv-array
+transport:
+
+```text
+node {plugin_root}/hooks/scripts/classify-artifacts.mjs --repo PROJECT_ROOT --emit-routing-plan --routing-plan-out .deep-review/tmp/routing-plan.json --host-assertions-json '{"claudeNativeAgent":true,"codexNativeGeneric":false}'
+```
+
+Because this subprocess cannot observe the orchestrating host directly, always
+append `--host-assertions-json` with compact JSON reflecting the current host
+tool capability (named Claude agent availability → `claudeNativeAgent`, native
+Codex generic subagent availability → `codexNativeGeneric`) as one argv value;
+omitting either key or the whole flag leaves that adapter `unknown`.
+
+When public-route returned normalized overrides, append `--overrides-json` and
+the compact `JSON.stringify(route.overrides)` as one argv value. An explicit
+override makes this preflight mandatory and any error stops dispatch. With no
+explicit override, the plan is shadow provenance: a non-policy preflight error
+(an environment/probe failure unrelated to policy enforcement) is a visible
+warning and dispatch continues with the existing arguments unchanged.
+
+A preflight error caused by policy enforcement — a denied or unavailable
+provider, a denied model, read-only unavailable, or an unparseable/type-invalid
+EXISTING policy file (`ERROR_PROVIDER_DENIED`, `ERROR_MODEL_DENIED`,
+`ERROR_READ_ONLY_UNAVAILABLE`, `ERROR_PROVIDER_UNAVAILABLE`, or
+`ERROR_POLICY_INVALID`) is TERMINAL for the whole review regardless of whether
+the plan is explicit or shadow-only: stop dispatch entirely rather than
+downgrading it to a warning and falling back to legacy dispatch. A missing
+policy file is not an error and never triggers this path.
+
+Automatic routes are applied only when policy enables `automatic_model_routing`
+and sets `routing_shadow_mode: false`. When that condition holds, the emitted
+plan carries `apply_automatic: true`, and an applicable automatic plan is
+consumed by the same leaf-adapter path as explicit overrides.
+
+Treat the emitted routing plan as the dispatch authority. It carries one
+validated execution plan per canonical reviewer plus requested, resolved,
+applied, fallback, and semantic provenance. Stage 4 leaf adapters consume that
+plan by path and reviewer id; they do not reinterpret provider or reviewer
+flags.
+
 ## 4. Dispatch independent reviewers
 
 Launch every eligible role in a fresh background context. Capture a repository
@@ -182,13 +233,25 @@ never expose file contents.
 
 ### 4.1 `claude-opus`
 
-When named-agent capability exists, call `Agent(code-reviewer)` with the
-configured model alias and the shared payload. Otherwise, when Claude CLI
-exists, invoke:
+When named-agent capability exists, call `Agent(code-reviewer)` with the shared
+payload. Before native dispatch, only when the emitted plan is applicable —
+`explicit_overrides: true` or `apply_automatic: true` — read the `claude-opus`
+route from the emitted routing plan and pass its `resolved.model` as the Agent
+model parameter. With a shadow-only plan or no emitted plan, preserve the
+configured model alias unchanged. The native Agent interface has a model
+parameter, but effort is unsupported. Therefore an explicit effort override on
+a native-agent-only route is a strict error; never report an effort as
+requested-but-unverified when it could not be transmitted. Otherwise, when
+Claude CLI exists, invoke:
 
 ```text
 node {plugin_root}/hooks/scripts/run-claude-reviewer.mjs --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PAYLOAD_FILE --output OUTPUT_FILE --model REVIEW_MODEL --agent code-reviewer --timeout-seconds 1200
 ```
+
+Only when the emitted plan is applicable — `explicit_overrides: true` or
+`apply_automatic: true` — append
+`--routing-plan .deep-review/tmp/routing-plan.json --reviewer-id claude-opus`.
+With a shadow-only plan, preserve the command above byte-for-byte.
 
 Do not replace a requested Claude role with a Codex identity. Record timeout,
 authentication, empty-output, or unavailable-model status exactly as emitted.
@@ -233,6 +296,11 @@ After a successful current privacy outcome, invoke:
 ```text
 node {plugin_root}/hooks/scripts/run-agy-reviewer.mjs --binary AGY_FILE --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PAYLOAD_FILE --output OUTPUT_FILE --mode hybrid --model AGY_MODEL --timeout-seconds 900
 ```
+
+Only when the emitted plan is applicable — `explicit_overrides: true` or
+`apply_automatic: true` — append
+`--routing-plan .deep-review/tmp/routing-plan.json --reviewer-id agy`. With a
+shadow-only plan, preserve the command above byte-for-byte.
 
 The bridge revalidates privacy and fingerprint state. A `mutated` result is
 untrusted even if the process produced report text.

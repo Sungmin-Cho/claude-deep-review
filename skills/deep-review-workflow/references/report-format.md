@@ -30,6 +30,20 @@
 > For N < 4 modes, the agy column is omitted (or shown as `(not run)`).
 > **XF-1**: When `claude_reviewer = ultracode-fanout`, render the "Claude (Opus)" column header as **"Claude (ultracode)"** — the cell holds the single collapsed voice (1 Anthropic vote; see [`ultracode-integration.md`](./ultracode-integration.md) §4).
 
+## Routing Plan
+
+For every eligible reviewer, record symbolic tier, requested and resolved model
+and effort, route source, shadow/applied mode, and any fallback reason. Preserve
+the eligible reviewer set; routing never silently adds or removes a reviewer.
+
+## Provenance
+
+Record artifact `confidence`, deterministic signals, `semantic_status`, and the
+adapter result fields `requested_*`, `resolved_*`, `applied_*`, and
+`verification_status`. When a transmitted request cannot be observed in provider
+output, render `requested-but-unverified`; never use that label for a request
+that was omitted. Include fallback authorization, applied substitute, and reason.
+
 ## Code Review
 ### 🔴 Critical
 {구체적 이슈, 파일:라인, 수정 제안}

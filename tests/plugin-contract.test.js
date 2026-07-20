@@ -162,13 +162,13 @@ test('both workflows cover every release-relevant path class', () => {
   }
 });
 
-test('release version is exactly 1.14.0 on all three package surfaces', () => {
+test('release version is exactly 1.15.0 on all three package surfaces', () => {
   const versions = [
     JSON.parse(read('.claude-plugin/plugin.json')).version,
     JSON.parse(read('.codex-plugin/plugin.json')).version,
     JSON.parse(read('package.json')).version,
   ];
-  assert.deepEqual(versions, ['1.14.0', '1.14.0', '1.14.0']);
+  assert.deepEqual(versions, ['1.15.0', '1.15.0', '1.15.0']);
 });
 
 test('evergreen bilingual READMEs advertise both native hosts and portable runtime', () => {
@@ -253,6 +253,40 @@ test('bilingual 1.14.0 changelogs are structurally paired and carry the converge
       block,
       /\b\d+\s*\/\s*\d+\b|\b\d+\s+tests?\b|npm test|self-review|dogfood|review-loop round|commit [0-9a-f]{7,}/iu,
     );
+  }
+});
+
+test('bilingual 1.15.0 release surfaces document artifact-aware routing Phase 2', () => {
+  const english = releaseBlockAnyDate(read('CHANGELOG.md'), '1.15.0');
+  const korean = releaseBlockAnyDate(read('CHANGELOG.ko.md'), '1.15.0');
+  assert.equal(bulletCount(english, '### Added'), bulletCount(korean, '### 추가'));
+  for (const block of [english, korean]) {
+    for (const anchor of [
+      /semantic/iu,
+      /capability/iu,
+      /model.{0,30}effort|effort.{0,30}model/iu,
+      /review-policy\.yaml/iu,
+      /no-flag|무플래그/iu,
+      /shadow/iu,
+      /secret|비밀/iu,
+    ]) assert.match(block, anchor);
+  }
+
+  const readmes = [read('README.md'), read('README.ko.md')];
+  for (const source of readmes) {
+    for (const flag of [
+      '--reviewer',
+      '--model',
+      '--reviewer-model',
+      '--effort',
+      '--routing',
+      '--allow-fallback',
+      '--allow-classifier',
+    ]) assert.match(source, new RegExp(flag));
+    assert.match(source, /review-policy\.yaml/u);
+    assert.match(source, /^\.deep-review\/\*$/mu);
+    assert.match(source, /^!\.deep-review\/review-policy\.yaml$/mu);
+    assert.match(source, /shadow/iu);
   }
 });
 

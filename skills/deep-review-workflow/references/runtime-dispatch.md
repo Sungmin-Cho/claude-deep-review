@@ -4,6 +4,12 @@ The public entries and reviewer roles are selected from available host tools
 and executable capabilities. The `Claude Code` and `Codex` columns are
 capability profiles, not a `runtime_host` switch.
 
+The executable capability contract in
+`{plugin_root}/hooks/scripts/lib/capability-registry.mjs` is authoritative.
+This table explains that contract for orchestrators; when prose and runtime
+data differ, use the protocol `2.0` registry output. Native host assertions are
+injected for the current run and are never restored from the executable cache.
+
 | Role | Claude Code | Codex |
 |---|---|---|
 | public review/respond entry | `/deep-review` command shim | `$deep-review:deep-review` |

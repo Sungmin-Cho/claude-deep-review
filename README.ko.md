@@ -53,7 +53,7 @@ Claude Code 슬래시 커맨드와 Codex 스킬은 동일한 라우트 문법을
 | `/deep-review-loop [--max=N]` | 리뷰 ↔ 대응을 수렴까지 자동 반복 (`user-invocable` 스킬이기도 함 — Codex CLI / SDK 진입용 `Skill({ skill: "deep-review:deep-review-loop" })`) |
 | `/deep-review-loop --ultracode --codex` | ultracode 1회(라운드 1) + codex 매 라운드 통합 루프 |
 | `/deep-review-loop --session-doc` | 세션당 하나의 통합 리뷰 문서를 유지하며 매 라운드 in-place 재렌더 (라운드별 리포트는 그대로) |
-| `/deep-review --dry-run` / `--explain-routing` | 리뷰어 실행 없이 리뷰 대상을 결정적으로 분류하고 계획 출력 (artifact-aware routing Phase 1) |
+| `/deep-review --dry-run` / `--explain-routing` | 리뷰어 실행 없이 리뷰 대상을 분류하고 capability-aware model/effort 계획 출력 (artifact-aware routing Phase 2) |
 | `/deep-review init` | 프로젝트별 리뷰 규칙 대화형 초기화 |
 
 ### Codex
@@ -74,7 +74,18 @@ Claude Code 슬래시 커맨드와 Codex 스킬은 동일한 라우트 문법을
 - 루프는 라운드 사이에 `--prior-rounds-file` advisory 컨텍스트를 명시적으로 전달합니다(파일 존재 여부로 자동 소비하지 않음) — 리뷰어가 이전 발견·반박 항목을 재검증할 수 있습니다.
 - 최종 루프 요약에는 `rounds_saved` 지표가 포함됩니다.
 - `--session-doc`(루프 전용, opt-in)은 loop id로 키잉된 통합 세션 문서 하나를 유지합니다 — 현재 verdict, 라운드별 히스토리, open-vs-resolved 롤업, 종료 후 최종 요약 — 라운드별 리포트와 그 fail-closed 계상은 그대로 유지됩니다.
-- `--dry-run` / `--explain-routing`(리뷰 전용, opt-in)은 결정적 artifact classifier를 실행하고 리뷰어 실행 전에 정지합니다. semantic 분류와 model/effort 라우팅은 이후 단계에서 제공됩니다.
+- `--dry-run` / `--explain-routing`(리뷰 전용)은 artifact 분류, capability-aware 라우팅 계획, provenance를 출력하고 리뷰어 실행 전에 정지합니다.
+- `--routing <auto|fast|balanced|quality>`은 라우팅 정책을 선택합니다. 반복 가능한 `--model <provider>=<model>` / `--effort <provider>=<effort>`은 provider override를, `--reviewer-model <reviewer>=<model>` / `--reviewer-effort <reviewer>=<effort>`은 canonical reviewer override를 설정합니다.
+- `--allow-fallback`은 명시한 model 또는 effort를 적용할 수 없을 때 보이는 fallback을 허용합니다. 이 플래그가 없으면 지원되지 않는 명시 요청은 dispatch 전에 fail-closed합니다.
+- `--allow-classifier`는 dry-run/explain에서 모호한 artifact에 semantic 분류를 사용할 수 있게 합니다. 제한된 artifact 내용은 untrusted data로 취급해 stdin으로만 전달하며, secret-like 내용은 외부로 보내지 않고 결정적 분류로 fallback합니다.
+- 무플래그 라우팅은 shadow-first입니다. 계획은 report provenance에 기록하지만 reviewer dispatch 인자는 byte-identical하게 유지합니다. 자동 model 라우팅은 프로젝트 정책이 `automatic_model_routing`을 활성화하고 `routing_shadow_mode: false`로 설정한 경우에만 적용합니다.
+
+팀 라우팅 정책은 `.deep-review/review-policy.yaml`로 공유할 수 있습니다. 프로젝트가 현재 `.deep-review/`를 무시한다면 아래 두 규칙으로 디렉터리 규칙을 교체해야 합니다. Git은 완전히 무시된 디렉터리 아래 파일을 다시 포함할 수 없습니다:
+
+```gitignore
+.deep-review/*
+!.deep-review/review-policy.yaml
+```
 
 ## 리뷰 파이프라인
 

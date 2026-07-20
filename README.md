@@ -53,7 +53,7 @@ Claude Code slash commands and Codex skills are distinct host entrypoints for th
 | `/deep-review-loop [--max=N]` | Auto-iterate review ↔ respond until convergence (also a `user-invocable` skill — `Skill({ skill: "deep-review:deep-review-loop" })` for Codex CLI / SDK consumers) |
 | `/deep-review-loop --ultracode --codex` | ultracode once (round 1) + codex every round integrated loop |
 | `/deep-review-loop --session-doc` | Maintain one consolidated per-session review document, re-rendered in place after each round (per-round reports unchanged) |
-| `/deep-review --dry-run` / `--explain-routing` | Classify review targets deterministically and print the plan without running any reviewer (artifact-aware routing Phase 1) |
+| `/deep-review --dry-run` / `--explain-routing` | Classify review targets and print the capability-aware model/effort plan without running any reviewer (artifact-aware routing Phase 2) |
 | `/deep-review init` | Initialize per-project review rules interactively |
 
 ### Codex
@@ -74,7 +74,18 @@ Claude Code slash commands and Codex skills are distinct host entrypoints for th
 - The loop passes a `--prior-rounds-file` advisory context between rounds explicitly (never by file existence) so reviewers can re-verify prior findings and rejected items.
 - The final loop summary reports a `rounds_saved` metric.
 - `--session-doc` (loop-only, opt-in) keeps one consolidated session document keyed by the loop id — current verdict, per-round history, open-vs-resolved rollup, and a final post-stop summary — while per-round reports and their fail-closed accounting stay untouched.
-- `--dry-run` / `--explain-routing` (review-only, opt-in) run the deterministic artifact classifier and stop before any reviewer; semantic classification and model/effort routing arrive in a later phase.
+- `--dry-run` / `--explain-routing` (review-only) print the artifact classification, capability-aware routing plan, and provenance, then stop before any reviewer.
+- `--routing <auto|fast|balanced|quality>` selects a routing policy. Repeated `--model <provider>=<model>` / `--effort <provider>=<effort>` set provider overrides; repeated `--reviewer-model <reviewer>=<model>` / `--reviewer-effort <reviewer>=<effort>` set canonical reviewer overrides.
+- `--allow-fallback` permits a visible fallback when an explicit model or effort cannot be applied. Without it, explicit unsupported requests fail closed before dispatch.
+- `--allow-classifier` lets dry-run/explain use semantic classification for ambiguous artifacts. Bounded artifact content is treated as untrusted data and sent through stdin; secret-like content is never sent and falls back to deterministic classification.
+- No-flag routing remains shadow-first: the plan is recorded in report provenance while reviewer dispatch arguments remain byte-identical. Automatic model routing is applied only when project policy enables `automatic_model_routing` and sets `routing_shadow_mode: false`.
+
+Teams can share routing policy in `.deep-review/review-policy.yaml`. If the project currently ignores `.deep-review/`, replace that directory rule with the following two rules; Git cannot re-include a file beneath a wholly ignored directory:
+
+```gitignore
+.deep-review/*
+!.deep-review/review-policy.yaml
+```
 
 ## Review pipeline
 

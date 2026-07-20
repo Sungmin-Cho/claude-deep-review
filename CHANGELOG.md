@@ -4,6 +4,24 @@
 
 All notable changes to deep-review are documented here. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.0] — 2026-07-21
+
+### Added
+
+- **Semantic artifact classifier** — ambiguous text artifacts can opt into bounded semantic classification, with deterministic classification retained as the fallback.
+- **Reviewer capability registry** — protocol `2.0` adapter contracts describe current availability, model and effort support, read-only enforcement, and invocation transport without treating the host label as capability.
+- **Model/effort routing** — artifact kind, risk, size, and reviewer role produce a validated per-reviewer execution plan whose model identifiers come from policy, user configuration, or adapter aliases.
+- **Routing overrides** — review-only `--routing`, provider model/effort, reviewer model/effort, `--allow-fallback`, and `--allow-classifier` flags flow through normalized structured plans.
+- **`review-policy.yaml`** — teams can share nested artifact classification and routing policy at `.deep-review/review-policy.yaml` while user configuration remains separately mergeable.
+
+### Changed
+
+- No-flag dispatch arguments remain byte-identical; automatic routes are shadow-first and become active only through an explicit CLI override or project policy opt-in.
+
+### Security
+
+- Artifact content is untrusted, bounded, and transported with argv arrays plus stdin; secret-like content fails closed before any semantic classifier invocation.
+
 ## [1.14.0] — 2026-07-20
 
 ### Added

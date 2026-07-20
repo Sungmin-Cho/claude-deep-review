@@ -29,6 +29,9 @@ const discoverUrl = pathToFileURL(
 const scopeUrl = pathToFileURL(
   path.join(root, 'hooks', 'scripts', 'classify-artifacts.mjs'),
 ).href;
+const runtimeContextUrl = pathToFileURL(
+  path.join(root, 'hooks', 'scripts', 'lib', 'runtime-context.mjs'),
+).href;
 
 const classifyCliPath = path.join(root, 'hooks', 'scripts', 'classify-artifacts.mjs');
 
@@ -422,7 +425,7 @@ test('scope classification over a mixed change set produces provenance and a mix
   }
 });
 
-test('dry-run listing follows the §15.7 shape; explain honestly defers routing to Phase 2', async () => {
+test('dry-run listing follows the §15.7 shape and explain renders the Phase 2 routing plan', async () => {
   const { classifyArtifactsScope, formatDryRun, formatExplainRouting } = await loadScope();
   const repo = createGitFixture('scope-format');
   fs.writeFileSync(path.join(repo, 'design.md'), fixture('design-en.md'));
@@ -439,7 +442,8 @@ test('dry-run listing follows the §15.7 shape; explain honestly defers routing 
   const explain = formatExplainRouting(result);
   assert.match(explain, /design\.md/);
   assert.match(explain, /routing/i);
-  assert.match(explain, /Phase 2|not yet implemented|not implemented/i);
+  assert.match(explain, /Routing policy:/i);
+  assert.doesNotMatch(explain, /not yet implemented|not implemented/i);
 });
 
 // ---------------------------------------------------------------------------
@@ -487,7 +491,7 @@ test('discovery never re-ingests its own provenance output or deep-suite runtime
   assert.deepEqual(paths, ['design.md']);
 });
 
-test('the classify-artifacts CLI supports --explain-routing and defers routing to Phase 2', () => {
+test('the classify-artifacts CLI supports --explain-routing with real routing output', () => {
   const repo = createGitFixture('cli-explain');
   fs.writeFileSync(path.join(repo, 'design.md'), fixture('design-en.md'));
 
@@ -497,7 +501,8 @@ test('the classify-artifacts CLI supports --explain-routing and defers routing t
     { encoding: 'utf8' },
   );
   assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stdout, /Phase 2|not yet implemented|not implemented/i);
+  assert.match(run.stdout, /Routing policy:/i);
+  assert.doesNotMatch(run.stdout, /not yet implemented|not implemented/i);
 });
 
 // ---------------------------------------------------------------------------
@@ -760,4 +765,611 @@ test('W3: a genuine design filename still fires the strong path signal', async (
   });
   assert.ok(result.scores['design-document'] !== undefined, 'design filename must still score');
   assert.ok(result.signals.some((s) => s.type === 'filename'), 'expected a filename signal');
+});
+
+// ---------------------------------------------------------------------------
+// F2: preflight semantic classification stays gated behind explicit opt-in —
+// `--emit-routing-plan` alone (the flag the supported review preflight always
+// passes) must never enable the external classifier.
+// ---------------------------------------------------------------------------
+
+test('F2: --emit-routing-plan alone never enables semantic classification; explicit allow_classifier does', async () => {
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-f2-preflight-');
+  fs.writeFileSync(path.join(repo, 'ambiguous-notes.md'), fixture('ambiguous-notes.md'));
+  const listPath = path.join(repo, 'targets.z');
+  fs.writeFileSync(listPath, 'ambiguous-notes.md\0');
+
+  const capabilities = [{
+    protocol_version: '2.0', adapter_id: 'claude-cli', provider: 'claude', available: true,
+    roles: ['standard', 'classifier'],
+    model_selection: { supported: true, aliases: ['swift', 'steady', 'deep', 'best'], catalog_complete: false, transport: 'flag:--model' },
+    effort_selection: { supported: true, levels: ['low', 'medium', 'high', 'xhigh', 'max'], transport: 'flag:--effort' },
+    structured_output: true, read_only_enforcement: 'process-contract',
+  }];
+  const reviewers = [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }];
+
+  let defaultCalls = 0;
+  const defaultResult = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', listPath, '--emit-routing-plan'],
+    {},
+    {
+      capabilities, reviewers,
+      semanticAdapter: async () => { defaultCalls += 1; return {}; },
+    },
+  );
+  assert.equal(defaultCalls, 0, 'the classifier must never run on plain --emit-routing-plan preflight');
+  const deferredArtifact = defaultResult.artifacts.find((artifact) => artifact.path === 'ambiguous-notes.md');
+  assert.equal(deferredArtifact.needs_semantic, true);
+  assert.equal(deferredArtifact.semantic_status, 'deferred');
+
+  let optInCalls = 0;
+  const overridesJson = JSON.stringify({
+    protocol_version: '2.0', routing_policy: 'auto', allow_fallback: false, allow_classifier: true,
+    providers: {}, reviewers: {},
+  });
+  const optInResult = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', listPath, '--emit-routing-plan', '--overrides-json', overridesJson],
+    {},
+    {
+      capabilities, reviewers,
+      semanticAdapter: async () => {
+        optInCalls += 1;
+        return {
+          classification_version: '1.0', target_kind: 'research-note', confidence: 0.9,
+          signals: [], alternative_kinds: [], uncertainty_action: 'proceed', notes: '',
+        };
+      },
+    },
+  );
+  assert.equal(optInCalls, 1, 'explicit allow_classifier must enable the semantic path');
+  const optInArtifact = optInResult.artifacts.find((artifact) => artifact.path === 'ambiguous-notes.md');
+  assert.notEqual(optInArtifact.semantic_status, 'deferred');
+});
+
+// ---------------------------------------------------------------------------
+// I1: classification.max_classifier_bytes_per_artifact from the merged policy
+// must reach the semantic byte budget instead of always defaulting to 24 KB.
+// ---------------------------------------------------------------------------
+
+test('I1: policy classification.max_classifier_bytes_per_artifact wires into the semantic byte budget', async () => {
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-i1-budget-');
+  // Long, structurally ambiguous prose (no strong deterministic signals) so
+  // needs_semantic stays true regardless of length, and long enough that a
+  // 512-byte budget must visibly truncate the transmitted snippets.
+  const paragraph = 'Some thoughts from today about the cache thing and a few open threads. '
+    + 'It is not fully clear which one to pull first, so maybe revisit next week.\n';
+  const longAmbiguousContent = `# Notes\n\n${paragraph.repeat(80)}`;
+  assert.ok(Buffer.byteLength(longAmbiguousContent, 'utf8') > 8192, 'fixture must exceed the configured budget');
+  fs.writeFileSync(path.join(repo, 'ambiguous-long.md'), longAmbiguousContent);
+  const listPath = path.join(repo, 'targets.z');
+  fs.writeFileSync(listPath, 'ambiguous-long.md\0');
+
+  const capabilities = [{
+    protocol_version: '2.0', adapter_id: 'claude-cli', provider: 'claude', available: true,
+    roles: ['standard', 'classifier'],
+    model_selection: { supported: true, aliases: ['swift', 'steady', 'deep', 'best'], catalog_complete: false, transport: 'flag:--model' },
+    effort_selection: { supported: true, levels: ['low', 'medium', 'high', 'xhigh', 'max'], transport: 'flag:--effort' },
+    structured_output: true, read_only_enforcement: 'process-contract',
+  }];
+  const reviewers = [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }];
+  const overridesJson = JSON.stringify({
+    protocol_version: '2.0', routing_policy: 'auto', allow_fallback: false, allow_classifier: true,
+    providers: {}, reviewers: {},
+  });
+
+  const budgetedPayloads = [];
+  await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', listPath, '--emit-routing-plan', '--overrides-json', overridesJson],
+    {},
+    {
+      capabilities, reviewers,
+      projectPolicy: { classification: { max_classifier_bytes_per_artifact: 512 } },
+      semanticAdapter: async (payload) => {
+        budgetedPayloads.push(payload);
+        return {
+          classification_version: '1.0', target_kind: 'research-note', confidence: 0.9,
+          signals: [], alternative_kinds: [], uncertainty_action: 'proceed', notes: '',
+        };
+      },
+    },
+  );
+  assert.equal(budgetedPayloads.length, 1);
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(budgetedPayloads[0]), 'utf8') <= 512,
+    'transmitted payload must respect the configured 512-byte budget',
+  );
+
+  const defaultPayloads = [];
+  await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', listPath, '--emit-routing-plan', '--overrides-json', overridesJson],
+    {},
+    {
+      capabilities, reviewers,
+      semanticAdapter: async (payload) => {
+        defaultPayloads.push(payload);
+        return {
+          classification_version: '1.0', target_kind: 'research-note', confidence: 0.9,
+          signals: [], alternative_kinds: [], uncertainty_action: 'proceed', notes: '',
+        };
+      },
+    },
+  );
+  assert.equal(defaultPayloads.length, 1);
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(defaultPayloads[0]), 'utf8') > 512,
+    'without the policy override the default ~24KB budget must not truncate down to 512 bytes',
+  );
+});
+
+// ---------------------------------------------------------------------------
+// H6: classification.thresholds from review-policy.yaml must reach the
+// deterministic classifier's confidence bands (classifyArtifact consumes
+// `thresholds` directly), not just classification.size_thresholds /
+// max_classifier_bytes_per_artifact, which are already wired separately.
+// ---------------------------------------------------------------------------
+
+test('H6: policy classification.thresholds wires into the deterministic classifier confidence bands', async () => {
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-h6-thresholds-');
+  fs.writeFileSync(path.join(repo, 'design.md'), fixture('design-en.md'));
+  const listPath = path.join(repo, 'targets.z');
+  fs.writeFileSync(listPath, 'design.md\0');
+
+  const baseline = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', listPath],
+    {},
+    { capabilities: [], reviewers: [] },
+  );
+  const baselineArtifact = baseline.artifacts.find((artifact) => artifact.path === 'design.md');
+  assert.equal(baselineArtifact.target_kind, 'design-document');
+  assert.equal(baselineArtifact.needs_semantic, false, 'design.md must confirm deterministically under default thresholds');
+
+  const raised = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', listPath],
+    {},
+    { capabilities: [], reviewers: [], projectPolicy: { classification: { thresholds: { confirm: 0.99 } } } },
+  );
+  const raisedArtifact = raised.artifacts.find((artifact) => artifact.path === 'design.md');
+  assert.equal(raisedArtifact.target_kind, 'design-document');
+  assert.equal(raisedArtifact.needs_semantic, true, 'raising classification.thresholds.confirm must push the same artifact out of the confirmed band');
+});
+
+test('K1: policy classification overrides force kind and deterministic mode suppresses semantic calls', async () => {
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-k1-policy-classification-');
+  fs.mkdirSync(path.join(repo, 'docs'));
+  fs.writeFileSync(path.join(repo, 'docs', 'notes.md'), fixture('ambiguous-notes.md'));
+  const listPath = path.join(repo, 'targets.z');
+  fs.writeFileSync(listPath, 'docs/notes.md\0');
+  const capabilities = [{
+    protocol_version: '2.0', adapter_id: 'claude-cli', provider: 'claude', available: true,
+    roles: ['standard', 'classifier'], structured_output: true,
+    model_selection: { supported: true, aliases: ['swift'], catalog_complete: false, transport: 'flag:--model' },
+    effort_selection: { supported: true, levels: ['low'], transport: 'flag:--effort' },
+    read_only_enforcement: 'process-contract',
+  }];
+  const reviewers = [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }];
+  const overridesJson = JSON.stringify({
+    protocol_version: '2.0', allow_classifier: true, providers: {}, reviewers: {},
+  });
+
+  let overrideCalls = 0;
+  const overridden = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', listPath, '--emit-routing-plan', '--overrides-json', overridesJson],
+    {},
+    {
+      capabilities, reviewers,
+      projectPolicy: { classification: { overrides: [{ glob: 'docs/**', kind: 'design-document' }] } },
+      semanticAdapter: async () => { overrideCalls += 1; return {}; },
+    },
+  );
+  assert.equal(overrideCalls, 0, 'a policy-forced kind must not invoke semantic classification');
+  assert.equal(overridden.artifacts[0].target_kind, 'design-document');
+  assert.equal(overridden.artifacts[0].confidence, 1);
+  assert.match(overridden.artifacts[0].source, /policy override.*docs\/\*\*/);
+  assert.equal(overridden.artifacts[0].needs_semantic, false);
+
+  let deterministicCalls = 0;
+  const deterministic = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', listPath, '--emit-routing-plan', '--overrides-json', overridesJson],
+    {},
+    {
+      capabilities, reviewers,
+      projectPolicy: { classification: { mode: 'deterministic' } },
+      semanticAdapter: async () => { deterministicCalls += 1; return {}; },
+    },
+  );
+  assert.equal(deterministicCalls, 0, 'deterministic mode must suppress an otherwise opted-in semantic call');
+  assert.equal(deterministic.artifacts[0].needs_semantic, true);
+  assert.equal(deterministic.artifacts[0].semantic_status, 'deferred');
+
+  let baselineCalls = 0;
+  await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', listPath, '--emit-routing-plan', '--overrides-json', overridesJson],
+    {},
+    {
+      capabilities, reviewers,
+      semanticAdapter: async () => {
+        baselineCalls += 1;
+        return {
+          classification_version: '1.0', target_kind: 'research-note', confidence: 0.9,
+          signals: [], alternative_kinds: [], uncertainty_action: 'proceed', notes: '',
+        };
+      },
+    },
+  );
+  assert.equal(baselineCalls, 1, 'without classification policy the existing semantic opt-in remains unchanged');
+});
+
+// ---------------------------------------------------------------------------
+// R2I1: routingInputs' no-runtime-capabilities/no-runtime-probes branch must
+// consult the on-disk capability cache before spawning fresh probes, save the
+// cache after a fresh probe, and never persist native host-assertion entries.
+// These tests deliberately omit runtime.capabilities and runtime.probes (both
+// take precedence and would bypass the cache/probe path entirely) and instead
+// restrict PATH to a temp bin dir holding a fake `claude` script that logs
+// every invocation, so "the probe runner ran" is observable without mocking
+// any module.
+// ---------------------------------------------------------------------------
+
+const R2I1_SAFE_SYSTEM_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(path.delimiter);
+
+function writeFakeClaudeBinary(binDir, probeLogPath) {
+  const claudeScript = path.join(binDir, 'claude');
+  fs.writeFileSync(claudeScript, [
+    '#!/bin/sh',
+    `echo "invoked $1" >> "${probeLogPath}"`,
+    'if [ "$1" = "--version" ]; then echo "Claude Code v9.9.9"; exit 0; fi',
+    'if [ "$1" = "--help" ]; then echo "  --effort <level>  set reasoning effort"; exit 0; fi',
+    'exit 1',
+    '',
+  ].join('\n'));
+  if (process.platform !== 'win32') fs.chmodSync(claudeScript, 0o755);
+  return claudeScript;
+}
+
+test('R2I1: a fresh probe writes the capability cache and a subsequent run hits it, skipping the probe runner', async (t) => {
+  if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script'); return; }
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-r2i1-cache-');
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const binDir = temporaryDirectory('deep-review-r2i1-bin-');
+  const probeLog = path.join(binDir, 'probe-calls.log');
+  writeFakeClaudeBinary(binDir, probeLog);
+  const env = { PATH: `${binDir}${path.delimiter}${R2I1_SAFE_SYSTEM_PATH}`, PROBE_LOG: probeLog };
+
+  const cachePath = path.join(repo, '.deep-review', 'tmp', 'capability-cache.json');
+
+  const first = await runClassifyArtifactsCli(
+    ['--repo', repo, '--files-from0', files, '--emit-routing-plan'],
+    env,
+    {},
+  );
+  assert.ok(fs.existsSync(cachePath), 'a fresh probe must write the capability cache');
+  const firstRoute = first.routing_plan.routes.find((route) => route.reviewer_id === 'claude-opus');
+  assert.equal(firstRoute.adapter_id, 'claude-cli');
+  const invocationsAfterFirst = fs.readFileSync(probeLog, 'utf8').trim().split('\n').filter(Boolean).length;
+  assert.ok(invocationsAfterFirst > 0, 'the first run must invoke the probe runner');
+
+  // R2I1 (3): native assertion entries (claude-native-agent, codex-native-generic)
+  // must never be persisted to the on-disk cache.
+  const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+  const cachedAdapterIds = cached.capabilities.map((item) => item.adapter_id);
+  assert.equal(cachedAdapterIds.includes('claude-native-agent'), false);
+  assert.equal(cachedAdapterIds.includes('codex-native-generic'), false);
+  assert.ok(cachedAdapterIds.includes('claude-cli'));
+
+  const second = await runClassifyArtifactsCli(
+    ['--repo', repo, '--files-from0', files, '--emit-routing-plan'],
+    env,
+    {},
+  );
+  const invocationsAfterSecond = fs.readFileSync(probeLog, 'utf8').trim().split('\n').filter(Boolean).length;
+  assert.equal(invocationsAfterSecond, invocationsAfterFirst, 'a cache hit must avoid invoking the probe runner again');
+  const secondRoute = second.routing_plan.routes.find((route) => route.reviewer_id === 'claude-opus');
+  assert.equal(secondRoute.adapter_id, 'claude-cli', 'the cache hit must still resolve the correct adapter');
+});
+
+function writeFailingClaudeBinary(binDir, probeLogPath) {
+  const claudeScript = path.join(binDir, 'claude');
+  fs.writeFileSync(claudeScript, [
+    '#!/bin/sh',
+    `echo "invoked $1" >> "${probeLogPath}"`,
+    'exit 1',
+    '',
+  ].join('\n'));
+  if (process.platform !== 'win32') fs.chmodSync(claudeScript, 0o755);
+  return claudeScript;
+}
+
+// ---------------------------------------------------------------------------
+// H7: a transient probe failure (timeout/non-zero) must never be persisted to
+// the on-disk capability cache — success-only persistence, no TTL — so the
+// reviewer is re-probed (and can recover) on the very next run.
+// ---------------------------------------------------------------------------
+
+test('H7: a failed claude probe is never persisted to the capability cache', async (t) => {
+  if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script'); return; }
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-h7-failed-probe-');
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const binDir = temporaryDirectory('deep-review-h7-bin-');
+  const probeLog = path.join(binDir, 'probe-calls.log');
+  writeFailingClaudeBinary(binDir, probeLog);
+  const env = { PATH: `${binDir}${path.delimiter}${R2I1_SAFE_SYSTEM_PATH}`, PROBE_LOG: probeLog };
+
+  const cachePath = path.join(repo, '.deep-review', 'tmp', 'capability-cache.json');
+  await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], env, {});
+  assert.equal(fs.existsSync(cachePath), false, 'a failed probe must never write the capability cache');
+});
+
+test('H7: a successful probe still writes the capability cache', async (t) => {
+  if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script'); return; }
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-h7-success-probe-');
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const binDir = temporaryDirectory('deep-review-h7-success-bin-');
+  const probeLog = path.join(binDir, 'probe-calls.log');
+  writeFakeClaudeBinary(binDir, probeLog);
+  const env = { PATH: `${binDir}${path.delimiter}${R2I1_SAFE_SYSTEM_PATH}`, PROBE_LOG: probeLog };
+
+  const cachePath = path.join(repo, '.deep-review', 'tmp', 'capability-cache.json');
+  await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], env, {});
+  assert.ok(fs.existsSync(cachePath), 'a fully successful probe must still write the capability cache');
+});
+
+// ---------------------------------------------------------------------------
+// H8: codex-companion availability must be rebuilt fresh from this run's
+// detected.codex_plugin on every cache hit, never reused from a stale
+// on-disk cache entry — installing/removing the companion between runs (with
+// the keyed claude/codex/agy CLI paths+mtime unchanged) must be observable
+// immediately.
+// ---------------------------------------------------------------------------
+
+function codexCompanionEnv(binDir, probeLog, companionPath) {
+  const env = { PATH: `${binDir}${path.delimiter}${R2I1_SAFE_SYSTEM_PATH}`, PROBE_LOG: probeLog };
+  if (companionPath) env.CODEX_COMPANION_PATH = companionPath;
+  return env;
+}
+
+test('H8: a cache written when the companion was absent still yields an available codex-companion once detected.codex_plugin is true', async (t) => {
+  if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script'); return; }
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-h8-companion-appears-');
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const binDir = temporaryDirectory('deep-review-h8-bin-');
+  const probeLog = path.join(binDir, 'probe-calls.log');
+  writeFakeClaudeBinary(binDir, probeLog);
+  const companionPath = path.join(binDir, 'codex-companion.mjs');
+  fs.writeFileSync(companionPath, '// fake codex companion plugin\n');
+
+  const cachePath = path.join(repo, '.deep-review', 'tmp', 'capability-cache.json');
+  const absentEnv = codexCompanionEnv(binDir, probeLog, null);
+  const first = await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], absentEnv, {});
+  assert.ok(fs.existsSync(cachePath), 'the first (companion-absent) run must write the cache');
+  assert.equal(first.routing_plan.routes.some((route) => route.reviewer_id === 'codex-review'), false, 'no codex route without the companion');
+
+  const presentEnv = codexCompanionEnv(binDir, probeLog, companionPath);
+  const second = await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], presentEnv, {});
+  assert.equal(second.routing_plan.routes.some((route) => route.reviewer_id === 'codex-review' && route.adapter_id === 'codex-companion'), true,
+    'a cache hit must still rebuild codex-companion fresh and route to it once detected.codex_plugin is true');
+});
+
+test('H8: a cache written when the companion was present no longer yields codex-companion once detected.codex_plugin is false', async (t) => {
+  if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script'); return; }
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-h8-companion-disappears-');
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const binDir = temporaryDirectory('deep-review-h8-bin2-');
+  const probeLog = path.join(binDir, 'probe-calls.log');
+  writeFakeClaudeBinary(binDir, probeLog);
+  const companionPath = path.join(binDir, 'codex-companion.mjs');
+  fs.writeFileSync(companionPath, '// fake codex companion plugin\n');
+
+  const cachePath = path.join(repo, '.deep-review', 'tmp', 'capability-cache.json');
+  const presentEnv = codexCompanionEnv(binDir, probeLog, companionPath);
+  const first = await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], presentEnv, {});
+  assert.ok(fs.existsSync(cachePath), 'the first (companion-present) run must write the cache');
+  assert.equal(first.routing_plan.routes.some((route) => route.reviewer_id === 'codex-review' && route.adapter_id === 'codex-companion'), true);
+
+  const absentEnv = codexCompanionEnv(binDir, probeLog, null);
+  const second = await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], absentEnv, {});
+  assert.equal(second.routing_plan.routes.some((route) => route.reviewer_id === 'codex-review'), false,
+    'a cache hit must never reuse a stale companion-available entry once detected.codex_plugin is false');
+});
+
+test('R2I1: a corrupt capability cache falls open to a fresh probe instead of failing the preflight', async (t) => {
+  if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script'); return; }
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-r2i1-corrupt-cache-');
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const binDir = temporaryDirectory('deep-review-r2i1-corrupt-bin-');
+  const probeLog = path.join(binDir, 'probe-calls.log');
+  writeFakeClaudeBinary(binDir, probeLog);
+  const env = { PATH: `${binDir}${path.delimiter}${R2I1_SAFE_SYSTEM_PATH}`, PROBE_LOG: probeLog };
+
+  const cachePath = path.join(repo, '.deep-review', 'tmp', 'capability-cache.json');
+  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  fs.writeFileSync(cachePath, 'not valid json {{{');
+
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--files-from0', files, '--emit-routing-plan'],
+    env,
+    {},
+  );
+  const route = result.routing_plan.routes.find((r) => r.reviewer_id === 'claude-opus');
+  assert.equal(route.adapter_id, 'claude-cli', 'a corrupt cache must fail open to a fresh probe, never a hard error');
+  const invocations = fs.readFileSync(probeLog, 'utf8').trim().split('\n').filter(Boolean).length;
+  assert.ok(invocations > 0, 'the corrupt-cache path must still invoke the probe runner');
+});
+
+// ---------------------------------------------------------------------------
+// H3: content_risk/assessRisk must consider the actual change patch (removed
+// lines, deleted-file content), not just the current working-tree content, so
+// a change that erases high-risk terms from a neutrally named file — or
+// deletes a high-risk file outright — still routes '/high/'.
+// ---------------------------------------------------------------------------
+
+function h3RoutingRuntime() {
+  const capabilities = [{
+    protocol_version: '2.0', adapter_id: 'claude-cli', provider: 'claude', available: true,
+    roles: ['standard', 'classifier'],
+    model_selection: { supported: true, aliases: ['swift', 'steady', 'deep', 'best'], catalog_complete: false, transport: 'flag:--model' },
+    effort_selection: { supported: true, levels: ['low', 'medium', 'high', 'xhigh', 'max'], transport: 'flag:--effort' },
+    structured_output: true, read_only_enforcement: 'process-contract',
+  }];
+  const reviewers = [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }];
+  return { capabilities, reviewers };
+}
+
+test('H3: removing a high-risk line from a neutrally named file still routes /high/ via the actual patch', async () => {
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = createGitFixture('h3-removed-content', { initialCommit: false });
+
+  fs.writeFileSync(
+    path.join(repo, 'session-notes.md'),
+    '# Session Notes\n\nRemember to check the authorization guard before merging.\n',
+  );
+  git(repo, ['add', '--', 'session-notes.md']);
+  git(repo, ['commit', '--quiet', '-m', 'base with a high-risk line']);
+  const baseSha = git(repo, ['rev-parse', 'HEAD']);
+
+  fs.writeFileSync(path.join(repo, 'session-notes.md'), '# Session Notes\n\nAll clear.\n');
+  git(repo, ['add', '--', 'session-notes.md']);
+  git(repo, ['commit', '--quiet', '-m', 'remove the high-risk line']);
+
+  const { capabilities, reviewers } = h3RoutingRuntime();
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'clean', '--review-base', baseSha, '--emit-routing-plan'],
+    {},
+    { capabilities, reviewers },
+  );
+  const route = result.routing_plan.routes.find((item) => item.reviewer_id === 'claude-opus');
+  assert.match(route.route_explanation, /\/high\//, 'the removed authorization line must still raise the routed risk floor to high');
+  assert.doesNotMatch(JSON.stringify(result), /authorization guard/, 'raw diff text must never be persisted into provenance or the routing plan');
+});
+
+test('H3: deleting a file whose base content held a high-risk term still routes /high/ via the actual patch', async () => {
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = createGitFixture('h3-deleted-file', { initialCommit: false });
+
+  fs.writeFileSync(
+    path.join(repo, 'ops-notes.md'),
+    '# Ops Notes\n\nRun the database migration script overnight.\n',
+  );
+  git(repo, ['add', '--', 'ops-notes.md']);
+  git(repo, ['commit', '--quiet', '-m', 'base with a high-risk file']);
+  const baseSha = git(repo, ['rev-parse', 'HEAD']);
+
+  // Delete the high-risk file and add an unrelated file so the 'clean' scope
+  // still has at least one classifiable artifact after the deletion.
+  fs.rmSync(path.join(repo, 'ops-notes.md'));
+  fs.writeFileSync(path.join(repo, 'readme.md'), '# Readme\n\nNothing special here.\n');
+  git(repo, ['add', '-A']);
+  git(repo, ['commit', '--quiet', '-m', 'delete the high-risk file, add an unrelated file']);
+
+  const { capabilities, reviewers } = h3RoutingRuntime();
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'clean', '--review-base', baseSha, '--emit-routing-plan'],
+    {},
+    { capabilities, reviewers },
+  );
+  const route = result.routing_plan.routes.find((item) => item.reviewer_id === 'claude-opus');
+  assert.match(route.route_explanation, /\/high\//, 'deleting a file whose base content held a high-risk term must still raise the routed risk floor to high');
+  assert.doesNotMatch(JSON.stringify(result), /database migration/, 'raw diff text must never be persisted into provenance or the routing plan');
+});
+
+// ---------------------------------------------------------------------------
+// J2 (security): writeProvenance / the routing-plan write must land at a
+// repository-contained real path with no symlinked component. A symlinked
+// destination file or a symlinked ancestor directory that escapes the repo
+// must be refused, never followed.
+// ---------------------------------------------------------------------------
+
+test('J2: writeContainedFile performs a plain contained write and the content matches', async () => {
+  const { writeContainedFile } = await import(runtimeContextUrl);
+  const repo = temporaryDirectory('deep-review-j2-plain-');
+  const dest = path.join(repo, '.deep-review', 'tmp', 'artifact-classification.json');
+
+  const returned = writeContainedFile(repo, dest, '{"ok":true}\n');
+
+  assert.equal(returned, dest);
+  assert.equal(fs.readFileSync(dest, 'utf8'), '{"ok":true}\n');
+});
+
+test('J2: writeContainedFile refuses a destination symlink pointing outside the repo and leaves the outside target unmodified', async () => {
+  const { writeContainedFile } = await import(runtimeContextUrl);
+  const repo = temporaryDirectory('deep-review-j2-dest-symlink-');
+  const outsideRoot = temporaryDirectory('deep-review-j2-outside-file-');
+  const outsideTarget = path.join(outsideRoot, 'victim.json');
+  fs.writeFileSync(outsideTarget, 'untouched');
+  fs.mkdirSync(path.join(repo, '.deep-review', 'tmp'), { recursive: true });
+  const dest = path.join(repo, '.deep-review', 'tmp', 'artifact-classification.json');
+  fs.symlinkSync(outsideTarget, dest);
+
+  assert.throws(() => writeContainedFile(repo, dest, '{"pwned":true}\n'), /symlink/);
+  assert.equal(fs.readFileSync(outsideTarget, 'utf8'), 'untouched', 'the outside target must never be modified');
+});
+
+test('J2: writeContainedFile refuses a symlinked .deep-review/tmp ancestor directory that escapes the repo', async () => {
+  const { writeContainedFile } = await import(runtimeContextUrl);
+  const repo = temporaryDirectory('deep-review-j2-dir-symlink-');
+  const outsideRoot = temporaryDirectory('deep-review-j2-outside-dir-');
+  fs.mkdirSync(path.join(repo, '.deep-review'), { recursive: true });
+  fs.symlinkSync(outsideRoot, path.join(repo, '.deep-review', 'tmp'));
+  const dest = path.join(repo, '.deep-review', 'tmp', 'artifact-classification.json');
+
+  assert.throws(() => writeContainedFile(repo, dest, '{"pwned":true}\n'), /symlink/);
+  assert.equal(
+    fs.existsSync(path.join(outsideRoot, 'artifact-classification.json')),
+    false,
+    'no file must be written through the symlinked directory to the outside target',
+  );
+});
+
+test('J2: a benign runClassifyArtifactsCli run still writes provenance through the contained-write path', async () => {
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-j2-benign-');
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+  const capabilities = [{
+    protocol_version: '2.0', adapter_id: 'claude-cli', provider: 'claude', available: true,
+    roles: ['standard'],
+    model_selection: { supported: true, aliases: ['steady'], catalog_complete: false, transport: 'flag:--model' },
+    effort_selection: { supported: true, levels: ['low', 'medium'], transport: 'flag:--effort' },
+    structured_output: true, read_only_enforcement: 'process-contract',
+  }];
+  const reviewers = [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }];
+
+  await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', files],
+    {},
+    { capabilities, reviewers },
+  );
+
+  const provenancePath = path.join(repo, '.deep-review', 'tmp', 'artifact-classification.json');
+  assert.ok(fs.existsSync(provenancePath), 'provenance must still be written for a benign run');
+  const written = JSON.parse(fs.readFileSync(provenancePath, 'utf8'));
+  assert.equal(written.artifacts[0].path, 'notes.md');
 });

@@ -4,6 +4,24 @@
 
 deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)와 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
+## [1.15.0] — 2026-07-21
+
+### 추가
+
+- **Semantic artifact classifier** — 모호한 텍스트 artifact가 제한된 semantic 분류를 opt-in할 수 있으며, 결정적 분류는 fallback으로 유지됩니다.
+- **Reviewer capability registry** — protocol `2.0` adapter 계약이 host label을 capability로 간주하지 않고 현재 가용성, model/effort 지원, read-only enforcement, invocation transport를 기술합니다.
+- **Model/effort 라우팅** — artifact 종류, risk, size, reviewer role로 reviewer별 검증된 execution plan을 만들며 model ID는 policy, user config, adapter alias에서만 가져옵니다.
+- **라우팅 override** — 리뷰 전용 `--routing`, provider model/effort, reviewer model/effort, `--allow-fallback`, `--allow-classifier` 플래그를 정규화된 구조적 plan으로 전달합니다.
+- **`review-policy.yaml`** — 팀이 `.deep-review/review-policy.yaml`에서 중첩 artifact 분류·라우팅 정책을 공유하고 별도의 user config와 병합할 수 있습니다.
+
+### 변경
+
+- 무플래그 dispatch 인자는 byte-identical하게 유지됩니다. 자동 route는 shadow-first이며 명시적 CLI override 또는 프로젝트 policy opt-in에서만 실제 적용됩니다.
+
+### 보안
+
+- Artifact 내용은 untrusted·bounded 데이터로 취급하고 argv 배열과 stdin으로 전송하며, secret-like 내용은 semantic classifier 호출 전에 fail-closed합니다.
+
 ## [1.14.0] — 2026-07-20
 
 ### 추가

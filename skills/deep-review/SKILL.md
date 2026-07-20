@@ -2,7 +2,7 @@
 name: deep-review
 description: Public cross-runtime entrypoint for independent review, initialization, and evidence-based review response.
 user-invocable: true
-argument-hint: "[init] [--contract [SLICE-NNN]] [--entropy] [--ultracode] [--codex|--no-codex] [--no-opus] [--no-agy] [--codex-only] [--dry-run] [--explain-routing] [--respond (REPORT_PATH | --source=pr [--pr=NNN])]"
+argument-hint: "[init] [--contract [SLICE-NNN]] [--entropy] [--ultracode] [--codex|--no-codex] [--no-opus] [--no-agy] [--codex-only] [--dry-run] [--explain-routing] [--routing auto|fast|balanced|quality] [--model PROVIDER=MODEL] [--effort PROVIDER=EFFORT] [--reviewer-model REVIEWER=MODEL] [--reviewer-effort REVIEWER=EFFORT] [--allow-fallback] [--allow-classifier] [--respond (REPORT_PATH | --source=pr [--pr=NNN])]"
 ---
 
 # deep-review — public route
@@ -56,16 +56,49 @@ The runtime enforces this grammar:
   종료 without creating state.
 - `review` — terminal for `--contract`, `--entropy`, reviewer flags, or no
   arguments.
-  - Artifact-aware classification (Phase 1): when the returned route sets
+  - Artifact-aware classification and routing (Phase 2): when the returned route sets
     `dryRun` or `explainRouting`, do not run any reviewer. Instead run
     `node {plugin_root}/hooks/scripts/classify-artifacts.mjs --repo PROJECT_ROOT`
     (append `--explain-routing` when the route set `explainRouting`), print its
-    listing, and 종료 without running a reviewer. That helper only classifies
-    the change scope and writes provenance under `.deep-review/tmp/`; model and
-    effort routing itself is not yet implemented (Phase 2).
+    listing. When returned JSON has `route.overrides`, append
+    `--overrides-json` and `JSON.stringify(route.overrides)` as a single argv
+    value so model IDs and paths are never reparsed by a shell. Then 종료
+    without running a reviewer. That helper classifies the change scope, renders
+    the capability-aware routing plan, and writes provenance under
+    `.deep-review/tmp/`. Semantic classification remains deferred unless
+    `route.overrides.allow_classifier` is true.
   - Otherwise read the internal workflow skill and then
     `{plugin_root}/skills/deep-review-workflow/references/review-execution.md`;
-    execute it once and 종료 with the resulting report path and verdict.
+    execute its routing preflight immediately before reviewer dispatch, then run
+    it once and 종료 with the resulting report path and verdict. Explicit override
+    preflight failure is terminal; shadow-only failure is a visible warning.
 
 The internal workflow and receiving skills are implementation details and are
 not public marketplace prompts.
+
+## Artifact-aware routing Phase 2
+
+Routing overrides are review-only. `--routing` selects `auto`, `fast`,
+`balanced`, or `quality`; repeated `--model PROVIDER=MODEL` and
+`--effort PROVIDER=EFFORT` set provider defaults; repeated
+`--reviewer-model REVIEWER=MODEL` and `--reviewer-effort REVIEWER=EFFORT` set
+canonical reviewer overrides. `--allow-fallback` permits a visible downgrade
+when an explicit request cannot be applied. Model values are opaque and split
+only at the first `=`.
+
+`--allow-classifier` opts `--dry-run` or `--explain-routing` into semantic
+classification for ambiguous artifacts. Artifact content is untrusted data;
+the classifier receives bounded text through stdin, and secret-like content
+fails closed to deterministic classification without being sent externally.
+
+Without explicit overrides, routing is shadow-only by default: it records the
+plan and provenance while preserving the existing reviewer dispatch arguments.
+Automatic application requires project policy to enable
+`automatic_model_routing` and disable `routing_shadow_mode`. A team may commit
+`.deep-review/review-policy.yaml`; because Git cannot re-include a file below an
+ignored directory, replace a `.deep-review/` ignore with both rules below:
+
+```gitignore
+.deep-review/*
+!.deep-review/review-policy.yaml
+```
