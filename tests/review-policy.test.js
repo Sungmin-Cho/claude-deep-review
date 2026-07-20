@@ -57,6 +57,26 @@ test('loaders resolve project, XDG, and Windows APPDATA config locations', async
   assert.equal(userConfigPath({ APPDATA: 'C:\\Users\\Me\\AppData\\Roaming' }, 'win32'), path.win32.join('C:\\Users\\Me\\AppData\\Roaming', 'deep-review', 'config.yaml'));
 });
 
+// I2: classification.size_thresholds must be a known schema field (not just an
+// unrecognized-but-preserved one) so review-policy.yaml can actually express
+// the size thresholds that buildRoutingPlan already reads.
+test('I2: classification.size_thresholds is a known schema field and surfaces its parsed value with no warning', async () => {
+  const { parseReviewPolicy } = await import(policyUrl);
+  const result = parseReviewPolicy(`
+schema_version: 2
+classification:
+  size_thresholds:
+    code: [50, 200, 800]
+    document: [1024, 4096, 16384]
+`);
+  assert.deepEqual(result.policy.classification.size_thresholds.code, [50, 200, 800]);
+  assert.deepEqual(result.policy.classification.size_thresholds.document, [1024, 4096, 16384]);
+  assert.ok(
+    !result.warnings.some((warning) => warning.includes('classification.size_thresholds')),
+    'classification.size_thresholds must be a recognized field, not an unknown-field warning',
+  );
+});
+
 test('merge precedence is defaults < user < project < CLI while project enforced deny wins', async () => {
   const { mergeRoutingConfig } = await import(policyUrl);
   const merged = mergeRoutingConfig({

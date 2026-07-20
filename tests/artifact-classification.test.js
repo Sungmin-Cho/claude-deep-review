@@ -823,3 +823,79 @@ test('F2: --emit-routing-plan alone never enables semantic classification; expli
   const optInArtifact = optInResult.artifacts.find((artifact) => artifact.path === 'ambiguous-notes.md');
   assert.notEqual(optInArtifact.semantic_status, 'deferred');
 });
+
+// ---------------------------------------------------------------------------
+// I1: classification.max_classifier_bytes_per_artifact from the merged policy
+// must reach the semantic byte budget instead of always defaulting to 24 KB.
+// ---------------------------------------------------------------------------
+
+test('I1: policy classification.max_classifier_bytes_per_artifact wires into the semantic byte budget', async () => {
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-i1-budget-');
+  // Long, structurally ambiguous prose (no strong deterministic signals) so
+  // needs_semantic stays true regardless of length, and long enough that a
+  // 512-byte budget must visibly truncate the transmitted snippets.
+  const paragraph = 'Some thoughts from today about the cache thing and a few open threads. '
+    + 'It is not fully clear which one to pull first, so maybe revisit next week.\n';
+  const longAmbiguousContent = `# Notes\n\n${paragraph.repeat(80)}`;
+  assert.ok(Buffer.byteLength(longAmbiguousContent, 'utf8') > 8192, 'fixture must exceed the configured budget');
+  fs.writeFileSync(path.join(repo, 'ambiguous-long.md'), longAmbiguousContent);
+  const listPath = path.join(repo, 'targets.z');
+  fs.writeFileSync(listPath, 'ambiguous-long.md\0');
+
+  const capabilities = [{
+    protocol_version: '2.0', adapter_id: 'claude-cli', provider: 'claude', available: true,
+    roles: ['standard', 'classifier'],
+    model_selection: { supported: true, aliases: ['swift', 'steady', 'deep', 'best'], catalog_complete: false, transport: 'flag:--model' },
+    effort_selection: { supported: true, levels: ['low', 'medium', 'high', 'xhigh', 'max'], transport: 'flag:--effort' },
+    structured_output: true, read_only_enforcement: 'process-contract',
+  }];
+  const reviewers = [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }];
+  const overridesJson = JSON.stringify({
+    protocol_version: '2.0', routing_policy: 'auto', allow_fallback: false, allow_classifier: true,
+    providers: {}, reviewers: {},
+  });
+
+  const budgetedPayloads = [];
+  await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', listPath, '--emit-routing-plan', '--overrides-json', overridesJson],
+    {},
+    {
+      capabilities, reviewers,
+      projectPolicy: { classification: { max_classifier_bytes_per_artifact: 512 } },
+      semanticAdapter: async (payload) => {
+        budgetedPayloads.push(payload);
+        return {
+          classification_version: '1.0', target_kind: 'research-note', confidence: 0.9,
+          signals: [], alternative_kinds: [], uncertainty_action: 'proceed', notes: '',
+        };
+      },
+    },
+  );
+  assert.equal(budgetedPayloads.length, 1);
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(budgetedPayloads[0]), 'utf8') <= 512,
+    'transmitted payload must respect the configured 512-byte budget',
+  );
+
+  const defaultPayloads = [];
+  await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', listPath, '--emit-routing-plan', '--overrides-json', overridesJson],
+    {},
+    {
+      capabilities, reviewers,
+      semanticAdapter: async (payload) => {
+        defaultPayloads.push(payload);
+        return {
+          classification_version: '1.0', target_kind: 'research-note', confidence: 0.9,
+          signals: [], alternative_kinds: [], uncertainty_action: 'proceed', notes: '',
+        };
+      },
+    },
+  );
+  assert.equal(defaultPayloads.length, 1);
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(defaultPayloads[0]), 'utf8') > 512,
+    'without the policy override the default ~24KB budget must not truncate down to 512 bytes',
+  );
+});

@@ -381,6 +381,13 @@ export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env 
     && (options.overrides?.allow_classifier === true
       || policy.user?.features?.semantic_classifier === true
       || policy.project?.features?.semantic_classifier === true);
+  // I1: honor classification.max_classifier_bytes_per_artifact from the merged
+  // policy for the semantic byte budget; any absent or invalid value keeps the
+  // classifyArtifactsScopeWithSemantic / semantic-classify 24_576 default.
+  const policyMaxBytes = policy.classification?.max_classifier_bytes_per_artifact;
+  const maxClassifierBytes = Number.isSafeInteger(policyMaxBytes) && policyMaxBytes > 0
+    ? policyMaxBytes
+    : undefined;
   let result = semanticEnabled
     ? await classifyArtifactsScopeWithSemantic({
       ...classificationOptions,
@@ -388,6 +395,7 @@ export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env 
       capabilities,
       semanticAdapters,
       semanticAdapter: runtime.semanticAdapter,
+      maxClassifierBytes,
     })
     : classifyArtifactsScope(classificationOptions);
 

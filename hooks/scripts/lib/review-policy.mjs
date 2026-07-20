@@ -8,6 +8,7 @@ const KNOWN = Object.freeze({
   classification: {
     mode: null,
     thresholds: null,
+    size_thresholds: null,
     max_classifier_bytes_per_artifact: null,
     overrides: null,
   },

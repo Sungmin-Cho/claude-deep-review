@@ -194,6 +194,31 @@ test('F4: an explicit model override targeting codex-native-generic fails closed
   assert.equal(automaticResult.resolved.model, null);
 });
 
+// I2: buildRoutingPlan already reads policy.classification?.size_thresholds;
+// once review-policy.mjs recognizes the schema field, a policy-supplied
+// document threshold must change the computed size class.
+test('I2: buildRoutingPlan honors policy.classification.size_thresholds for document size class', async () => {
+  const { buildRoutingPlan } = await import(routerUrl);
+  const reviewers = [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }];
+  const artifacts = [{ target_kind: 'generic-document', path: 'README.md', byte_size: 2000 }];
+
+  const defaultPlan = buildRoutingPlan({
+    artifacts, reviewers,
+    policy: { routing: { policy: 'auto' } },
+    overrides: { protocol_version: '2.0', routing_policy: 'auto', allow_fallback: false, providers: {}, reviewers: {} },
+    capabilities: [capability()],
+  });
+  assert.match(defaultPlan.routes[0].route_explanation, /\/tiny\//, 'a 2000-byte document is tiny under the default thresholds');
+
+  const customPlan = buildRoutingPlan({
+    artifacts, reviewers,
+    policy: { routing: { policy: 'auto' }, classification: { size_thresholds: { document: [500, 2500, 5000] } } },
+    overrides: { protocol_version: '2.0', routing_policy: 'auto', allow_fallback: false, providers: {}, reviewers: {} },
+    capabilities: [capability()],
+  });
+  assert.match(customPlan.routes[0].route_explanation, /\/small\//, 'the policy-supplied document thresholds must reclassify the same artifact as small');
+});
+
 test('buildRoutingPlan preserves the eligible reviewer set and emits protocol 2.0', async () => {
   const { buildRoutingPlan, renderRoutingExplanation } = await import(routerUrl);
   const reviewers = [
