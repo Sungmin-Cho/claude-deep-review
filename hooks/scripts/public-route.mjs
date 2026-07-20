@@ -3,6 +3,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { isReviewerId } from './lib/reviewer-ids.mjs';
 
 const REVIEW_FLAGS = new Set([
   '--entropy',
@@ -12,6 +13,9 @@ const REVIEW_FLAGS = new Set([
   '--no-opus',
   '--no-agy',
 ]);
+
+const ROUTING_POLICIES = new Set(['auto', 'fast', 'balanced', 'quality']);
+const PROVIDERS = new Set(['claude', 'codex', 'agy']);
 
 function routeError(message) {
   return { ok: false, route: 'error', error: message };
@@ -111,6 +115,26 @@ function parseReview(argv, host, cwd) {
   if (conflict) return { ...routeError(conflict), host, argv: expanded };
   let dryRun = false;
   let explainRouting = false;
+  let hasOverrides = false;
+  const overrides = {
+    protocol_version: '2.0',
+    routing_policy: 'auto',
+    allow_fallback: false,
+    allow_classifier: false,
+    providers: {},
+    reviewers: {},
+  };
+  function assignment(flag, value, allowed, destination, field, label) {
+    const separator = value.indexOf('=');
+    if (separator <= 0 || separator === value.length - 1) return `${flag} requires <${label}>=<value>`;
+    const key = value.slice(0, separator);
+    const setting = value.slice(separator + 1);
+    if (!allowed(key)) return `unknown ${label}: ${key}`;
+    destination[key] ??= {};
+    if (Object.hasOwn(destination[key], field)) return `duplicate ${flag} for ${key}`;
+    destination[key][field] = setting;
+    return null;
+  }
   for (let index = 0; index < expanded.length; index += 1) {
     const token = expanded[index];
     if (REVIEW_FLAGS.has(token)) continue;
@@ -136,11 +160,54 @@ function parseReview(argv, host, cwd) {
       explainRouting = true;
       continue;
     }
+    if (token === '--allow-fallback') {
+      overrides.allow_fallback = true;
+      hasOverrides = true;
+      continue;
+    }
+    if (token === '--allow-classifier') {
+      overrides.allow_classifier = true;
+      hasOverrides = true;
+      continue;
+    }
+    if (token === '--routing') {
+      const value = expanded[index + 1];
+      if (!ROUTING_POLICIES.has(value)) return { ...routeError('--routing must be auto, fast, balanced, or quality'), host, argv: expanded };
+      overrides.routing_policy = value;
+      hasOverrides = true;
+      index += 1;
+      continue;
+    }
+    const assignmentFlags = {
+      '--model': [PROVIDERS.has.bind(PROVIDERS), overrides.providers, 'model', 'provider'],
+      '--effort': [PROVIDERS.has.bind(PROVIDERS), overrides.providers, 'effort', 'provider'],
+      '--reviewer-model': [isReviewerId, overrides.reviewers, 'model', 'reviewer'],
+      '--reviewer-effort': [isReviewerId, overrides.reviewers, 'effort', 'reviewer'],
+    };
+    if (Object.hasOwn(assignmentFlags, token)) {
+      const value = expanded[index + 1];
+      if (value === undefined) return { ...routeError(`${token} requires a value`), host, argv: expanded };
+      const error = assignment(token, value, ...assignmentFlags[token]);
+      if (error) return { ...routeError(error), host, argv: expanded };
+      hasOverrides = true;
+      index += 1;
+      continue;
+    }
     return { ...routeError(`unknown review argument: ${token}`), host, argv: expanded };
+  }
+  if (expanded.includes('--no-opus') && Object.hasOwn(overrides.providers, 'claude')) {
+    return { ...routeError('ERROR_CONFLICTING_REVIEWER_SELECTION: Claude override conflicts with --no-opus/--codex-only'), host, argv: expanded };
+  }
+  if (expanded.includes('--no-codex') && Object.hasOwn(overrides.providers, 'codex')) {
+    return { ...routeError('ERROR_CONFLICTING_REVIEWER_SELECTION: Codex override conflicts with --no-codex'), host, argv: expanded };
+  }
+  if (expanded.includes('--no-agy') && Object.hasOwn(overrides.providers, 'agy')) {
+    return { ...routeError('ERROR_CONFLICTING_REVIEWER_SELECTION: agy override conflicts with --no-agy'), host, argv: expanded };
   }
   const route = { ok: true, route: 'review', host, argv: expanded };
   if (dryRun) route.dryRun = true;
   if (explainRouting) route.explainRouting = true;
+  if (hasOverrides) route.overrides = overrides;
   return route;
 }
 

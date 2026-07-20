@@ -60,7 +60,10 @@ The runtime enforces this grammar:
     `dryRun` or `explainRouting`, do not run any reviewer. Instead run
     `node {plugin_root}/hooks/scripts/classify-artifacts.mjs --repo PROJECT_ROOT`
     (append `--explain-routing` when the route set `explainRouting`), print its
-    listing, and 종료 without running a reviewer. That helper only classifies
+    listing. When returned JSON has `route.overrides`, append
+    `--overrides-json` and `JSON.stringify(route.overrides)` as a single argv
+    value so model IDs and paths are never reparsed by a shell. Then 종료
+    without running a reviewer. That helper only classifies
     the change scope and writes provenance under `.deep-review/tmp/`; model and
     effort routing itself is not yet implemented (Phase 2).
   - Otherwise read the internal workflow skill and then

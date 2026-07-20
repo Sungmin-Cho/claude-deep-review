@@ -154,12 +154,40 @@ function deterministicTimestamp(env) {
   return new Date(seconds * 1000).toISOString();
 }
 
-function parseArguments(argv) {
+function validateOverrides(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('--overrides-json must decode to an object');
+  if (value.protocol_version !== '2.0') throw new Error('--overrides-json protocol_version must be "2.0"');
+  for (const field of ['allow_fallback', 'allow_classifier']) {
+    if (typeof value[field] !== 'boolean') throw new Error(`--overrides-json ${field} must be boolean`);
+  }
+  if (!['auto', 'fast', 'balanced', 'quality'].includes(value.routing_policy)) {
+    throw new Error('--overrides-json routing_policy is invalid');
+  }
+  if (!value.providers || typeof value.providers !== 'object' || Array.isArray(value.providers)
+      || !value.reviewers || typeof value.reviewers !== 'object' || Array.isArray(value.reviewers)) {
+    throw new Error('--overrides-json providers and reviewers must be objects');
+  }
+  return value;
+}
+
+export function parseArguments(argv) {
   const options = { repo: '.', explainRouting: false, format: 'text' };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--explain-routing') {
       options.explainRouting = true;
+      continue;
+    }
+    if (argument === '--overrides-json') {
+      const raw = argv[index + 1];
+      if (raw === undefined) throw new Error('--overrides-json requires a value');
+      try {
+        options.overrides = validateOverrides(JSON.parse(raw));
+      } catch (error) {
+        if (error.message.startsWith('--overrides-json')) throw error;
+        throw new Error(`--overrides-json must contain valid JSON: ${error.message}`);
+      }
+      index += 1;
       continue;
     }
     const key = VALUE_FLAGS[argument];
