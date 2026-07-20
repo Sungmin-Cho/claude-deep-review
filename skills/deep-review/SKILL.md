@@ -56,19 +56,22 @@ The runtime enforces this grammar:
   종료 without creating state.
 - `review` — terminal for `--contract`, `--entropy`, reviewer flags, or no
   arguments.
-  - Artifact-aware classification (Phase 1): when the returned route sets
+  - Artifact-aware classification and routing (Phase 2): when the returned route sets
     `dryRun` or `explainRouting`, do not run any reviewer. Instead run
     `node {plugin_root}/hooks/scripts/classify-artifacts.mjs --repo PROJECT_ROOT`
     (append `--explain-routing` when the route set `explainRouting`), print its
     listing. When returned JSON has `route.overrides`, append
     `--overrides-json` and `JSON.stringify(route.overrides)` as a single argv
     value so model IDs and paths are never reparsed by a shell. Then 종료
-    without running a reviewer. That helper only classifies
-    the change scope and writes provenance under `.deep-review/tmp/`; model and
-    effort routing itself is not yet implemented (Phase 2).
+    without running a reviewer. That helper classifies the change scope, renders
+    the capability-aware routing plan, and writes provenance under
+    `.deep-review/tmp/`. Semantic classification remains deferred unless
+    `route.overrides.allow_classifier` is true.
   - Otherwise read the internal workflow skill and then
     `{plugin_root}/skills/deep-review-workflow/references/review-execution.md`;
-    execute it once and 종료 with the resulting report path and verdict.
+    execute its routing preflight immediately before reviewer dispatch, then run
+    it once and 종료 with the resulting report path and verdict. Explicit override
+    preflight failure is terminal; shadow-only failure is a visible warning.
 
 The internal workflow and receiving skills are implementation details and are
 not public marketplace prompts.

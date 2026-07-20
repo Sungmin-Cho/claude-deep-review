@@ -422,7 +422,7 @@ test('scope classification over a mixed change set produces provenance and a mix
   }
 });
 
-test('dry-run listing follows the §15.7 shape; explain honestly defers routing to Phase 2', async () => {
+test('dry-run listing follows the §15.7 shape and explain renders the Phase 2 routing plan', async () => {
   const { classifyArtifactsScope, formatDryRun, formatExplainRouting } = await loadScope();
   const repo = createGitFixture('scope-format');
   fs.writeFileSync(path.join(repo, 'design.md'), fixture('design-en.md'));
@@ -439,7 +439,8 @@ test('dry-run listing follows the §15.7 shape; explain honestly defers routing 
   const explain = formatExplainRouting(result);
   assert.match(explain, /design\.md/);
   assert.match(explain, /routing/i);
-  assert.match(explain, /Phase 2|not yet implemented|not implemented/i);
+  assert.match(explain, /Routing policy:/i);
+  assert.doesNotMatch(explain, /not yet implemented|not implemented/i);
 });
 
 // ---------------------------------------------------------------------------
@@ -487,7 +488,7 @@ test('discovery never re-ingests its own provenance output or deep-suite runtime
   assert.deepEqual(paths, ['design.md']);
 });
 
-test('the classify-artifacts CLI supports --explain-routing and defers routing to Phase 2', () => {
+test('the classify-artifacts CLI supports --explain-routing with real routing output', () => {
   const repo = createGitFixture('cli-explain');
   fs.writeFileSync(path.join(repo, 'design.md'), fixture('design-en.md'));
 
@@ -497,7 +498,8 @@ test('the classify-artifacts CLI supports --explain-routing and defers routing t
     { encoding: 'utf8' },
   );
   assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stdout, /Phase 2|not yet implemented|not implemented/i);
+  assert.match(run.stdout, /Routing policy:/i);
+  assert.doesNotMatch(run.stdout, /not yet implemented|not implemented/i);
 });
 
 // ---------------------------------------------------------------------------

@@ -214,6 +214,10 @@ export function routeReviewer({ unit, reviewer, risk = 'low', size = 'small', po
     reviewer_id: reviewer.id,
     provider: reviewer.provider,
     adapter_id: capability.adapter_id,
+    transports: {
+      model: capability.model_selection?.transport ?? 'unknown',
+      effort: capability.effort_selection?.transport ?? 'unknown',
+    },
     requested,
     resolved,
     fallback,

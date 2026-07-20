@@ -167,6 +167,23 @@ Keep the returned owner token private for Stage 5 restoration. A generic Codex
 subagent reads the payload and allowed project paths directly and never causes
 index mutation merely because Codex is the host.
 
+### 3.3 artifact classification and routing preflight
+
+Immediately before Stage 4, invoke the reviewer-free preflight with argv-array
+transport:
+
+```text
+node {plugin_root}/hooks/scripts/classify-artifacts.mjs --repo PROJECT_ROOT --emit-routing-plan --routing-plan-out .deep-review/tmp/routing-plan.json
+```
+
+When public-route returned normalized overrides, append `--overrides-json` and
+the compact `JSON.stringify(route.overrides)` as one argv value. An explicit
+override makes this preflight mandatory and any error stops dispatch. With no
+explicit override, the plan is shadow provenance: a preflight error is a visible
+warning and dispatch continues with the existing arguments unchanged. Automatic
+routes are applied only when policy enables `automatic_model_routing` and sets
+`routing_shadow_mode: false`.
+
 ## 4. Dispatch independent reviewers
 
 Launch every eligible role in a fresh background context. Capture a repository
@@ -192,6 +209,10 @@ when Claude CLI exists, invoke:
 ```text
 node {plugin_root}/hooks/scripts/run-claude-reviewer.mjs --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PAYLOAD_FILE --output OUTPUT_FILE --model REVIEW_MODEL --agent code-reviewer --timeout-seconds 1200
 ```
+
+Only for an explicit override plan, append
+`--routing-plan .deep-review/tmp/routing-plan.json --reviewer-id claude-opus`.
+With no explicit override, preserve the command above byte-for-byte.
 
 Do not replace a requested Claude role with a Codex identity. Record timeout,
 authentication, empty-output, or unavailable-model status exactly as emitted.
@@ -236,6 +257,10 @@ After a successful current privacy outcome, invoke:
 ```text
 node {plugin_root}/hooks/scripts/run-agy-reviewer.mjs --binary AGY_FILE --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PAYLOAD_FILE --output OUTPUT_FILE --mode hybrid --model AGY_MODEL --timeout-seconds 900
 ```
+
+Only for an explicit override plan, append
+`--routing-plan .deep-review/tmp/routing-plan.json --reviewer-id agy`. With no
+explicit override, preserve the command above byte-for-byte.
 
 The bridge revalidates privacy and fingerprint state. A `mutated` result is
 untrusted even if the process produced report text.

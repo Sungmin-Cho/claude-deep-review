@@ -19,11 +19,23 @@ import { discoverArtifacts } from './lib/artifact-discover.mjs';
 import { readArtifactWindows } from './lib/artifact-discover.mjs';
 import {
   classifyWithSemantic,
+  createClaudeCliSemanticAdapter,
   createSemanticCache,
   selectSemanticAdapter,
 } from './lib/semantic-classify.mjs';
 import { detectEnvironment } from './detect-environment.mjs';
 import { CLASSIFICATION_VERSION } from './lib/target-taxonomy.mjs';
+import {
+  buildCapabilities,
+  probeCapabilities,
+} from './lib/capability-registry.mjs';
+import { buildRoutingPlan, renderRoutingExplanation } from './lib/model-router.mjs';
+import {
+  loadReviewPolicy,
+  loadUserConfig,
+  mergeRoutingConfig,
+} from './lib/review-policy.mjs';
+import { atomicWriteFile } from './lib/runtime-context.mjs';
 
 const SIGNAL_LABELS = {
   frontmatter: 'frontmatter',
@@ -150,10 +162,13 @@ export function formatDryRun(result) {
     lines.push(`   kind: ${artifact.target_kind}`);
     lines.push(`   confidence: ${formatConfidence(artifact.confidence)}`);
     lines.push(`   source: ${artifact.signal_summary}`);
-    if (artifact.needs_semantic) lines.push('   note: semantic classifier deferred to Phase 2');
+    if (artifact.semantic_status) lines.push(`   semantic: ${artifact.semantic_status}`);
+    else if (artifact.needs_semantic) lines.push('   semantic: deferred (use --allow-classifier to opt in)');
   });
   lines.push('');
-  lines.push('Routing: not yet implemented — model/effort routing arrives in Phase 2.');
+  lines.push(renderRoutingExplanation(result.routing_plan || {
+    routing_policy: 'auto', shadow_mode: true, routes: [],
+  }).trimEnd());
   return `${lines.join('\n')}\n`;
 }
 
@@ -166,14 +181,12 @@ export function formatExplainRouting(result) {
   for (const artifact of result.artifacts) {
     lines.push(`${artifact.path} → ${artifact.target_kind} (confidence ${formatConfidence(artifact.confidence)})`);
     lines.push(`  signals: ${artifact.signal_summary}`);
-    if (artifact.needs_semantic) {
-      lines.push('  semantic: deferred to Phase 2 (deterministic confidence below the confirm threshold)');
-    }
+    lines.push(`  semantic: ${artifact.semantic_status || (artifact.needs_semantic ? 'deferred' : 'not-needed')}`);
   }
   lines.push('');
-  lines.push('Routing plan: not yet implemented.');
-  lines.push('Model/effort routing (§13) and reviewer selection arrive in Phase 2;');
-  lines.push('Phase 1 performs deterministic classification only.');
+  lines.push(renderRoutingExplanation(result.routing_plan || {
+    routing_policy: 'auto', shadow_mode: true, routes: [],
+  }).trimEnd());
   return `${lines.join('\n')}\n`;
 }
 
@@ -194,6 +207,7 @@ const VALUE_FLAGS = {
   '--out': 'out',
   '--format': 'format',
   '--files-from0': 'filesFrom',
+  '--routing-plan-out': 'routingPlanOut',
 };
 
 // I3: allow provenance to be byte-identical across runs when a caller pins the
@@ -224,11 +238,15 @@ function validateOverrides(value) {
 }
 
 export function parseArguments(argv) {
-  const options = { repo: '.', explainRouting: false, format: 'text' };
+  const options = { repo: '.', explainRouting: false, emitRoutingPlan: false, format: 'text' };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--explain-routing') {
       options.explainRouting = true;
+      continue;
+    }
+    if (argument === '--emit-routing-plan') {
+      options.emitRoutingPlan = true;
       continue;
     }
     if (argument === '--overrides-json') {
@@ -254,13 +272,70 @@ export function parseArguments(argv) {
   return options;
 }
 
-export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env = process.env) {
+function defaultRoutingPlanPath(repo) {
+  return resolve(repo, '.deep-review', 'tmp', 'routing-plan.json');
+}
+
+function defaultReviewers(capabilities) {
+  const reviewers = [];
+  const has = (adapterId) => capabilities.some((item) => item.adapter_id === adapterId && item.available === true);
+  if (has('claude-native-agent')) reviewers.push({ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-native-agent' });
+  else if (has('claude-cli')) reviewers.push({ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' });
+  if (has('codex-native-generic')) reviewers.push({ id: 'codex-review', provider: 'codex', role: 'standard', adapter_id: 'codex-native-generic' });
+  else if (has('codex-companion')) reviewers.push({ id: 'codex-review', provider: 'codex', role: 'standard', adapter_id: 'codex-companion' });
+  if (has('codex-companion')) reviewers.push({ id: 'codex-adversarial', provider: 'codex', role: 'adversarial', adapter_id: 'codex-companion' });
+  if (has('agy-cli')) reviewers.push({ id: 'agy', provider: 'agy', role: 'standard', adapter_id: 'agy-cli' });
+  return reviewers;
+}
+
+function hasExecutionOverride(overrides) {
+  return Boolean(overrides && (
+    Object.values(overrides.providers || {}).some((value) => value.model !== undefined || value.effort !== undefined)
+    || Object.values(overrides.reviewers || {}).some((value) => value.model !== undefined || value.effort !== undefined)
+  ));
+}
+
+export function routingPreflightDecision({ explicit, error } = {}) {
+  if (error) return explicit ? { action: 'stop', error: error.message } : { action: 'continue', warning: error.message };
+  return explicit ? { action: 'apply', error: null } : { action: 'shadow', error: null };
+}
+
+async function routingInputs(repo, env, runtime, knownEnvironment) {
+  if (runtime.capabilities) return {
+    capabilities: runtime.capabilities,
+    reviewers: runtime.reviewers || defaultReviewers(runtime.capabilities),
+    detected: runtime.detected,
+  };
+  const detected = knownEnvironment || await detectEnvironment({ cwd: repo, env });
+  const probes = runtime.probes || await probeCapabilities({ detected, cwd: repo, env });
+  const capabilities = buildCapabilities({
+    detected,
+    probes,
+    hostAssertions: runtime.hostAssertions,
+  });
+  return { capabilities, reviewers: runtime.reviewers || defaultReviewers(capabilities), detected };
+}
+
+function routingPolicy(repo, env, overrides, runtime) {
+  const defaults = {
+    features: { semantic_classifier: true, automatic_model_routing: true, routing_shadow_mode: true },
+    routing: { policy: 'auto', allow_fallback: false, require_read_only: true },
+    providers: {}, constraints: {}, classification: {},
+  };
+  const user = runtime.userPolicy ?? loadUserConfig(env)?.policy ?? {};
+  const project = runtime.projectPolicy ?? loadReviewPolicy(repo)?.policy ?? {};
+  const merged = mergeRoutingConfig({ defaults, user, project, cli: overrides });
+  return { ...merged, user, project };
+}
+
+export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env = process.env, runtime = {}) {
   const options = parseArguments(argv);
   const repo = resolve(options.repo);
 
   let { changeState, reviewBase } = options;
+  let environment;
   if (!changeState) {
-    const environment = await detectEnvironment({ cwd: repo, env });
+    environment = await detectEnvironment({ cwd: repo, env });
     changeState = environment.change_state;
     reviewBase = reviewBase ?? environment.review_base;
   }
@@ -284,8 +359,30 @@ export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env 
   const classificationOptions = {
     repo, changeState, reviewBase, filesFromZ, generatedAt: deterministicTimestamp(env),
   };
-  const result = options.overrides?.allow_classifier
-    ? await classifyArtifactsScopeWithSemantic(classificationOptions)
+  const { capabilities, reviewers, detected } = await routingInputs(repo, env, runtime, environment);
+  const policy = routingPolicy(repo, env, options.overrides, runtime);
+  const semanticAdapters = { ...(runtime.semanticAdapters || {}) };
+  const claudeCapability = capabilities.find((item) => item.adapter_id === 'claude-cli' && item.available === true);
+  if (!semanticAdapters['claude-cli'] && detected?.claude_cli_path && claudeCapability) {
+    semanticAdapters['claude-cli'] = createClaudeCliSemanticAdapter({
+      binary: detected.claude_cli_path,
+      cwd: repo,
+      env,
+      model: claudeCapability.model_selection?.aliases?.[0],
+      effort: 'low',
+      effortTransport: claudeCapability.effort_selection?.transport,
+    });
+  }
+  const semanticEnabled = policy.features?.semantic_classifier !== false
+    && (options.emitRoutingPlan || options.overrides?.allow_classifier);
+  let result = semanticEnabled
+    ? await classifyArtifactsScopeWithSemantic({
+      ...classificationOptions,
+      pluginRoot: runtime.pluginRoot,
+      capabilities,
+      semanticAdapters,
+      semanticAdapter: runtime.semanticAdapter,
+    })
     : classifyArtifactsScope(classificationOptions);
 
   // Never persist an unresolved empty non-git scope, even if the target list
@@ -294,8 +391,43 @@ export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env 
     throw new Error('non-git target list resolved to zero classifiable artifacts; nothing to write.');
   }
 
+  result = {
+    ...result,
+    artifacts: result.artifacts.map((artifact) => ({
+      ...artifact,
+      semantic_status: artifact.semantic_status || (artifact.needs_semantic ? 'deferred' : 'not-needed'),
+    })),
+  };
+
+  const overrides = options.overrides || {
+    protocol_version: '2.0', routing_policy: policy.routing?.policy || 'auto',
+    allow_fallback: Boolean(policy.routing?.allow_fallback), allow_classifier: false,
+    providers: {}, reviewers: {},
+  };
+  const explicit = hasExecutionOverride(overrides);
+  for (const provider of Object.keys(overrides.providers || {})) {
+    if (explicit && !reviewers.some((reviewer) => reviewer.provider === provider)) {
+      throw new Error(`ERROR_PROVIDER_UNAVAILABLE: no eligible reviewer for explicit ${provider} override`);
+    }
+  }
+  for (const reviewerId of Object.keys(overrides.reviewers || {})) {
+    if (!reviewers.some((reviewer) => reviewer.id === reviewerId)) {
+      throw new Error(`ERROR_PROVIDER_UNAVAILABLE: explicit reviewer ${reviewerId} is not eligible`);
+    }
+  }
+  const routingPlan = buildRoutingPlan({ artifacts: result.artifacts, reviewers, policy, overrides, capabilities });
+  routingPlan.explicit_overrides = explicit;
+  routingPlan.apply_automatic = policy.features?.automatic_model_routing === true
+    && policy.features?.routing_shadow_mode === false;
+  result = { ...result, routing_plan: routingPlan };
+
   const outPath = options.out ? resolve(options.out) : defaultProvenancePath(repo);
   writeProvenance(result, outPath);
+
+  if (options.emitRoutingPlan) {
+    const routingPlanPath = options.routingPlanOut ? resolve(options.routingPlanOut) : defaultRoutingPlanPath(repo);
+    atomicWriteFile(routingPlanPath, `${JSON.stringify(routingPlan, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  }
 
   if (options.format === 'json') {
     process.stdout.write(`${JSON.stringify(result)}\n`);
