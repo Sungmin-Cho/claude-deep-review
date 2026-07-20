@@ -16,6 +16,12 @@ import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { classifyArtifact, classifyScope } from './lib/artifact-classify.mjs';
 import { discoverArtifacts } from './lib/artifact-discover.mjs';
+import { readArtifactWindows } from './lib/artifact-discover.mjs';
+import {
+  classifyWithSemantic,
+  createSemanticCache,
+  selectSemanticAdapter,
+} from './lib/semantic-classify.mjs';
 import { detectEnvironment } from './detect-environment.mjs';
 import { CLASSIFICATION_VERSION } from './lib/target-taxonomy.mjs';
 
@@ -84,6 +90,53 @@ export function classifyArtifactsScope(options = {}) {
     scope: classifyScope(artifacts),
     artifacts,
   };
+}
+
+/** Async additive orchestration. The synchronous Phase 1 export above remains unchanged. */
+export async function classifyArtifactsScopeWithSemantic(options = {}) {
+  const deterministic = classifyArtifactsScope(options);
+  const descriptors = discoverArtifacts(options);
+  const descriptorByPath = new Map(descriptors.map((descriptor) => [descriptor.path, descriptor]));
+  const cache = options.semanticCache || createSemanticCache();
+  const semanticAdapter = options.semanticAdapter
+    || selectSemanticAdapter(options.capabilities, options.semanticAdapters);
+  const artifacts = [];
+  for (const artifact of deterministic.artifacts) {
+    const descriptor = descriptorByPath.get(artifact.path);
+    if (!artifact.needs_semantic) {
+      artifacts.push({ ...artifact, semantic_status: 'not-needed' });
+      continue;
+    }
+    let semanticDescriptor = descriptor;
+    try {
+      semanticDescriptor = {
+        ...descriptor,
+        semantic_windows: readArtifactWindows(descriptor, {
+          repoRoot: resolve(options.repo),
+          maxBytes: options.maxClassifierBytes || 24_576,
+        }),
+        sibling_paths: descriptors.filter((item) => item.path !== descriptor.path).map((item) => item.path),
+      };
+    } catch {
+      artifacts.push({
+        ...artifact,
+        semantic_status: 'failed',
+        semantic_error: 'artifact containment revalidation failed during bounded window read',
+      });
+      continue;
+    }
+    artifacts.push(await classifyWithSemantic({
+      descriptor: semanticDescriptor,
+      classification: artifact,
+      pluginRoot: options.pluginRoot,
+      adapter: semanticAdapter,
+      timeoutMs: options.semanticTimeoutMs,
+      maxBytes: options.maxClassifierBytes,
+      thresholds: options.thresholds,
+      cache,
+    }));
+  }
+  return { ...deterministic, scope: classifyScope(artifacts), artifacts };
 }
 
 /**
@@ -228,9 +281,12 @@ export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env 
     );
   }
 
-  const result = classifyArtifactsScope({
+  const classificationOptions = {
     repo, changeState, reviewBase, filesFromZ, generatedAt: deterministicTimestamp(env),
-  });
+  };
+  const result = options.overrides?.allow_classifier
+    ? await classifyArtifactsScopeWithSemantic(classificationOptions)
+    : classifyArtifactsScope(classificationOptions);
 
   // Never persist an unresolved empty non-git scope, even if the target list
   // resolved to nothing (all excluded / out-of-repo / binary-only-dropped).

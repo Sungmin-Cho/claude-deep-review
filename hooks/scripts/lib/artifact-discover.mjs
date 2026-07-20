@@ -25,6 +25,7 @@ import {
 import {
   extname,
   isAbsolute,
+  join,
   relative,
   resolve,
 } from 'node:path';
@@ -64,7 +65,11 @@ function isContained(root, candidate) {
 //   - { buffer, byteSize, truncated }  — a normal read
 //   - { contentOmitted, reason }       — symlink / out-of-repo (metadata only)
 //   - null                             — deleted, unreadable, or a TOCTOU swap
-function readBounded(absolutePath, maxBytes, repoRealRoot) {
+export function readBounded(absolutePath, maxBytes, repoRealRoot, options = {}) {
+  const requestedOffset = options.offset ?? 0;
+  if (!Number.isSafeInteger(requestedOffset) || requestedOffset < 0) {
+    throw new TypeError('read offset must be a non-negative safe integer');
+  }
   // (a) Never dereference a symlink. lstat inspects the link itself, so a
   //     symlinked leaf is caught before any content is touched.
   let linkStat;
@@ -96,20 +101,55 @@ function readBounded(absolutePath, maxBytes, repoRealRoot) {
     const stat = fstatSync(fd);
     if (!stat.isFile()) return null;
     const size = stat.size;
-    const toRead = Math.min(size, maxBytes);
+    const start = Math.min(size, requestedOffset);
+    const toRead = Math.min(Math.max(0, size - start), maxBytes);
     const buffer = Buffer.allocUnsafe(toRead);
     let offset = 0;
     while (offset < toRead) {
-      const read = readSync(fd, buffer, offset, toRead - offset, offset);
+      const read = readSync(fd, buffer, offset, toRead - offset, start + offset);
       if (read <= 0) break;
       offset += read;
     }
-    return { buffer: buffer.subarray(0, offset), byteSize: size, truncated: size > toRead };
+    return {
+      buffer: buffer.subarray(0, offset),
+      byteSize: size,
+      offset: start,
+      truncated: start > 0 || size > start + toRead,
+    };
   } catch {
     return null;
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
+}
+
+/**
+ * Read three bounded windows while re-running the complete containment and
+ * no-follow path for every window. The descriptor remains immutable.
+ */
+export function readArtifactWindows(descriptor, { repoRoot, maxBytes = 24_576 } = {}) {
+  if (!descriptor || typeof descriptor.path !== 'string') throw new TypeError('descriptor.path is required');
+  if (typeof repoRoot !== 'string' || !isAbsolute(repoRoot)) throw new TypeError('repoRoot must be an absolute path');
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new TypeError('maxBytes must be a positive safe integer');
+  let repoRealRoot;
+  try { repoRealRoot = realpathSync(resolve(repoRoot)); } catch { throw new Error('repository containment root is unreadable'); }
+  const absolutePath = join(repoRoot, descriptor.path);
+  const chunk = Math.max(1, Math.floor(maxBytes / 3));
+
+  const head = readBounded(absolutePath, chunk, repoRealRoot, { offset: 0 });
+  if (!head || head.contentOmitted) throw new Error(`artifact window read blocked by ${head?.reason || 'containment revalidation'}`);
+  const middleOffset = Math.max(0, Math.floor((head.byteSize - chunk) / 2));
+  const tailOffset = Math.max(0, head.byteSize - chunk);
+  const middle = readBounded(absolutePath, chunk, repoRealRoot, { offset: middleOffset });
+  const tail = readBounded(absolutePath, maxBytes - (2 * chunk), repoRealRoot, { offset: tailOffset });
+  if (!middle || middle.contentOmitted || !tail || tail.contentOmitted) {
+    throw new Error('artifact window read blocked by containment revalidation');
+  }
+  return Object.freeze({
+    head: head.buffer.toString('utf8'),
+    middle: middle.buffer.toString('utf8'),
+    tail: tail.buffer.toString('utf8'),
+  });
 }
 
 function isBinaryBuffer(buffer) {
