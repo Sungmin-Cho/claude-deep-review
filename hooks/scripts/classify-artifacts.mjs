@@ -68,6 +68,35 @@ function formatConfidence(value) {
   return value.toFixed(2);
 }
 
+function globToRegExp(glob) {
+  if (typeof glob !== 'string' || glob.length === 0 || glob.length > 1024) return null;
+  let source = '^';
+  for (let index = 0; index < glob.length; index += 1) {
+    const character = glob[index];
+    if (character === '*') {
+      if (glob[index + 1] === '*') {
+        index += 1;
+        if (glob[index + 1] === '/') {
+          index += 1;
+          source += '(?:.*/)?';
+        } else source += '.*';
+      } else source += '[^/]*';
+    } else if (character === '?') source += '[^/]';
+    else source += character.replace(/[\\^$.*+?()[\]{}|]/gu, '\\$&');
+  }
+  return new RegExp(`${source}$`, 'u');
+}
+
+function matchingClassificationOverride(path, overrides) {
+  if (!Array.isArray(overrides)) return null;
+  const normalizedPath = String(path || '').replaceAll('\\', '/').replace(/^\.\//u, '');
+  if (normalizedPath.length > 8192) return null;
+  return overrides.find((override) => {
+    const matcher = globToRegExp(override?.glob);
+    return matcher?.test(normalizedPath);
+  }) || null;
+}
+
 /**
  * Classify every artifact in the given change scope.
  * Synchronous: the caller supplies `changeState` (and `reviewBase` for `clean`).
@@ -75,11 +104,12 @@ function formatConfidence(value) {
 export function classifyArtifactsScope(options = {}) {
   const {
     repo, changeState, reviewBase = '', filesFromZ, thresholds, generatedAt,
+    classificationOverrides,
   } = options;
   const descriptors = discoverArtifacts({ repo, changeState, reviewBase, filesFromZ });
 
   const artifacts = descriptors.map((descriptor) => {
-    const classification = classifyArtifact({
+    const deterministic = classifyArtifact({
       path: descriptor.path,
       extension: descriptor.extension,
       content: descriptor.content,
@@ -87,6 +117,18 @@ export function classifyArtifactsScope(options = {}) {
       gitStatus: descriptor.git_status,
       thresholds,
     });
+    const policyOverride = matchingClassificationOverride(descriptor.path, classificationOverrides);
+    const classification = policyOverride ? {
+      ...deterministic,
+      target_kind: policyOverride.kind,
+      confidence: 1,
+      source: `policy override: ${policyOverride.glob}`,
+      needs_semantic: false,
+      alternatives: deterministic.target_kind === policyOverride.kind
+        ? deterministic.alternatives
+        : [deterministic.target_kind, ...deterministic.alternatives].filter((kind, index, values) => values.indexOf(kind) === index),
+    } : deterministic;
+    const summary = policyOverride ? classification.source : signalSummary(classification);
     return {
       artifact_id: descriptor.artifact_id,
       path: descriptor.path,
@@ -94,12 +136,12 @@ export function classifyArtifactsScope(options = {}) {
       confidence: classification.confidence,
       source: classification.source,
       needs_semantic: classification.needs_semantic,
-      signal_summary: signalSummary(classification),
+      signal_summary: summary,
       signals: classification.signals,
       alternatives: classification.alternatives,
       byte_size: descriptor.byte_size,
       line_count: descriptor.line_count,
-      content_risk: assessRisk([{ path: descriptor.path, content: descriptor.content, signal_summary: signalSummary(classification) }]),
+      content_risk: assessRisk([{ path: descriptor.path, content: descriptor.content, signal_summary: summary }]),
     };
   });
 
@@ -597,6 +639,7 @@ export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env 
     });
   }
   const semanticEnabled = policy.features?.semantic_classifier !== false
+    && policy.classification?.mode !== 'deterministic'
     && (options.overrides?.allow_classifier === true
       || policy.user?.features?.semantic_classifier === true
       || policy.project?.features?.semantic_classifier === true);
@@ -616,6 +659,7 @@ export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env 
     && typeof policy.classification.thresholds === 'object'
     && !Array.isArray(policy.classification.thresholds)
   ) ? policy.classification.thresholds : undefined;
+  classificationOptions.classificationOverrides = policy.classification?.overrides;
   let result = semanticEnabled
     ? await classifyArtifactsScopeWithSemantic({
       ...classificationOptions,

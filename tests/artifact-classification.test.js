@@ -936,6 +936,73 @@ test('H6: policy classification.thresholds wires into the deterministic classifi
   assert.equal(raisedArtifact.needs_semantic, true, 'raising classification.thresholds.confirm must push the same artifact out of the confirmed band');
 });
 
+test('K1: policy classification overrides force kind and deterministic mode suppresses semantic calls', async () => {
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-k1-policy-classification-');
+  fs.mkdirSync(path.join(repo, 'docs'));
+  fs.writeFileSync(path.join(repo, 'docs', 'notes.md'), fixture('ambiguous-notes.md'));
+  const listPath = path.join(repo, 'targets.z');
+  fs.writeFileSync(listPath, 'docs/notes.md\0');
+  const capabilities = [{
+    protocol_version: '2.0', adapter_id: 'claude-cli', provider: 'claude', available: true,
+    roles: ['standard', 'classifier'], structured_output: true,
+    model_selection: { supported: true, aliases: ['swift'], catalog_complete: false, transport: 'flag:--model' },
+    effort_selection: { supported: true, levels: ['low'], transport: 'flag:--effort' },
+    read_only_enforcement: 'process-contract',
+  }];
+  const reviewers = [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }];
+  const overridesJson = JSON.stringify({
+    protocol_version: '2.0', allow_classifier: true, providers: {}, reviewers: {},
+  });
+
+  let overrideCalls = 0;
+  const overridden = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', listPath, '--emit-routing-plan', '--overrides-json', overridesJson],
+    {},
+    {
+      capabilities, reviewers,
+      projectPolicy: { classification: { overrides: [{ glob: 'docs/**', kind: 'design-document' }] } },
+      semanticAdapter: async () => { overrideCalls += 1; return {}; },
+    },
+  );
+  assert.equal(overrideCalls, 0, 'a policy-forced kind must not invoke semantic classification');
+  assert.equal(overridden.artifacts[0].target_kind, 'design-document');
+  assert.equal(overridden.artifacts[0].confidence, 1);
+  assert.match(overridden.artifacts[0].source, /policy override.*docs\/\*\*/);
+  assert.equal(overridden.artifacts[0].needs_semantic, false);
+
+  let deterministicCalls = 0;
+  const deterministic = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', listPath, '--emit-routing-plan', '--overrides-json', overridesJson],
+    {},
+    {
+      capabilities, reviewers,
+      projectPolicy: { classification: { mode: 'deterministic' } },
+      semanticAdapter: async () => { deterministicCalls += 1; return {}; },
+    },
+  );
+  assert.equal(deterministicCalls, 0, 'deterministic mode must suppress an otherwise opted-in semantic call');
+  assert.equal(deterministic.artifacts[0].needs_semantic, true);
+  assert.equal(deterministic.artifacts[0].semantic_status, 'deferred');
+
+  let baselineCalls = 0;
+  await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', listPath, '--emit-routing-plan', '--overrides-json', overridesJson],
+    {},
+    {
+      capabilities, reviewers,
+      semanticAdapter: async () => {
+        baselineCalls += 1;
+        return {
+          classification_version: '1.0', target_kind: 'research-note', confidence: 0.9,
+          signals: [], alternative_kinds: [], uncertainty_action: 'proceed', notes: '',
+        };
+      },
+    },
+  );
+  assert.equal(baselineCalls, 1, 'without classification policy the existing semantic opt-in remains unchanged');
+});
+
 // ---------------------------------------------------------------------------
 // R2I1: routingInputs' no-runtime-capabilities/no-runtime-probes branch must
 // consult the on-disk capability cache before spawning fresh probes, save the
