@@ -4,11 +4,23 @@
 
 deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)와 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
-## [1.14.0] — 2026-07-19
+## [1.14.0] — 2026-07-20
 
 ### 추가
 
-- **deep-review-loop 수렴화** — 라운드 간 finding 상태를 결정적으로 기록·비교합니다(`loop-state.mjs record-round` / `compare-rounds`) — 기존 자연어 기반 반복 판정을 대체합니다. 변경 사항이 반영되지 않은 채 정체된 라운드는 더 반복하지 않고 마지막으로 신뢰할 수 있는 verdict로 정지합니다. 루프에 종속되고 명시적으로 전달되는 `--prior-rounds-file` advisory 컨텍스트(파일 존재 여부로 키잉하지 않음)를 통해 각 라운드의 리뷰어가 이전 발견·반박 항목을 처음부터 다시 검토하지 않고도 재검증할 수 있습니다. 최종 루프 요약에는 이제 `rounds_saved` 지표가 포함됩니다.
+- **deep-review-loop 수렴화** — 라운드 간 finding 상태를 결정적으로 기록·비교해 기존 자연어 기반 반복 판정을 대체합니다. 변경 사항이 반영되지 않은 채 정체된 라운드는 더 반복하지 않고 마지막으로 신뢰할 수 있는 verdict로 정지합니다. 루프에 종속되고 명시적으로 전달되는 `--prior-rounds-file` advisory 컨텍스트(파일 존재 여부로 키잉하지 않음)를 통해 각 라운드의 리뷰어가 이전 발견·반박 항목을 처음부터 다시 검토하지 않고도 재검증할 수 있습니다. 최종 루프 요약에는 `rounds_saved` 지표가 포함됩니다.
+- **`--session-doc` (루프, opt-in)** — loop id로 키잉된 세션당 하나의 통합 리뷰 문서를 매 라운드 in-place로 재렌더합니다 — 현재 verdict, 라운드별 히스토리, 라인 드리프트를 추적하는 open-vs-resolved 롤업, 종료 후 최종 요약 포함. 라운드별 리포트와 그 fail-closed 계상은 그대로이며, 통합 문서는 모든 canonical 리포트 탐색 표면(응답 선택·recurring-findings export 포함)에서 제외됩니다.
+- **Artifact-aware routing Phase 1** — `--dry-run` / `--explain-routing`(리뷰 전용, opt-in)이 리뷰 대상을 결정적으로 분류(코드, 설계 문서, 구현 플랜, 명세, ADR, 테스트 플랜, runbook, 설정, mixed)하고 confidence 스코어·provenance와 함께 계획을 출력한 뒤 리뷰어 실행 전에 정지합니다. 무플래그 동작은 byte-identical합니다. semantic 분류와 model/effort 라우팅은 이후 단계 예정입니다.
+
+### 수정
+
+- 리뷰 루프 라운드 상태 정리의 소유권을 일시적 셸 프로세스가 아닌 durable 호스트 세션에 바인딩 — 실행 중이지만 idle인 동시 루프의 상태는 절대 삭제되지 않으면서 crash 잔여물은 계속 회수되며, 부분 정리 실패는 재시도 가능하게 유지됩니다.
+- 다중 범위 finding 인용(`path:1-2, 83-100`)을 누락하지 않고 파싱하며, `findings_signature`가 라운드 기록과 metrics에서 동일한 repo-root 기준으로 일치합니다.
+- `findings_signature`가 Windows에서도 플랫폼 독립적·대소문자 보존으로 출력됩니다. win32의 대소문자 무시 identity 매칭은 그대로입니다.
+
+### 보안
+
+- Artifact 탐색이 심링크를 따라가거나 저장소 밖을 읽지 않습니다: 심링크는 metadata-only, 해석된 경로는 repo root 내부여야 하며, 읽기는 no-follow + open 후 검증 — 커밋된 심링크로 저장소 밖 파일 내용이 노출되지 않습니다.
 
 ## [1.13.0] — 2026-07-11
 

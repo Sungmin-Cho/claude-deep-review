@@ -52,6 +52,8 @@ Claude Code 슬래시 커맨드와 Codex 스킬은 동일한 라우트 문법을
 | `/deep-review --respond --source=pr` | GitHub PR 리뷰 코멘트에 대응 |
 | `/deep-review-loop [--max=N]` | 리뷰 ↔ 대응을 수렴까지 자동 반복 (`user-invocable` 스킬이기도 함 — Codex CLI / SDK 진입용 `Skill({ skill: "deep-review:deep-review-loop" })`) |
 | `/deep-review-loop --ultracode --codex` | ultracode 1회(라운드 1) + codex 매 라운드 통합 루프 |
+| `/deep-review-loop --session-doc` | 세션당 하나의 통합 리뷰 문서를 유지하며 매 라운드 in-place 재렌더 (라운드별 리포트는 그대로) |
+| `/deep-review --dry-run` / `--explain-routing` | 리뷰어 실행 없이 리뷰 대상을 결정적으로 분류하고 계획 출력 (artifact-aware routing Phase 1) |
 | `/deep-review init` | 프로젝트별 리뷰 규칙 대화형 초기화 |
 
 ### Codex
@@ -71,6 +73,8 @@ Claude Code 슬래시 커맨드와 Codex 스킬은 동일한 라우트 문법을
 - `/deep-review-loop` 수렴은 결정적입니다: 각 라운드의 finding을 `compare-rounds`로 비교하며(자연어 반복 판정이 아닌 identity 매칭), 정체된 라운드는 마지막으로 신뢰할 수 있는 verdict로 정지합니다.
 - 루프는 라운드 사이에 `--prior-rounds-file` advisory 컨텍스트를 명시적으로 전달합니다(파일 존재 여부로 자동 소비하지 않음) — 리뷰어가 이전 발견·반박 항목을 재검증할 수 있습니다.
 - 최종 루프 요약에는 `rounds_saved` 지표가 포함됩니다.
+- `--session-doc`(루프 전용, opt-in)은 loop id로 키잉된 통합 세션 문서 하나를 유지합니다 — 현재 verdict, 라운드별 히스토리, open-vs-resolved 롤업, 종료 후 최종 요약 — 라운드별 리포트와 그 fail-closed 계상은 그대로 유지됩니다.
+- `--dry-run` / `--explain-routing`(리뷰 전용, opt-in)은 결정적 artifact classifier를 실행하고 리뷰어 실행 전에 정지합니다. semantic 분류와 model/effort 라우팅은 이후 단계에서 제공됩니다.
 
 ## 리뷰 파이프라인
 
