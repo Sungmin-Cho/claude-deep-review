@@ -51,6 +51,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const env = require('./envelope');
+const { isSessionDocReportName } = require('./lib/session-doc');
 
 function usage(extra) {
   if (extra) process.stderr.write(`error: ${extra}\n`);
@@ -294,7 +295,11 @@ function discoverSources(projectRoot) {
     reportEntries = [];
   }
   for (const entry of reportEntries) {
-    if (!entry.isFile() || !entry.name.endsWith('-review.md')) continue;
+    // Skip the opt-in per-session review doc (`loop-<id>-review.md`): it is a
+    // derived aggregate of the canonical round reports, so counting it as its
+    // own provenance source would double-count round findings and inflate
+    // recurrence signatures at rounds >= 2 (shared exclusion predicate).
+    if (!entry.isFile() || !entry.name.endsWith('-review.md') || isSessionDocReportName(entry.name)) continue;
     reports.push(path.join(reportsRoot, entry.name));
   }
   reports.sort(compareUtf8Descending);

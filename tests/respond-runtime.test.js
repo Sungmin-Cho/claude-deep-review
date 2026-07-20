@@ -145,6 +145,26 @@ test('listReviewReports uses exact suffix, stat mtime, deterministic path ties, 
   assert.deepEqual(runtime.listReviewReports({ repo, limit: 0 }), []);
 });
 
+test('listReviewReports never selects the opt-in session doc even when it has the newest mtime', async () => {
+  const runtime = await import(runtimeUrl);
+  const repo = temporaryDirectory('deep-review-session-doc-list-');
+  const reports = path.join(repo, '.deep-review', 'reports');
+  mkdirSync(reports, { recursive: true });
+
+  const canonical = path.join(reports, '2026-07-19-120000-review.md');
+  const sessionDoc = path.join(reports, 'loop-abc-123-review.md');
+  writeFileSync(canonical, '# canonical\n');
+  writeFileSync(sessionDoc, '# session doc aggregate\n');
+  // The session doc is re-rendered LAST each round, so it usually has the newest
+  // mtime; a suffix-only + mtime-desc list would wrongly surface it first.
+  utimesSync(canonical, new Date('2026-07-19T00:00:00.000Z'), new Date('2026-07-19T00:00:00.000Z'));
+  utimesSync(sessionDoc, new Date('2026-07-20T00:00:00.000Z'), new Date('2026-07-20T00:00:00.000Z'));
+
+  const listed = runtime.listReviewReports({ repo, limit: 3 });
+  assert.deepEqual(listed.map((entry) => entry.name), [path.basename(canonical)]);
+  assert.equal(listed.some((entry) => entry.name === path.basename(sessionDoc)), false);
+});
+
 test('listReviewReports returns an empty list when the reports directory is absent', async () => {
   const runtime = await import(runtimeUrl);
   const repo = temporaryDirectory('deep-review-no-reports-');

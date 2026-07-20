@@ -505,6 +505,9 @@ test('loop SKILL documents the opt-in --session-doc single per-session review do
   assert.match(loop, /loop-\{loop_id\}-review\.md/);
   // The end-of-loop summary is absorbed into the session doc to avoid dup.
   assert.match(loop, /absorb|absorbed|흡수/i);
+  // A FINAL post-stop render pass supplies the closing summary the per-round
+  // renders never received, via the explicit --final-summary-file input.
+  assert.match(loop, /--final-summary-file/);
   // Default OFF preserves today's per-round + loop-summary behavior.
   assert.match(loop, /(?:default|기본).{0,40}(?:OFF|off|없)/i);
 });

@@ -278,13 +278,28 @@ rounds that actually executed a Review), and remaining human or external
 work. Loop state is otherwise session-local; existing reports allow a later
 explicit response to resume.
 
-**When `--session-doc` is ON**: the per-session document
-`.deep-review/reports/loop-{loop_id}-review.md` (§4a), already re-rendered after
-the final round, **absorbs** the loop summary — do **not** write a separate
-`*-loop-summary.md`, avoiding a duplicated round-by-round artifact. The session
-doc already carries the per-round review/response links, the verdict/count
-history, and the open-vs-resolved rollup; report the stop reason and
-`rounds_saved` in this loop's closing paragraph (§5) so nothing is lost.
+**When `--session-doc` is ON**: after the loop stops (§5), run one FINAL
+`render-session-doc` pass — the per-round renders (§4a) run before the stop is
+decided and never receive the closing data, so this pass supplies it explicitly
+via `--final-summary-file`:
+
+```text
+node {plugin_root}/hooks/scripts/loop-state.mjs render-session-doc --loop-id LOOP_ID --tmp-dir .deep-review/tmp --reports-dir REPORTS_DIR --output REPORTS_DIR/loop-{loop_id}-review.md --final-summary-file FINAL_SUMMARY_FILE
+```
+
+`FINAL_SUMMARY_FILE` is a private JSON object with `stop_reason`, `rounds_saved`
+(the safety maximum `--max` minus the number of rounds that actually executed a
+Review), `implemented_total` (the summed `implemented_count` across rounds), and
+`remaining_work` (an array of remaining human or external items). This final
+pass appends a `## Final summary` section, so the single durable document
+`.deep-review/reports/loop-{loop_id}-review.md` **absorbs** the loop summary — do
+**not** write a separate `*-loop-summary.md`, avoiding a duplicated
+round-by-round artifact. The doc already carries the per-round review/response
+links, the verdict/count history, and the cumulative open-vs-resolved rollup;
+the final pass adds exactly the stop reason, `rounds_saved`, implemented total,
+and remaining work the standalone summary used to hold, so nothing durable is
+lost. Omitting `--final-summary-file` renders a byte-identical doc, so the
+per-round renders (§4a) and the default-OFF path are unaffected.
 
 Delete this session's `loop-*-round-*.prior.md` advisory files with a direct
 host file tool. Leave the `.state.json` files in place — they remain

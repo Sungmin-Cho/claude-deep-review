@@ -403,6 +403,45 @@ const EMPTY_APPROVE_REVIEW = [
   '- everything looks fine',
 ].join('\n');
 
+// Round 3 for the cumulative-resolved rollup: B (src/b.js) drops out here, so a
+// finding resolved between rounds 1→2 (C, src/c.js) and one resolved 2→3 (B)
+// must BOTH remain in the session doc's resolved rollup — the adjacent-only pair
+// would surface B alone.
+const ROUND3_REVIEW = [
+  '# Deep Review Report',
+  '## Summary',
+  '- **Verdict**: CONCERN',
+  '- **Issues**: \u{1F534} 1건, \u{1F7E1} 1건, ℹ️ 0건',
+  '### \u{1F534} Critical',
+  '- issue A at `src/a.js:10`',
+  '### \u{1F7E1} Warning',
+  '- issue D at `src/d.js:5`',
+].join('\n');
+
+// Two rounds where findings are ADDED but none resolved and the repeat ratio
+// stays below the stall threshold: neither progressed nor stalled, yet the set
+// changed (+2) — the Round-history Progress cell must say so, not "no change".
+const CHANGED_ROUND1 = [
+  '# Deep Review Report',
+  '## Summary',
+  '- **Verdict**: REQUEST_CHANGES',
+  '- **Issues**: \u{1F534} 1건, \u{1F7E1} 0건, ℹ️ 0건',
+  '### \u{1F534} Critical',
+  '- issue A at `src/a.js:10`',
+].join('\n');
+
+const CHANGED_ROUND2 = [
+  '# Deep Review Report',
+  '## Summary',
+  '- **Verdict**: REQUEST_CHANGES',
+  '- **Issues**: \u{1F534} 1건, \u{1F7E1} 2건, ℹ️ 0건',
+  '### \u{1F534} Critical',
+  '- issue A at `src/a.js:10`',
+  '### \u{1F7E1} Warning',
+  '- issue E at `src/e.js:200`',
+  '- issue F at `src/f.js:300`',
+].join('\n');
+
 function recordTwoRounds(root, review1, review2) {
   const reportsDir = join(root, '.deep-review', 'reports');
   mkdirSync(reportsDir, { recursive: true });
@@ -1090,9 +1129,14 @@ test('render-session-doc renders latest verdict, per-round history, and round re
   // Per-round history rows for both rounds.
   assert.match(body, /\| 1 \| REQUEST_CHANGES \|/u);
   assert.match(body, /\| 2 \| CONCERN \|/u);
-  // Report links are relativized against the .deep-review root, forward-slashed.
-  assert.match(body, /reports\/2026-07-19-090100-review\.md/u);
-  assert.match(body, /responses\/2026-07-19-090230-response\.md/u);
+  // Report references are REAL Markdown links relative to the document's own
+  // directory (.deep-review/reports): a canonical round report resolves by bare
+  // basename, a response one directory up (../responses/…), forward-slashed.
+  assert.match(body, /\[2026-07-19-090100-review\.md\]\(2026-07-19-090100-review\.md\)/u);
+  assert.match(
+    body,
+    /\[\.\.\/responses\/2026-07-19-090230-response\.md\]\(\.\.\/responses\/2026-07-19-090230-response\.md\)/u,
+  );
   // Round 1's absolute review path from state must not leak as an absolute link.
   assert.equal(body.includes(r1.reviewPath), false);
   assert.equal(body.includes(r2.stateFile), false);
@@ -1112,9 +1156,98 @@ test('render-session-doc open vs resolved rollup reuses matchFindings (B resolve
   // Open findings = latest (round 2): a.js:10, b.js:23, d.js:5.
   assert.match(body, /## Open findings \(round 2\) — 3/u);
   assert.match(body, /`src\/d\.js:5`/u);
-  // C (src/c.js:30) was in round 1 only → resolved. Section counts exactly 1.
-  assert.match(body, /## Resolved since round 1 — 1/u);
+  // C (src/c.js:30) was in round 1 only → resolved. The rollup is cumulative
+  // across the whole session; with two rounds it counts exactly 1.
+  assert.match(body, /## Resolved \(cumulative\) — 1/u);
   assert.match(body, /`src\/c\.js:30`/u);
+});
+
+test('render-session-doc resolved rollup is CUMULATIVE — a finding resolved in an early round stays listed across later rounds', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  // R1: A,B,C  →  R2: A,B',D (C resolved 1→2)  →  R3: A,D (B resolved 2→3)
+  recordSessionRound(dirs, { round: 1, loopId: 'sess-cum', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  recordSessionRound(dirs, { round: 2, loopId: 'sess-cum', review: ROUND2_REVIEW, response: SD_RESPONSE });
+  recordSessionRound(dirs, { round: 3, loopId: 'sess-cum', review: ROUND3_REVIEW, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-sess-cum-review.md');
+  renderSessionDoc({ loopId: 'sess-cum', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output });
+  const body = readFileSync(output, 'utf8');
+  // Both the 1→2 resolution (C) and the 2→3 resolution (B) are present after
+  // round 3; the old adjacent-only rollup would have dropped C entirely.
+  assert.match(body, /## Resolved \(cumulative\) — 2/u);
+  assert.match(body, /`src\/c\.js:30`/u);
+  assert.match(body, /`src\/b\.js:20`/u);
+});
+
+test('render-session-doc Progress cell labels a changed-but-neither-progressed-nor-stalled round as "changed (+N)"', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  // R1: A only  →  R2: A repeated + E,F added (ratio 1/3 < 0.5, 0 resolved).
+  recordSessionRound(dirs, { round: 1, loopId: 'sess-chg', review: CHANGED_ROUND1, response: SD_RESPONSE });
+  recordSessionRound(dirs, { round: 2, loopId: 'sess-chg', review: CHANGED_ROUND2, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-sess-chg-review.md');
+  renderSessionDoc({ loopId: 'sess-chg', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output });
+  const body = readFileSync(output, 'utf8');
+  assert.match(body, /changed \(\+2\)/u);
+  // The round-2 history row must NOT be mislabeled "no change".
+  const round2Row = body.split('\n').find((line) => /^\| 2 \|/u.test(line));
+  assert.ok(round2Row, 'round 2 history row present');
+  assert.equal(round2Row.includes('no change'), false);
+});
+
+test('render-session-doc appends a Final summary section only when a final-summary file is given (additive, prefix byte-identical)', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  recordSessionRound(dirs, { round: 1, loopId: 'sess-fin', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  recordSessionRound(dirs, { round: 2, loopId: 'sess-fin', review: ROUND2_REVIEW, response: SD_RESPONSE });
+  const output = join(dirs.reportsDir, 'loop-sess-fin-review.md');
+
+  renderSessionDoc({ loopId: 'sess-fin', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output });
+  const withoutFinal = readFileSync(output, 'utf8');
+  assert.equal(withoutFinal.includes('## Final summary'), false);
+
+  const finalSummaryFile = join(dirs.tmpDir, 'final-summary.json');
+  writeFileSync(finalSummaryFile, JSON.stringify({
+    stop_reason: 'APPROVE with zero blocking issues',
+    rounds_saved: 3,
+    implemented_total: 4,
+    remaining_work: ['manual: bump version at release', 'external: confirm CI green'],
+  }));
+  renderSessionDoc({
+    loopId: 'sess-fin', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output, finalSummaryFile,
+  });
+  const withFinal = readFileSync(output, 'utf8');
+  // Additive: everything the default render produced is an exact prefix.
+  assert.ok(withFinal.startsWith(withoutFinal.slice(0, -1)));
+  assert.match(withFinal, /## Final summary/u);
+  assert.match(withFinal, /\*\*Stop reason\*\*: APPROVE with zero blocking issues/u);
+  assert.match(withFinal, /\*\*Rounds saved\*\*: 3/u);
+  assert.match(withFinal, /\*\*Total implemented\*\*: 4/u);
+  assert.match(withFinal, /manual: bump version at release/u);
+  assert.match(withFinal, /external: confirm CI green/u);
+});
+
+test('render-session-doc --final-summary-file CLI round trip renders the Final summary', () => {
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  recordSessionRound(dirs, { round: 1, loopId: 'sess-fincli', review: ROUND1_REVIEW, response: SD_RESPONSE });
+  const finalSummaryFile = join(dirs.tmpDir, 'final-cli.json');
+  writeFileSync(finalSummaryFile, JSON.stringify({
+    stop_reason: 'reached --max', rounds_saved: 0, implemented_total: 2, remaining_work: [],
+  }));
+  const output = join(dirs.reportsDir, 'loop-sess-fincli-review.md');
+  const result = runCli([
+    'render-session-doc', '--loop-id', 'sess-fincli', '--tmp-dir', dirs.tmpDir,
+    '--reports-dir', dirs.reportsDir, '--output', output, '--final-summary-file', finalSummaryFile,
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  const body = readFileSync(output, 'utf8');
+  assert.match(body, /## Final summary/u);
+  assert.match(body, /\*\*Stop reason\*\*: reached --max/u);
+  assert.match(body, /\*\*Remaining work\*\*: \(none\)/u);
 });
 
 test('render-session-doc is idempotent — same state inputs produce a byte-identical doc', async () => {
