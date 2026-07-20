@@ -233,12 +233,16 @@ never expose file contents.
 
 ### 4.1 `claude-opus`
 
-When named-agent capability exists, call `Agent(code-reviewer)` with the
-configured model alias and the shared payload. The native Agent interface has a
-model parameter, but effort is unsupported. Therefore an explicit
-effort override on a native-agent-only route is a strict error; never report an
-effort as requested-but-unverified when it could not be transmitted. Otherwise,
-when Claude CLI exists, invoke:
+When named-agent capability exists, call `Agent(code-reviewer)` with the shared
+payload. Before native dispatch, only when the emitted plan is applicable —
+`explicit_overrides: true` or `apply_automatic: true` — read the `claude-opus`
+route from the emitted routing plan and pass its `resolved.model` as the Agent
+model parameter. With a shadow-only plan or no emitted plan, preserve the
+configured model alias unchanged. The native Agent interface has a model
+parameter, but effort is unsupported. Therefore an explicit effort override on
+a native-agent-only route is a strict error; never report an effort as
+requested-but-unverified when it could not be transmitted. Otherwise, when
+Claude CLI exists, invoke:
 
 ```text
 node {plugin_root}/hooks/scripts/run-claude-reviewer.mjs --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PAYLOAD_FILE --output OUTPUT_FILE --model REVIEW_MODEL --agent code-reviewer --timeout-seconds 1200

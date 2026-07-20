@@ -330,3 +330,12 @@ test('native Claude documentation states the real model-only override boundary',
   assert.match(source, /effort[\s\S]{0,180}(?:unsupported|not support|지원하지)/i);
   assert.match(source, /explicit\s+effort[\s\S]{0,220}(?:strict|error|오류)/i);
 });
+
+test('K4: native Claude dispatch consumes only an applicable routing plan model', () => {
+  const source = fs.readFileSync(path.join(root, 'skills/deep-review-workflow/references/review-execution.md'), 'utf8');
+  const nativeClaude = source.match(/### 4\.1 `claude-opus`([\s\S]*?)### 4\.2 `codex-review`/u)?.[1] || '';
+  assert.match(nativeClaude, /read the `claude-opus`\s+route from the emitted routing plan/u);
+  assert.match(nativeClaude, /`explicit_overrides: true` or `apply_automatic: true`/u);
+  assert.match(nativeClaude, /pass its `resolved\.model` as the Agent\s+model parameter/u);
+  assert.match(nativeClaude, /shadow-only plan or no emitted plan[\s\S]{0,120}configured model alias unchanged/u);
+});
