@@ -901,6 +901,39 @@ test('I1: policy classification.max_classifier_bytes_per_artifact wires into the
 });
 
 // ---------------------------------------------------------------------------
+// H6: classification.thresholds from review-policy.yaml must reach the
+// deterministic classifier's confidence bands (classifyArtifact consumes
+// `thresholds` directly), not just classification.size_thresholds /
+// max_classifier_bytes_per_artifact, which are already wired separately.
+// ---------------------------------------------------------------------------
+
+test('H6: policy classification.thresholds wires into the deterministic classifier confidence bands', async () => {
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-h6-thresholds-');
+  fs.writeFileSync(path.join(repo, 'design.md'), fixture('design-en.md'));
+  const listPath = path.join(repo, 'targets.z');
+  fs.writeFileSync(listPath, 'design.md\0');
+
+  const baseline = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', listPath],
+    {},
+    { capabilities: [], reviewers: [] },
+  );
+  const baselineArtifact = baseline.artifacts.find((artifact) => artifact.path === 'design.md');
+  assert.equal(baselineArtifact.target_kind, 'design-document');
+  assert.equal(baselineArtifact.needs_semantic, false, 'design.md must confirm deterministically under default thresholds');
+
+  const raised = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', listPath],
+    {},
+    { capabilities: [], reviewers: [], projectPolicy: { classification: { thresholds: { confirm: 0.99 } } } },
+  );
+  const raisedArtifact = raised.artifacts.find((artifact) => artifact.path === 'design.md');
+  assert.equal(raisedArtifact.target_kind, 'design-document');
+  assert.equal(raisedArtifact.needs_semantic, true, 'raising classification.thresholds.confirm must push the same artifact out of the confirmed band');
+});
+
+// ---------------------------------------------------------------------------
 // R2I1: routingInputs' no-runtime-capabilities/no-runtime-probes branch must
 // consult the on-disk capability cache before spawning fresh probes, save the
 // cache after a fresh probe, and never persist native host-assertion entries.
@@ -970,6 +1003,126 @@ test('R2I1: a fresh probe writes the capability cache and a subsequent run hits 
   assert.equal(invocationsAfterSecond, invocationsAfterFirst, 'a cache hit must avoid invoking the probe runner again');
   const secondRoute = second.routing_plan.routes.find((route) => route.reviewer_id === 'claude-opus');
   assert.equal(secondRoute.adapter_id, 'claude-cli', 'the cache hit must still resolve the correct adapter');
+});
+
+function writeFailingClaudeBinary(binDir, probeLogPath) {
+  const claudeScript = path.join(binDir, 'claude');
+  fs.writeFileSync(claudeScript, [
+    '#!/bin/sh',
+    `echo "invoked $1" >> "${probeLogPath}"`,
+    'exit 1',
+    '',
+  ].join('\n'));
+  if (process.platform !== 'win32') fs.chmodSync(claudeScript, 0o755);
+  return claudeScript;
+}
+
+// ---------------------------------------------------------------------------
+// H7: a transient probe failure (timeout/non-zero) must never be persisted to
+// the on-disk capability cache — success-only persistence, no TTL — so the
+// reviewer is re-probed (and can recover) on the very next run.
+// ---------------------------------------------------------------------------
+
+test('H7: a failed claude probe is never persisted to the capability cache', async (t) => {
+  if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script'); return; }
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-h7-failed-probe-');
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const binDir = temporaryDirectory('deep-review-h7-bin-');
+  const probeLog = path.join(binDir, 'probe-calls.log');
+  writeFailingClaudeBinary(binDir, probeLog);
+  const env = { PATH: `${binDir}${path.delimiter}${R2I1_SAFE_SYSTEM_PATH}`, PROBE_LOG: probeLog };
+
+  const cachePath = path.join(repo, '.deep-review', 'tmp', 'capability-cache.json');
+  await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], env, {});
+  assert.equal(fs.existsSync(cachePath), false, 'a failed probe must never write the capability cache');
+});
+
+test('H7: a successful probe still writes the capability cache', async (t) => {
+  if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script'); return; }
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-h7-success-probe-');
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const binDir = temporaryDirectory('deep-review-h7-success-bin-');
+  const probeLog = path.join(binDir, 'probe-calls.log');
+  writeFakeClaudeBinary(binDir, probeLog);
+  const env = { PATH: `${binDir}${path.delimiter}${R2I1_SAFE_SYSTEM_PATH}`, PROBE_LOG: probeLog };
+
+  const cachePath = path.join(repo, '.deep-review', 'tmp', 'capability-cache.json');
+  await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], env, {});
+  assert.ok(fs.existsSync(cachePath), 'a fully successful probe must still write the capability cache');
+});
+
+// ---------------------------------------------------------------------------
+// H8: codex-companion availability must be rebuilt fresh from this run's
+// detected.codex_plugin on every cache hit, never reused from a stale
+// on-disk cache entry — installing/removing the companion between runs (with
+// the keyed claude/codex/agy CLI paths+mtime unchanged) must be observable
+// immediately.
+// ---------------------------------------------------------------------------
+
+function codexCompanionEnv(binDir, probeLog, companionPath) {
+  const env = { PATH: `${binDir}${path.delimiter}${R2I1_SAFE_SYSTEM_PATH}`, PROBE_LOG: probeLog };
+  if (companionPath) env.CODEX_COMPANION_PATH = companionPath;
+  return env;
+}
+
+test('H8: a cache written when the companion was absent still yields an available codex-companion once detected.codex_plugin is true', async (t) => {
+  if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script'); return; }
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-h8-companion-appears-');
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const binDir = temporaryDirectory('deep-review-h8-bin-');
+  const probeLog = path.join(binDir, 'probe-calls.log');
+  writeFakeClaudeBinary(binDir, probeLog);
+  const companionPath = path.join(binDir, 'codex-companion.mjs');
+  fs.writeFileSync(companionPath, '// fake codex companion plugin\n');
+
+  const cachePath = path.join(repo, '.deep-review', 'tmp', 'capability-cache.json');
+  const absentEnv = codexCompanionEnv(binDir, probeLog, null);
+  const first = await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], absentEnv, {});
+  assert.ok(fs.existsSync(cachePath), 'the first (companion-absent) run must write the cache');
+  assert.equal(first.routing_plan.routes.some((route) => route.reviewer_id === 'codex-review'), false, 'no codex route without the companion');
+
+  const presentEnv = codexCompanionEnv(binDir, probeLog, companionPath);
+  const second = await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], presentEnv, {});
+  assert.equal(second.routing_plan.routes.some((route) => route.reviewer_id === 'codex-review' && route.adapter_id === 'codex-companion'), true,
+    'a cache hit must still rebuild codex-companion fresh and route to it once detected.codex_plugin is true');
+});
+
+test('H8: a cache written when the companion was present no longer yields codex-companion once detected.codex_plugin is false', async (t) => {
+  if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script'); return; }
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-h8-companion-disappears-');
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const binDir = temporaryDirectory('deep-review-h8-bin2-');
+  const probeLog = path.join(binDir, 'probe-calls.log');
+  writeFakeClaudeBinary(binDir, probeLog);
+  const companionPath = path.join(binDir, 'codex-companion.mjs');
+  fs.writeFileSync(companionPath, '// fake codex companion plugin\n');
+
+  const cachePath = path.join(repo, '.deep-review', 'tmp', 'capability-cache.json');
+  const presentEnv = codexCompanionEnv(binDir, probeLog, companionPath);
+  const first = await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], presentEnv, {});
+  assert.ok(fs.existsSync(cachePath), 'the first (companion-present) run must write the cache');
+  assert.equal(first.routing_plan.routes.some((route) => route.reviewer_id === 'codex-review' && route.adapter_id === 'codex-companion'), true);
+
+  const absentEnv = codexCompanionEnv(binDir, probeLog, null);
+  const second = await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], absentEnv, {});
+  assert.equal(second.routing_plan.routes.some((route) => route.reviewer_id === 'codex-review'), false,
+    'a cache hit must never reuse a stale companion-available entry once detected.codex_plugin is false');
 });
 
 test('R2I1: a corrupt capability cache falls open to a fresh probe instead of failing the preflight', async (t) => {

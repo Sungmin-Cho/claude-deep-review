@@ -323,12 +323,15 @@ function capabilityCacheFilePath(repo) {
 }
 
 // Native host-assertion entries (claude-native-agent, codex-native-generic)
-// are never persisted to the capability cache — they must be rebuilt fresh
-// on every run from this run's hostAssertions. `fresh` here is a
-// buildCapabilities() call with the correct canonical adapter ordering and
-// this run's hostAssertions/detected data but no probe data; only its
-// native-adapter entries are kept, and the remaining (probe-derived) entries
-// are taken from the cached array.
+// and codex-companion (H8: a pure detection derivative keyed off a different
+// file than the invalidation keys below) are never persisted to the
+// capability cache — they must be rebuilt fresh on every run from this run's
+// hostAssertions/detected data. `fresh` here is a buildCapabilities() call
+// with the correct canonical adapter ordering and this run's
+// hostAssertions/detected data but no probe data; its native-adapter and
+// codex-companion entries are kept as-is (absent from `cached` since
+// saveCapabilityCache excludes them), and the remaining (probe-derived)
+// claude-cli/agy-cli entries are taken from the cached array.
 function mergeCachedCapabilities(fresh, cached) {
   const cachedById = new Map(cached.map((item) => [item.adapter_id, item]));
   return fresh.map((item) => cachedById.get(item.adapter_id) || item);
@@ -395,10 +398,20 @@ async function routingInputs(repo, env, runtime, knownEnvironment) {
     probes,
     hostAssertions: runtime.hostAssertions,
   });
-  try {
-    saveCapabilityCache(capabilityCacheFilePath(repo), capabilities, invalidationKeys);
-  } catch {
-    // Best-effort persistence: a cache write failure must never affect this run's result.
+  // H7: a transient probe failure (timeout/non-zero) must never be persisted —
+  // with no TTL or success-only rule, an unavailable capability saved here
+  // would keep the reviewer disabled on later runs even after the transient
+  // clears. Only save when every executed probe for a detected binary
+  // actually succeeded; cache hits and the fail-open behavior above are
+  // unaffected.
+  const probeFailed = (detected.claude_cli && probes.claude?.ok !== true)
+    || (detected.codex_cli && probes.codex?.ok !== true);
+  if (!probeFailed) {
+    try {
+      saveCapabilityCache(capabilityCacheFilePath(repo), capabilities, invalidationKeys);
+    } catch {
+      // Best-effort persistence: a cache write failure must never affect this run's result.
+    }
   }
   return { capabilities, reviewers: runtime.reviewers || defaultReviewers(capabilities), detected };
 }
@@ -524,6 +537,15 @@ export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env 
   const maxClassifierBytes = Number.isSafeInteger(policyMaxBytes) && policyMaxBytes > 0
     ? policyMaxBytes
     : undefined;
+  // H6: classification.thresholds from review-policy.yaml must reach both the
+  // deterministic classifyArtifact() confidence bands and the semantic cache
+  // fingerprint context — an absent or non-object policy value keeps the
+  // classifyArtifact/DEFAULT_THRESHOLDS defaults untouched.
+  classificationOptions.thresholds = (
+    policy.classification?.thresholds
+    && typeof policy.classification.thresholds === 'object'
+    && !Array.isArray(policy.classification.thresholds)
+  ) ? policy.classification.thresholds : undefined;
   let result = semanticEnabled
     ? await classifyArtifactsScopeWithSemantic({
       ...classificationOptions,

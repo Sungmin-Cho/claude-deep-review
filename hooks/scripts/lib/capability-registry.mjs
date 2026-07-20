@@ -195,7 +195,14 @@ export function loadCapabilityCache(filePath, invalidationKeys) {
 
 export function saveCapabilityCache(filePath, capabilities, invalidationKeys) {
   if (!Array.isArray(capabilities)) throw new TypeError('capabilities must be an array');
-  const cacheable = capabilities.filter((item) => !['claude-native-agent', 'codex-native-generic'].includes(item.adapter_id));
+  // H8: codex-companion availability derives purely from detected.codex_plugin
+  // (a different file than the keyed claude/codex/agy CLI paths+mtime), so a
+  // cache hit would otherwise reuse a stale companion entry when the
+  // companion is installed/removed without touching the keyed CLIs. It is a
+  // free detection derivative like the native adapters below — never persist
+  // it; the cache-hit merge in classify-artifacts.mjs rebuilds it fresh from
+  // this run's detected values every time.
+  const cacheable = capabilities.filter((item) => !['claude-native-agent', 'codex-native-generic', 'codex-companion'].includes(item.adapter_id));
   // Cache storage excludes host assertions. Return-time callers should rebuild
   // and inject native entries on every run rather than trusting this file.
   const document = {

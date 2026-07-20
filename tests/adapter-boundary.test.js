@@ -117,6 +117,60 @@ test('agy explicit unsupported model never retries unless fallback was authorize
   assert.equal(fallback.verification_status, 'fallback');
 });
 
+// ---------------------------------------------------------------------------
+// H4: an execution plan's resolved model is authoritative, including null
+// (provider default) — the legacy options.model must never resurrect a stale
+// --model value once a plan is present.
+// ---------------------------------------------------------------------------
+
+test('H4: agy with an execution plan whose resolved model is null never falls back to legacy options.model', async () => {
+  const { runAgyReviewer } = await import(agyUrl);
+  const fixture = workspace();
+  const privacyPreparer = async () => ({ outcome: 'auto_ack', fingerprint: 'same' });
+  const fingerprintCapturer = async () => ({ mode: 'off', digest: null, error: null });
+  let invocation;
+  const result = await runAgyReviewer({
+    ...fixture, pluginRoot: root, configPath: path.join(fixture.dir, 'config.yaml'), binary: '/fake/agy', mode: 'off',
+    model: 'gemini-x',
+    executionPlan: { model: null, effort: null, source: 'cli-provider', allowFallback: true },
+    privacyPreparer, fingerprintCapturer,
+    processRunner: async (binary, args, options) => { invocation = { binary, args, options }; return processResult(); },
+  });
+  assert.equal(invocation.args.includes('--model'), false);
+  assert.equal(result.resolved_model, null);
+});
+
+test('H4: agy without an execution plan still honors the legacy options.model', async () => {
+  const { runAgyReviewer } = await import(agyUrl);
+  const fixture = workspace();
+  const privacyPreparer = async () => ({ outcome: 'auto_ack', fingerprint: 'same' });
+  const fingerprintCapturer = async () => ({ mode: 'off', digest: null, error: null });
+  let invocation;
+  await runAgyReviewer({
+    ...fixture, pluginRoot: root, configPath: path.join(fixture.dir, 'config.yaml'), binary: '/fake/agy', mode: 'off',
+    model: 'gemini-x',
+    privacyPreparer, fingerprintCapturer,
+    processRunner: async (binary, args, options) => { invocation = { binary, args, options }; return processResult(); },
+  });
+  assert.deepEqual(invocation.args.slice(invocation.args.indexOf('--model'), invocation.args.indexOf('--model') + 2), ['--model', 'gemini-x']);
+});
+
+test('H4: agy with an execution plan whose model is explicitly set still lands in argv', async () => {
+  const { runAgyReviewer } = await import(agyUrl);
+  const fixture = workspace();
+  const privacyPreparer = async () => ({ outcome: 'auto_ack', fingerprint: 'same' });
+  const fingerprintCapturer = async () => ({ mode: 'off', digest: null, error: null });
+  let invocation;
+  await runAgyReviewer({
+    ...fixture, pluginRoot: root, configPath: path.join(fixture.dir, 'config.yaml'), binary: '/fake/agy', mode: 'off',
+    model: 'gemini-x',
+    executionPlan: { model: 'explicit-plan-model', effort: null, source: 'cli-provider', allowFallback: true },
+    privacyPreparer, fingerprintCapturer,
+    processRunner: async (binary, args, options) => { invocation = { binary, args, options }; return processResult(); },
+  });
+  assert.deepEqual(invocation.args.slice(invocation.args.indexOf('--model'), invocation.args.indexOf('--model') + 2), ['--model', 'explicit-plan-model']);
+});
+
 test('native Claude documentation states the real model-only override boundary', () => {
   const source = fs.readFileSync(path.join(root, 'skills/deep-review-workflow/references/review-execution.md'), 'utf8');
   assert.match(source, /Agent\(code-reviewer\)[\s\S]{0,500}model parameter/i);

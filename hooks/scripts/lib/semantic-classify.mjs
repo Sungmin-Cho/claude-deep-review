@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { atomicWriteFile } from './runtime-context.mjs';
 import { scanSensitiveFiles } from './sensitive-files.mjs';
 import { runProcess } from './process.mjs';
+import { TARGET_KINDS } from './target-taxonomy.mjs';
 
 export const SEMANTIC_PROTOCOL_VERSION = '2.0';
 export const SEMANTIC_PROMPT_VERSION = 'artifact-semantic-v1';
@@ -155,6 +156,19 @@ function validateSemanticResult(value) {
       || value.confidence < 0 || value.confidence > 1 || !Array.isArray(value.signals)
       || !Array.isArray(value.alternative_kinds) || typeof value.uncertainty_action !== 'string') {
     throw new Error('semantic classifier output schema is invalid');
+  }
+  // H5: a hallucinated target_kind (or alternative_kinds entry) outside the
+  // canonical §8.1 taxonomy must never overwrite the deterministic
+  // classification — reject it here so the caller's catch path falls back to
+  // semantic_status 'failed' with the deterministic result retained.
+  if (!TARGET_KINDS.includes(value.target_kind)) {
+    throw new Error('semantic classifier target_kind is not canonical');
+  }
+  if (value.alternative_kinds.some((kind) => !TARGET_KINDS.includes(kind))) {
+    throw new Error('semantic classifier alternative_kinds contains a non-canonical kind');
+  }
+  if (value.signals.some((signal) => typeof signal !== 'string')) {
+    throw new Error('semantic classifier signals must be strings');
   }
   return value;
 }

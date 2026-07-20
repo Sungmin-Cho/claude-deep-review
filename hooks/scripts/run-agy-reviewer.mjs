@@ -217,7 +217,12 @@ export async function runAgyReviewer(options = {}) {
     : (resolveExecutable('agy', env) || 'agy');
   const body = readFileSync(promptFile);
   const executionPlan = options.executionPlan || null;
-  let model = executionPlan?.model ?? options.model ?? '';
+  // H4: when an execution plan is supplied, its resolved model is
+  // authoritative — including null (provider default, the normal outcome for
+  // agy since its adapter has no tier aliases). The legacy options.model only
+  // applies when no plan is present; it must never resurrect a stale
+  // --model/AGY_MODEL value the plan deliberately resolved to null.
+  let model = executionPlan ? (executionPlan.model ?? '') : (options.model ?? '');
   if (typeof model !== 'string') throw new TypeError('model must be a string');
   if (model && !SAFE_MODEL_PATTERN.test(model)) {
     if (executionPlan?.source?.startsWith('cli-') && !executionPlan.allowFallback) {

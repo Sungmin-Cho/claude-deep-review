@@ -101,11 +101,31 @@ test('capability cache has protocol 2.0 and invalidates on path, mtime, or versi
   assert.equal(raw.protocol_version, '2.0');
   assert.deepEqual(
     loadCapabilityCache(file, keys),
-    capabilities.filter((item) => !['claude-native-agent', 'codex-native-generic'].includes(item.adapter_id)),
+    capabilities.filter((item) => !['claude-native-agent', 'codex-native-generic', 'codex-companion'].includes(item.adapter_id)),
   );
   for (const changed of [
     { claude: { path: '/other/claude', mtime_ms: 10, version: '1.0.0' } },
     { claude: { path: '/bin/claude', mtime_ms: 11, version: '1.0.0' } },
     { claude: { path: '/bin/claude', mtime_ms: 10, version: '1.0.1' } },
   ]) assert.equal(loadCapabilityCache(file, changed), null);
+});
+
+// ---------------------------------------------------------------------------
+// H8: codex-companion availability is a pure detection derivative (no probe
+// cost, unlike claude/codex/agy CLI paths) and must never be persisted to the
+// on-disk capability cache — it is rebuilt fresh from this run's detected
+// values on every cache hit, so installing/removing the companion without
+// touching the keyed CLIs never yields a stale reviewer set.
+// ---------------------------------------------------------------------------
+
+test('H8: saveCapabilityCache output contains no codex-companion entry', async () => {
+  const { buildCapabilities, saveCapabilityCache } = await import(registryUrl);
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-capability-h8-'));
+  const file = path.join(temp, 'capabilities.json');
+  const capabilities = buildCapabilities({
+    detected: detected({ codex_plugin: true, codex_companion_path: '/plugins/codex-companion.mjs' }),
+  });
+  saveCapabilityCache(file, capabilities, {});
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(raw.capabilities.some((item) => item.adapter_id === 'codex-companion'), false);
 });

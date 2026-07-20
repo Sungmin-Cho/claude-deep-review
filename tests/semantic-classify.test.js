@@ -253,6 +253,58 @@ test('R2I2: Claude CLI semantic adapter forwards env: effort transport via a sha
   assert.equal(process.env.CLAUDE_TEST_EFFORT, undefined);
 });
 
+// ---------------------------------------------------------------------------
+// H5: validateSemanticResult must reject any target_kind/alternative_kinds
+// value outside the canonical §8.1 taxonomy so a hallucinated high-confidence
+// kind can never overwrite the deterministic classification.
+// ---------------------------------------------------------------------------
+
+test('H5: a hallucinated non-canonical target_kind fails closed and keeps the deterministic classification', async () => {
+  const { classifyWithSemantic } = await import(semanticUrl);
+  let calls = 0;
+  const result = await classifyWithSemantic({
+    descriptor: descriptor(), classification: provisional(), repoRoot: root, pluginRoot: root,
+    adapter: async () => {
+      calls += 1;
+      return {
+        classification_version: '1.0', target_kind: 'super-doc', confidence: 0.99,
+        signals: [], alternative_kinds: [], uncertainty_action: 'proceed', notes: 'invented kind',
+      };
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.semantic_status, 'failed');
+  assert.equal(result.target_kind, 'generic-document');
+  assert.match(result.semantic_error, /not canonical/i);
+});
+
+test('H5: a non-canonical alternative_kinds entry also fails closed and keeps the deterministic classification', async () => {
+  const { classifyWithSemantic } = await import(semanticUrl);
+  const result = await classifyWithSemantic({
+    descriptor: descriptor(), classification: provisional(), repoRoot: root, pluginRoot: root,
+    adapter: async () => ({
+      classification_version: '1.0', target_kind: 'design-document', confidence: 0.95,
+      signals: [], alternative_kinds: ['not-a-real-kind'], uncertainty_action: 'proceed', notes: '',
+    }),
+  });
+  assert.equal(result.semantic_status, 'failed');
+  assert.equal(result.target_kind, 'generic-document');
+  assert.match(result.semantic_error, /non-canonical/i);
+});
+
+test('H5: a valid canonical semantic output still merges normally', async () => {
+  const { classifyWithSemantic } = await import(semanticUrl);
+  const result = await classifyWithSemantic({
+    descriptor: descriptor(), classification: provisional(), repoRoot: root, pluginRoot: root,
+    adapter: async () => ({
+      classification_version: '1.0', target_kind: 'design-document', confidence: 0.95,
+      signals: [], alternative_kinds: ['implementation-plan'], uncertainty_action: 'proceed', notes: '',
+    }),
+  });
+  assert.equal(result.semantic_status, 'success');
+  assert.equal(result.target_kind, 'design-document');
+});
+
 test('successful semantic output merges with deterministic provenance and lower confidence does not win', async () => {
   const { classifyWithSemantic } = await import(semanticUrl);
   const result = await classifyWithSemantic({
