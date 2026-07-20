@@ -12,6 +12,7 @@ import {
   runProcess,
 } from './lib/process.mjs';
 import { atomicWriteFile, resolvePluginRoot } from './lib/runtime-context.mjs';
+import { loadExecutionPlan } from './lib/execution-plan.mjs';
 
 const BODY_LIMIT = 198_000;
 const WINDOWS_CREATE_PROCESS_LIMIT = 32_767;
@@ -215,9 +216,13 @@ export async function runAgyReviewer(options = {}) {
     ? requiredString(options.binary, 'binary')
     : (resolveExecutable('agy', env) || 'agy');
   const body = readFileSync(promptFile);
-  let model = options.model ?? '';
+  const executionPlan = options.executionPlan || null;
+  let model = executionPlan?.model ?? options.model ?? '';
   if (typeof model !== 'string') throw new TypeError('model must be a string');
   if (model && !SAFE_MODEL_PATTERN.test(model)) {
+    if (executionPlan?.source?.startsWith('cli-') && !executionPlan.allowFallback) {
+      throw new Error('ERROR_UNSUPPORTED_MODEL: explicit agy model contains unsupported characters');
+    }
     warnings.push('model contained unsupported characters and was omitted');
     model = '';
   }
@@ -291,6 +296,8 @@ export async function runAgyReviewer(options = {}) {
   );
   const firstStderr = processResult.stderr.toString('utf8');
   let terminalPrivacy = finalPrivacy;
+  let strictUnsupportedModel = false;
+  let executionFallback = null;
   if (
     model
     && processResult.code !== 0
@@ -299,19 +306,23 @@ export async function runAgyReviewer(options = {}) {
     && !AUTH_PATTERN.test(firstStderr)
     && UNSUPPORTED_MODEL_PATTERN.test(firstStderr)
   ) {
-    terminalPrivacy = await privacyPreparer({
+    if (executionPlan?.source?.startsWith('cli-') && !executionPlan.allowFallback) {
+      strictUnsupportedModel = true;
+      warnings.push(`ERROR_UNSUPPORTED_MODEL: agy rejected explicit model ${model}; fallback is disabled`);
+    } else {
+      terminalPrivacy = await privacyPreparer({
       repo: projectRoot,
       pluginRoot,
       configPath,
       approval: 'auto',
       now: options.now,
     });
-    if (
+      if (
       ['auto_ack', 'acknowledged'].includes(terminalPrivacy.outcome)
       && terminalPrivacy.fingerprint === privacy.fingerprint
     ) {
-      warnings.push(`agy rejected model ${model}; retried once without --model`);
-      processResult = await processRunner(
+        warnings.push(`agy rejected model ${model}; retried once without --model`);
+        processResult = await processRunner(
         binary,
         processArguments({
           promptContent: promptTransport.promptContent,
@@ -320,9 +331,16 @@ export async function runAgyReviewer(options = {}) {
           model: '',
         }),
         { cwd: projectRoot, env, timeoutMs: timeoutSeconds * 1000 },
-      );
-    } else {
-      warnings.push('agy model retry was blocked because privacy approval changed');
+        );
+        executionFallback = {
+          occurred: true,
+          requested: { model },
+          applied: { model: null },
+          reason: 'agy rejected requested model; retried without --model',
+        };
+      } else {
+        warnings.push('agy model retry was blocked because privacy approval changed');
+      }
     }
   }
   const after = await fingerprintCapturer({ repo: projectRoot, pluginRoot, mode });
@@ -343,10 +361,19 @@ export async function runAgyReviewer(options = {}) {
     truncated,
     before,
     after,
+    requested_model: executionPlan?.requestedModel ?? executionPlan?.model ?? (model || null),
+    resolved_model: executionFallback ? null : (model || null),
+    applied_model: null,
+    requested_effort: executionPlan?.requestedEffort ?? executionPlan?.effort ?? null,
+    resolved_effort: executionPlan?.effort ?? null,
+    applied_effort: null,
+    verification_status: strictUnsupportedModel ? 'failed' : executionFallback ? 'fallback' : 'provider-did-not-report',
+    error_code: strictUnsupportedModel ? 'ERROR_UNSUPPORTED_MODEL' : null,
+    fallback: executionFallback || executionPlan?.routingFallback || { occurred: false },
   };
 }
 
-function parseCli(argv) {
+export function parseCli(argv) {
   const values = {};
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
@@ -362,10 +389,15 @@ function parseCli(argv) {
       '--model': 'model',
       '--approval': 'approval',
       '--timeout-seconds': 'timeoutSeconds',
+      '--routing-plan': 'routingPlan',
+      '--reviewer-id': 'reviewerId',
     }[flag];
     if (!key || index + 1 >= argv.length) throw new Error(`unknown or incomplete argument: ${flag}`);
     values[key] = argv[index + 1];
     index += 1;
+  }
+  if (Boolean(values.routingPlan) !== Boolean(values.reviewerId)) {
+    throw new Error('--routing-plan and --reviewer-id must be provided together');
   }
   return values;
 }
@@ -373,10 +405,11 @@ function parseCli(argv) {
 async function main() {
   const options = parseCli(process.argv.slice(2));
   if (options.help) {
-    process.stdout.write('Usage: run-agy-reviewer.mjs --binary FILE --project-root DIR --plugin-root DIR --prompt-file FILE --output FILE [--mode MODE] [--model MODEL] [--timeout-seconds N]\n');
+    process.stdout.write('Usage: run-agy-reviewer.mjs --binary FILE --project-root DIR --plugin-root DIR --prompt-file FILE --output FILE [--mode MODE] [--model MODEL] [--routing-plan FILE --reviewer-id ID] [--timeout-seconds N]\n');
     return;
   }
   options.pluginRoot ??= resolvePluginRoot();
+  if (options.routingPlan) options.executionPlan = loadExecutionPlan(options.routingPlan, options.reviewerId);
   const result = await runAgyReviewer(options);
   process.stdout.write(`${JSON.stringify(result)}\n`);
   if (result.attempted && result.code !== 0) process.exitCode = result.code;
