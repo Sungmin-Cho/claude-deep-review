@@ -285,3 +285,97 @@ test('G2: no disable flags at all keeps today\'s byte-identical plan (every elig
   );
   assert.deepEqual(result.routing_plan.routes.map((r) => r.reviewer_id).sort(), ['agy', 'claude-opus', 'codex-review']);
 });
+
+// ---------------------------------------------------------------------------
+// J3: an explicit effort override that targets the claude provider (or the
+// claude-opus reviewer) cannot be transported by claude-native-agent
+// (effort_selection.supported is always false there); when the Claude CLI
+// adapter is available AND can transport the requested effort, claude-opus
+// must be bound to it instead of the native agent. Absent an explicit effort
+// request, native-first precedence stays byte-identical. These tests omit
+// `reviewers` from the runtime stub so defaultReviewers() itself is exercised.
+// ---------------------------------------------------------------------------
+
+function j3Capabilities({ claudeCliEffortSupported = true } = {}) {
+  return [
+    {
+      protocol_version: '2.0', adapter_id: 'claude-native-agent', provider: 'claude', available: true,
+      roles: ['standard'],
+      model_selection: { supported: true, aliases: ['haiku', 'sonnet', 'opus', 'best'], catalog_complete: false, transport: 'agent-parameter' },
+      effort_selection: { supported: false, levels: [], transport: 'none' },
+      structured_output: true, read_only_enforcement: 'agent-tool-allowlist',
+    },
+    {
+      protocol_version: '2.0', adapter_id: 'claude-cli', provider: 'claude', available: true,
+      roles: ['standard'],
+      model_selection: { supported: true, aliases: ['swift', 'steady', 'deep', 'best'], catalog_complete: false, transport: 'flag:--model' },
+      effort_selection: {
+        supported: claudeCliEffortSupported,
+        levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+        transport: 'flag:--effort',
+      },
+      structured_output: true, read_only_enforcement: 'process-contract',
+    },
+  ];
+}
+
+test('J3: an explicit claude effort override binds claude-opus to claude-cli when the native agent cannot transport it', async () => {
+  const { parsePublicRoute } = await import(routeUrl);
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-j3-effort-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const route = parsePublicRoute({ entry: 'review', host: 'claude', cwd: repo, argv: ['--effort', 'claude=high'] });
+  assert.equal(route.ok, true);
+
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', files, '--overrides-json', JSON.stringify(route.overrides), '--emit-routing-plan'],
+    {},
+    { capabilities: j3Capabilities() },
+  );
+  const claudeRoute = result.routing_plan.routes.find((r) => r.reviewer_id === 'claude-opus');
+  assert.ok(claudeRoute, 'claude-opus route must exist');
+  assert.equal(claudeRoute.adapter_id, 'claude-cli', 'an explicit supported effort must bind claude-opus to the transport-capable CLI adapter');
+  assert.equal(claudeRoute.resolved.effort, 'high');
+});
+
+test('J3: with no explicit effort override, claude-opus stays on the native agent (byte-identical precedence)', async () => {
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-j3-no-effort-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', files, '--emit-routing-plan'],
+    {},
+    { capabilities: j3Capabilities() },
+  );
+  const claudeRoute = result.routing_plan.routes.find((r) => r.reviewer_id === 'claude-opus');
+  assert.ok(claudeRoute, 'claude-opus route must exist');
+  assert.equal(claudeRoute.adapter_id, 'claude-native-agent', 'absent an explicit effort request, native-first precedence must stay unchanged');
+});
+
+test('J3: an explicit claude effort override keeps claude-native-agent (and surfaces the honest transport error) when the CLI adapter cannot transport effort either', async () => {
+  const { parsePublicRoute } = await import(routeUrl);
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-j3-unsupported-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const route = parsePublicRoute({ entry: 'review', host: 'claude', cwd: repo, argv: ['--effort', 'claude=high'] });
+  assert.equal(route.ok, true);
+
+  await assert.rejects(
+    runClassifyArtifactsCli(
+      ['--repo', repo, '--change-state', 'non-git', '--files-from0', files, '--overrides-json', JSON.stringify(route.overrides), '--emit-routing-plan'],
+      {},
+      { capabilities: j3Capabilities({ claudeCliEffortSupported: false }) },
+    ),
+    /ERROR_UNSUPPORTED_EFFORT|ERROR_EFFORT_TRANSPORT_UNAVAILABLE/,
+    'when neither claude adapter can transport the explicit effort, the router must surface the honest error rather than silently succeeding',
+  );
+});

@@ -11,8 +11,8 @@
 // `run-*-reviewer` runner. That structural boundary is what makes `--dry-run`
 // safe: there is no reviewer code path to reach.
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { classifyArtifact, classifyScope } from './lib/artifact-classify.mjs';
 import { discoverArtifacts } from './lib/artifact-discover.mjs';
@@ -39,7 +39,7 @@ import {
   loadUserConfig,
   mergeRoutingConfig,
 } from './lib/review-policy.mjs';
-import { atomicWriteFile } from './lib/runtime-context.mjs';
+import { writeContainedFile } from './lib/runtime-context.mjs';
 
 const SIGNAL_LABELS = {
   frontmatter: 'frontmatter',
@@ -201,9 +201,12 @@ function defaultProvenancePath(repo) {
   return resolve(repo, '.deep-review', 'tmp', 'artifact-classification.json');
 }
 
-export function writeProvenance(result, outPath) {
-  mkdirSync(dirname(outPath), { recursive: true });
-  writeFileSync(outPath, `${JSON.stringify(result, null, 2)}\n`);
+// J2: repo is the containment root — writeContainedFile refuses a symlinked
+// destination file and a symlinked ancestor directory (e.g. a committed
+// `.deep-review/tmp` symlink) that would otherwise silently redirect this
+// write outside the repository.
+export function writeProvenance(repo, result, outPath) {
+  writeContainedFile(repo, outPath, `${JSON.stringify(result, null, 2)}\n`);
   return outPath;
 }
 
@@ -337,11 +340,34 @@ function mergeCachedCapabilities(fresh, cached) {
   return fresh.map((item) => cachedById.get(item.adapter_id) || item);
 }
 
-function defaultReviewers(capabilities) {
+// J3: an explicit effort override that targets the claude provider (or the
+// claude-opus reviewer directly) cannot be transported by claude-native-agent
+// (its effort_selection.supported is always false). Absent this check,
+// defaultReviewers unconditionally prefers the native agent whenever it is
+// available, so an advertised explicit --effort claude=high would fail
+// ERROR_UNSUPPORTED_EFFORT even when the detected Claude CLI could transport
+// it.
+function wantsClaudeEffort(overrides) {
+  return Boolean(
+    overrides?.providers?.claude?.effort !== undefined
+    || overrides?.reviewers?.['claude-opus']?.effort !== undefined,
+  );
+}
+
+function defaultReviewers(capabilities, overrides) {
   const reviewers = [];
   const has = (adapterId) => capabilities.some((item) => item.adapter_id === adapterId && item.available === true);
-  if (has('claude-native-agent')) reviewers.push({ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-native-agent' });
-  else if (has('claude-cli')) reviewers.push({ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' });
+  const capabilityFor = (adapterId) => capabilities.find((item) => item.adapter_id === adapterId);
+  if (has('claude-native-agent')) {
+    const claudeCliCapability = capabilityFor('claude-cli');
+    if (wantsClaudeEffort(overrides) && has('claude-cli') && claudeCliCapability?.effort_selection?.supported === true) {
+      // The native agent cannot transport effort at all; bind claude-opus to
+      // the CLI adapter instead so the explicit, supported effort is honored.
+      reviewers.push({ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' });
+    } else {
+      reviewers.push({ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-native-agent' });
+    }
+  } else if (has('claude-cli')) reviewers.push({ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' });
   if (has('codex-native-generic')) reviewers.push({ id: 'codex-review', provider: 'codex', role: 'standard', adapter_id: 'codex-native-generic' });
   else if (has('codex-companion')) reviewers.push({ id: 'codex-review', provider: 'codex', role: 'standard', adapter_id: 'codex-companion' });
   if (has('codex-companion')) reviewers.push({ id: 'codex-adversarial', provider: 'codex', role: 'adversarial', adapter_id: 'codex-companion' });
@@ -357,21 +383,46 @@ function hasExecutionOverride(overrides) {
   ));
 }
 
+// J1: a preflight error caused by policy enforcement (a denied/unavailable
+// provider, a denied model, read-only unavailable, or an unparseable/type-
+// invalid EXISTING policy file) is TERMINAL for the whole review even when the
+// plan is not explicit — legacy dispatch must never proceed past a policy the
+// project/user deliberately configured. Only environment/probe failures
+// unrelated to policy enforcement keep the existing explicit-gated
+// warn-and-continue behavior for non-explicit plans.
+const POLICY_ENFORCEMENT_ERROR_PREFIXES = Object.freeze([
+  'ERROR_PROVIDER_DENIED',
+  'ERROR_MODEL_DENIED',
+  'ERROR_READ_ONLY_UNAVAILABLE',
+  'ERROR_PROVIDER_UNAVAILABLE',
+]);
+
+function isPolicyEnforcementError(error) {
+  if (!error) return false;
+  if (error.code === 'ERROR_POLICY_INVALID') return true;
+  const code = typeof error.code === 'string' ? error.code : '';
+  const message = typeof error.message === 'string' ? error.message : '';
+  return POLICY_ENFORCEMENT_ERROR_PREFIXES.some((prefix) => code.startsWith(prefix) || message.startsWith(prefix));
+}
+
 export function routingPreflightDecision({ explicit, error } = {}) {
-  if (error) return explicit ? { action: 'stop', error: error.message } : { action: 'continue', warning: error.message };
+  if (error) {
+    if (explicit || isPolicyEnforcementError(error)) return { action: 'stop', error: error.message };
+    return { action: 'continue', warning: error.message };
+  }
   return explicit ? { action: 'apply', error: null } : { action: 'shadow', error: null };
 }
 
-async function routingInputs(repo, env, runtime, knownEnvironment) {
+async function routingInputs(repo, env, runtime, knownEnvironment, overrides) {
   if (runtime.capabilities) return {
     capabilities: runtime.capabilities,
-    reviewers: runtime.reviewers || defaultReviewers(runtime.capabilities),
+    reviewers: runtime.reviewers || defaultReviewers(runtime.capabilities, overrides),
     detected: runtime.detected,
   };
   const detected = knownEnvironment || await detectEnvironment({ cwd: repo, env });
   if (runtime.probes) {
     const capabilities = buildCapabilities({ detected, probes: runtime.probes, hostAssertions: runtime.hostAssertions });
-    return { capabilities, reviewers: runtime.reviewers || defaultReviewers(capabilities), detected };
+    return { capabilities, reviewers: runtime.reviewers || defaultReviewers(capabilities, overrides), detected };
   }
 
   // R2I1: consult the on-disk capability cache before spawning fresh probes.
@@ -389,7 +440,7 @@ async function routingInputs(repo, env, runtime, knownEnvironment) {
   if (cached) {
     const nativeShaped = buildCapabilities({ detected, hostAssertions: runtime.hostAssertions, probes: {} });
     const capabilities = mergeCachedCapabilities(nativeShaped, cached);
-    return { capabilities, reviewers: runtime.reviewers || defaultReviewers(capabilities), detected };
+    return { capabilities, reviewers: runtime.reviewers || defaultReviewers(capabilities, overrides), detected };
   }
 
   const probes = await probeCapabilities({ detected, cwd: repo, env });
@@ -413,7 +464,7 @@ async function routingInputs(repo, env, runtime, knownEnvironment) {
       // Best-effort persistence: a cache write failure must never affect this run's result.
     }
   }
-  return { capabilities, reviewers: runtime.reviewers || defaultReviewers(capabilities), detected };
+  return { capabilities, reviewers: runtime.reviewers || defaultReviewers(capabilities, overrides), detected };
 }
 
 function routingPolicy(repo, env, overrides, runtime) {
@@ -422,8 +473,23 @@ function routingPolicy(repo, env, overrides, runtime) {
     routing: { policy: 'auto', allow_fallback: false, require_read_only: true },
     providers: {}, constraints: {}, classification: {},
   };
-  const user = runtime.userPolicy ?? loadUserConfig(env)?.policy ?? {};
-  const project = runtime.projectPolicy ?? loadReviewPolicy(repo)?.policy ?? {};
+  // J1: loadUserConfig/loadReviewPolicy already return null (never throw) for
+  // a missing file — they only throw while parsing an EXISTING malformed or
+  // schema-invalid file. Rethrow that case with a stable ERROR_POLICY_INVALID
+  // code so routingPreflightDecision can classify it as policy-enforcement
+  // (terminal) regardless of whether the plan is explicit.
+  let user;
+  try {
+    user = runtime.userPolicy ?? loadUserConfig(env)?.policy ?? {};
+  } catch (error) {
+    throw Object.assign(new Error(`ERROR_POLICY_INVALID: user config: ${error.message}`), { code: 'ERROR_POLICY_INVALID' });
+  }
+  let project;
+  try {
+    project = runtime.projectPolicy ?? loadReviewPolicy(repo)?.policy ?? {};
+  } catch (error) {
+    throw Object.assign(new Error(`ERROR_POLICY_INVALID: project review-policy.yaml: ${error.message}`), { code: 'ERROR_POLICY_INVALID' });
+  }
   const merged = mergeRoutingConfig({ defaults, user, project, cli: overrides });
   return { ...merged, user, project };
 }
@@ -512,7 +578,11 @@ export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env 
   const routingRuntime = hostAssertionsFromArgv === undefined
     ? runtime
     : { ...runtime, hostAssertions: runtime.hostAssertions ?? hostAssertionsFromArgv };
-  const { capabilities, reviewers, detected } = await routingInputs(repo, env, routingRuntime, environment);
+  // J3: options.overrides is the raw (pre-merge) CLI/override object — the
+  // only source that distinguishes an explicit effort request from a
+  // policy-file-only effort, so the native/CLI claude-opus adapter decision
+  // must see this, not the later effective/merged overrides.
+  const { capabilities, reviewers, detected } = await routingInputs(repo, env, routingRuntime, environment, options.overrides);
   const policy = routingPolicy(repo, env, options.overrides, runtime);
   const semanticAdapters = { ...(runtime.semanticAdapters || {}) };
   const claudeCapability = capabilities.find((item) => item.adapter_id === 'claude-cli' && item.available === true);
@@ -617,11 +687,11 @@ export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env 
   result = { ...result, routing_plan: routingPlan };
 
   const outPath = options.out ? resolve(options.out) : defaultProvenancePath(repo);
-  writeProvenance(result, outPath);
+  writeProvenance(repo, result, outPath);
 
   if (options.emitRoutingPlan) {
     const routingPlanPath = options.routingPlanOut ? resolve(options.routingPlanOut) : defaultRoutingPlanPath(repo);
-    atomicWriteFile(routingPlanPath, `${JSON.stringify(routingPlan, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    writeContainedFile(repo, routingPlanPath, `${JSON.stringify(routingPlan, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   }
 
   if (options.format === 'json') {

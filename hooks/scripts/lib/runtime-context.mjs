@@ -3,15 +3,19 @@ import {
   chmodSync,
   closeSync,
   fsyncSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import {
+  basename, dirname, isAbsolute, join, relative, resolve, sep,
+} from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export function detectRuntimeHost(env = process.env) {
@@ -53,6 +57,109 @@ export function atomicWriteFile(filePath, data, options = {}) {
     rmSync(temporary, { force: true });
     throw error;
   }
+}
+
+// True when `candidate` is `root` itself or lives beneath it. Both paths must
+// already be real (symlink-resolved) so a symlinked parent directory that
+// escapes the tree is rejected by the caller. Mirrors the discipline in
+// lib/artifact-discover.mjs's isContained (read side) for the write side.
+function isContained(root, candidate) {
+  if (candidate === root) return true;
+  const rel = relative(root, candidate);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+/**
+ * Write repository-owned runtime state (provenance / routing-plan JSON) to a
+ * destination that is guaranteed to be repository-contained and reached
+ * through no symlinked path component — never silently followed.
+ *
+ * J2: because the classification preflight runs before every normal review, a
+ * repository can commit `.deep-review/tmp/` (or the destination file itself)
+ * as a symlink and redirect this write to an arbitrary writable target
+ * outside the repo. This helper refuses that outright rather than trusting
+ * mkdirSync/writeFileSync's ordinary (symlink-following) path resolution.
+ *
+ * @param {string} repoRoot repository root (need not itself be canonicalized)
+ * @param {string} destPath absolute or repo-relative destination path
+ * @param {string|Buffer} data file contents
+ * @param {object} [options] forwarded to atomicWriteFile (encoding, mode)
+ * @returns {string} the resolved destination path that was written
+ */
+export function writeContainedFile(repoRoot, destPath, data, options = {}) {
+  const repoRootResolved = resolve(repoRoot);
+  let repoRealRoot;
+  try {
+    repoRealRoot = realpathSync(repoRootResolved);
+  } catch {
+    throw new Error(`repository containment root is unreadable: ${repoRootResolved}`);
+  }
+  const destination = resolve(destPath);
+
+  // Lexical containment first: the destination must fall under repoRoot
+  // itself, before any symlink resolution is even attempted.
+  const relFromRoot = relative(repoRootResolved, destination);
+  if (relFromRoot === '' || relFromRoot.startsWith('..') || isAbsolute(relFromRoot)) {
+    throw new Error(`refusing to write outside the repository root: ${destination}`);
+  }
+
+  // (2) Walk every ancestor directory component from the repo root down to
+  // the destination's parent. Any component that EXISTS and is a symlink is
+  // refused outright — a symlinked intermediate directory would otherwise let
+  // ordinary path resolution silently carry the write through it to an
+  // arbitrary target. A component that does not exist yet ends the walk:
+  // everything below it will be freshly created by mkdirSync below.
+  const segments = relFromRoot.split(sep).filter(Boolean);
+  const ancestorSegments = segments.slice(0, -1);
+  let current = repoRootResolved;
+  let deepestExisting = repoRootResolved;
+  for (const segment of ancestorSegments) {
+    current = join(current, segment);
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch {
+      break;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(`refusing to write through symlinked path component: ${current}`);
+    }
+    if (!stat.isDirectory()) {
+      throw new Error(`refusing to write through a non-directory path component: ${current}`);
+    }
+    deepestExisting = current;
+  }
+
+  // (3) The deepest EXISTING ancestor must resolve inside the real repo root.
+  let deepestRealPath;
+  try {
+    deepestRealPath = realpathSync(deepestExisting);
+  } catch {
+    throw new Error(`refusing to write: ancestor path is unreadable: ${deepestExisting}`);
+  }
+  if (!isContained(repoRealRoot, deepestRealPath)) {
+    throw new Error(`refusing to write through a path component that escapes the repository root: ${deepestExisting}`);
+  }
+
+  // (4) The destination itself, if it already exists, must not be a symlink.
+  // atomicWriteFile's rename replaces the link entry itself rather than
+  // following it either way, but this gives an explicit, visible refusal
+  // instead of a silent unlink-and-replace of an attacker-planted link.
+  let destStat;
+  try {
+    destStat = lstatSync(destination);
+  } catch {
+    destStat = null;
+  }
+  if (destStat && destStat.isSymbolicLink()) {
+    throw new Error(`refusing to write to a symlinked destination: ${destination}`);
+  }
+
+  // (5) Create any missing directories under the validated chain, then
+  // delegate to atomicWriteFile's no-follow temp-file + rename discipline.
+  mkdirSync(dirname(destination), { recursive: true });
+  atomicWriteFile(destination, data, options);
+  return destination;
 }
 
 export function makeSecureTempPath(prefix, suffix = '') {

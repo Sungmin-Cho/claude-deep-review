@@ -126,6 +126,102 @@ test('shadow routing defaults to report-only and preflight failures stop only ex
   assert.deepEqual(routingPreflightDecision({ explicit: true }), { action: 'apply', error: null });
 });
 
+// ---------------------------------------------------------------------------
+// J1: a preflight failure caused by policy enforcement (denied/unavailable
+// provider, denied model, read-only unavailable, or an unparseable/type-
+// invalid EXISTING policy file) must be terminal even when the plan is not
+// explicit — legacy dispatch must never proceed past a policy the
+// project/user deliberately configured. A missing policy file stays a no-op.
+// ---------------------------------------------------------------------------
+
+test('J1: a non-explicit policy-enforcement preflight error is terminal, not downgraded to a warning', async () => {
+  const { routingPreflightDecision } = await import(classifyUrl);
+  assert.deepEqual(
+    routingPreflightDecision({ explicit: false, error: new Error('ERROR_PROVIDER_DENIED: agy') }),
+    { action: 'stop', error: 'ERROR_PROVIDER_DENIED: agy' },
+  );
+  assert.deepEqual(
+    routingPreflightDecision({ explicit: false, error: Object.assign(new Error('bad yaml'), { code: 'ERROR_POLICY_INVALID' }) }),
+    { action: 'stop', error: 'bad yaml' },
+  );
+  // Unchanged: a non-policy environment/probe failure on a non-explicit plan
+  // still degrades to a visible warning.
+  assert.deepEqual(
+    routingPreflightDecision({ explicit: false, error: new Error('probe failed') }),
+    { action: 'continue', warning: 'probe failed' },
+  );
+  // Unchanged: an explicit override still stops on any error.
+  assert.deepEqual(
+    routingPreflightDecision({ explicit: true, error: new Error('unsupported') }),
+    { action: 'stop', error: 'unsupported' },
+  );
+});
+
+test('J1: constraints.denied_providers throws ERROR_PROVIDER_DENIED and the preflight decision is terminal even for a non-explicit plan', async () => {
+  const { runClassifyArtifactsCli, routingPreflightDecision } = await import(classifyUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-j1-denied-provider-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  let caught;
+  try {
+    await runClassifyArtifactsCli(
+      ['--repo', repo, '--change-state', 'non-git', '--files-from0', files, '--emit-routing-plan'],
+      {},
+      {
+        capabilities: [claudeCapability()],
+        reviewers: [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }],
+        projectPolicy: { constraints: { denied_providers: ['claude'] } },
+      },
+    );
+  } catch (error) {
+    caught = error;
+  }
+  assert.ok(caught, 'a project-denied provider must fail the preflight even with no explicit CLI override');
+  assert.match(caught.message, /^ERROR_PROVIDER_DENIED/);
+  assert.deepEqual(routingPreflightDecision({ explicit: false, error: caught }), { action: 'stop', error: caught.message });
+});
+
+test('J1: an existing malformed project review-policy.yaml fails closed as ERROR_POLICY_INVALID', async () => {
+  const { runClassifyArtifactsCli, routingPreflightDecision } = await import(classifyUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-j1-policy-invalid-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+  fs.mkdirSync(path.join(repo, '.deep-review'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '.deep-review', 'review-policy.yaml'), 'schema_version: 1\n');
+
+  let caught;
+  try {
+    await runClassifyArtifactsCli(
+      ['--repo', repo, '--change-state', 'non-git', '--files-from0', files, '--emit-routing-plan'],
+      {},
+      { capabilities: [claudeCapability()], reviewers: [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }] },
+    );
+  } catch (error) {
+    caught = error;
+  }
+  assert.ok(caught, 'an existing malformed policy file must fail closed, not be treated as absent');
+  assert.equal(caught.code, 'ERROR_POLICY_INVALID');
+  assert.deepEqual(routingPreflightDecision({ explicit: false, error: caught }), { action: 'stop', error: caught.message });
+});
+
+test('J1: a missing project review-policy.yaml stays a no-op (not an error)', async () => {
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-j1-policy-missing-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', files, '--emit-routing-plan'],
+    {},
+    { capabilities: [claudeCapability()], reviewers: [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }] },
+  );
+  assert.ok(result.routing_plan, 'a missing policy file must not fail the preflight');
+});
+
 test('workflow/report contracts wire conditional routing plan consumption while preserving no-flag argv', () => {
   const execution = fs.readFileSync(path.join(root, 'skills/deep-review-workflow/references/review-execution.md'), 'utf8');
   const report = fs.readFileSync(path.join(root, 'skills/deep-review-workflow/references/report-format.md'), 'utf8');

@@ -29,6 +29,9 @@ const discoverUrl = pathToFileURL(
 const scopeUrl = pathToFileURL(
   path.join(root, 'hooks', 'scripts', 'classify-artifacts.mjs'),
 ).href;
+const runtimeContextUrl = pathToFileURL(
+  path.join(root, 'hooks', 'scripts', 'lib', 'runtime-context.mjs'),
+).href;
 
 const classifyCliPath = path.join(root, 'hooks', 'scripts', 'classify-artifacts.mjs');
 
@@ -1227,4 +1230,79 @@ test('H3: deleting a file whose base content held a high-risk term still routes 
   const route = result.routing_plan.routes.find((item) => item.reviewer_id === 'claude-opus');
   assert.match(route.route_explanation, /\/high\//, 'deleting a file whose base content held a high-risk term must still raise the routed risk floor to high');
   assert.doesNotMatch(JSON.stringify(result), /database migration/, 'raw diff text must never be persisted into provenance or the routing plan');
+});
+
+// ---------------------------------------------------------------------------
+// J2 (security): writeProvenance / the routing-plan write must land at a
+// repository-contained real path with no symlinked component. A symlinked
+// destination file or a symlinked ancestor directory that escapes the repo
+// must be refused, never followed.
+// ---------------------------------------------------------------------------
+
+test('J2: writeContainedFile performs a plain contained write and the content matches', async () => {
+  const { writeContainedFile } = await import(runtimeContextUrl);
+  const repo = temporaryDirectory('deep-review-j2-plain-');
+  const dest = path.join(repo, '.deep-review', 'tmp', 'artifact-classification.json');
+
+  const returned = writeContainedFile(repo, dest, '{"ok":true}\n');
+
+  assert.equal(returned, dest);
+  assert.equal(fs.readFileSync(dest, 'utf8'), '{"ok":true}\n');
+});
+
+test('J2: writeContainedFile refuses a destination symlink pointing outside the repo and leaves the outside target unmodified', async () => {
+  const { writeContainedFile } = await import(runtimeContextUrl);
+  const repo = temporaryDirectory('deep-review-j2-dest-symlink-');
+  const outsideRoot = temporaryDirectory('deep-review-j2-outside-file-');
+  const outsideTarget = path.join(outsideRoot, 'victim.json');
+  fs.writeFileSync(outsideTarget, 'untouched');
+  fs.mkdirSync(path.join(repo, '.deep-review', 'tmp'), { recursive: true });
+  const dest = path.join(repo, '.deep-review', 'tmp', 'artifact-classification.json');
+  fs.symlinkSync(outsideTarget, dest);
+
+  assert.throws(() => writeContainedFile(repo, dest, '{"pwned":true}\n'), /symlink/);
+  assert.equal(fs.readFileSync(outsideTarget, 'utf8'), 'untouched', 'the outside target must never be modified');
+});
+
+test('J2: writeContainedFile refuses a symlinked .deep-review/tmp ancestor directory that escapes the repo', async () => {
+  const { writeContainedFile } = await import(runtimeContextUrl);
+  const repo = temporaryDirectory('deep-review-j2-dir-symlink-');
+  const outsideRoot = temporaryDirectory('deep-review-j2-outside-dir-');
+  fs.mkdirSync(path.join(repo, '.deep-review'), { recursive: true });
+  fs.symlinkSync(outsideRoot, path.join(repo, '.deep-review', 'tmp'));
+  const dest = path.join(repo, '.deep-review', 'tmp', 'artifact-classification.json');
+
+  assert.throws(() => writeContainedFile(repo, dest, '{"pwned":true}\n'), /symlink/);
+  assert.equal(
+    fs.existsSync(path.join(outsideRoot, 'artifact-classification.json')),
+    false,
+    'no file must be written through the symlinked directory to the outside target',
+  );
+});
+
+test('J2: a benign runClassifyArtifactsCli run still writes provenance through the contained-write path', async () => {
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-j2-benign-');
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+  const capabilities = [{
+    protocol_version: '2.0', adapter_id: 'claude-cli', provider: 'claude', available: true,
+    roles: ['standard'],
+    model_selection: { supported: true, aliases: ['steady'], catalog_complete: false, transport: 'flag:--model' },
+    effort_selection: { supported: true, levels: ['low', 'medium'], transport: 'flag:--effort' },
+    structured_output: true, read_only_enforcement: 'process-contract',
+  }];
+  const reviewers = [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }];
+
+  await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', files],
+    {},
+    { capabilities, reviewers },
+  );
+
+  const provenancePath = path.join(repo, '.deep-review', 'tmp', 'artifact-classification.json');
+  assert.ok(fs.existsSync(provenancePath), 'provenance must still be written for a benign run');
+  const written = JSON.parse(fs.readFileSync(provenancePath, 'utf8'));
+  assert.equal(written.artifacts[0].path, 'notes.md');
 });

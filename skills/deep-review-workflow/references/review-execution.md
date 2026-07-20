@@ -194,12 +194,23 @@ omitting either key or the whole flag leaves that adapter `unknown`.
 When public-route returned normalized overrides, append `--overrides-json` and
 the compact `JSON.stringify(route.overrides)` as one argv value. An explicit
 override makes this preflight mandatory and any error stops dispatch. With no
-explicit override, the plan is shadow provenance: a preflight error is a visible
-warning and dispatch continues with the existing arguments unchanged. Automatic
-routes are applied only when policy enables `automatic_model_routing` and sets
-`routing_shadow_mode: false`. When that condition holds, the emitted plan
-carries `apply_automatic: true`, and an applicable automatic plan is consumed
-by the same leaf-adapter path as explicit overrides.
+explicit override, the plan is shadow provenance: a non-policy preflight error
+(an environment/probe failure unrelated to policy enforcement) is a visible
+warning and dispatch continues with the existing arguments unchanged.
+
+A preflight error caused by policy enforcement — a denied or unavailable
+provider, a denied model, read-only unavailable, or an unparseable/type-invalid
+EXISTING policy file (`ERROR_PROVIDER_DENIED`, `ERROR_MODEL_DENIED`,
+`ERROR_READ_ONLY_UNAVAILABLE`, `ERROR_PROVIDER_UNAVAILABLE`, or
+`ERROR_POLICY_INVALID`) is TERMINAL for the whole review regardless of whether
+the plan is explicit or shadow-only: stop dispatch entirely rather than
+downgrading it to a warning and falling back to legacy dispatch. A missing
+policy file is not an error and never triggers this path.
+
+Automatic routes are applied only when policy enables `automatic_model_routing`
+and sets `routing_shadow_mode: false`. When that condition holds, the emitted
+plan carries `apply_automatic: true`, and an applicable automatic plan is
+consumed by the same leaf-adapter path as explicit overrides.
 
 Treat the emitted routing plan as the dispatch authority. It carries one
 validated execution plan per canonical reviewer plus requested, resolved,
