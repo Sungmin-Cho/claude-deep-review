@@ -278,6 +278,52 @@ test('J4: an auth-failure stderr never triggers a Claude CLI model-rejection ret
   assert.equal(result.fallback.occurred, false);
 });
 
+// ---------------------------------------------------------------------------
+// J6: parity with run-agy-reviewer.mjs's SAFE_MODEL_PATTERN — a plan-supplied
+// Claude model carrying NUL/newline/control characters is never pushed as an
+// argv token; a strict cli- source without allow_fallback fails closed
+// instead of silently omitting it.
+// ---------------------------------------------------------------------------
+
+test('J6: Claude explicit unsupported-character model fails closed without fallback authorization', async () => {
+  const { runClaudeReviewer } = await import(claudeUrl);
+  const fixture = workspace();
+  let calls = 0;
+  await assert.rejects(runClaudeReviewer({
+    ...fixture, pluginRoot: root, binary: '/fake/claude', timeoutSeconds: 5,
+    executionPlan: { model: 'opus\ninjected', effort: null, source: 'cli-reviewer', allowFallback: false },
+    processRunner: async () => { calls += 1; return processResult(); },
+  }), /ERROR_UNSUPPORTED_MODEL/);
+  assert.equal(calls, 0);
+});
+
+test('J6: Claude model containing a NUL byte is omitted with a warning when fallback is authorized', async () => {
+  const { runClaudeReviewer } = await import(claudeUrl);
+  const fixture = workspace();
+  let invocation;
+  const result = await runClaudeReviewer({
+    ...fixture, pluginRoot: root, binary: '/fake/claude', timeoutSeconds: 5,
+    executionPlan: { model: 'opus\0injected', effort: null, source: 'cli-provider', allowFallback: true },
+    processRunner: async (binary, args, options) => { invocation = { binary, args, options }; return processResult(); },
+  });
+  assert.equal(invocation.args.includes('--model'), false);
+  assert.equal(result.resolved_model, null);
+  const tail = fs.readFileSync(`${fixture.outputFile}.stderr-tail`, 'utf8');
+  assert.match(tail, /unsupported characters/);
+});
+
+test('J6: a normal Claude model alias still lands in argv unmodified', async () => {
+  const { runClaudeReviewer } = await import(claudeUrl);
+  const fixture = workspace();
+  let invocation;
+  await runClaudeReviewer({
+    ...fixture, pluginRoot: root, binary: '/fake/claude', timeoutSeconds: 5,
+    executionPlan: { model: 'claude-sonnet-4-5', effort: null, source: 'cli-provider', allowFallback: true },
+    processRunner: async (binary, args, options) => { invocation = { binary, args, options }; return processResult(); },
+  });
+  assert.deepEqual(invocation.args.slice(invocation.args.indexOf('--model'), invocation.args.indexOf('--model') + 2), ['--model', 'claude-sonnet-4-5']);
+});
+
 test('native Claude documentation states the real model-only override boundary', () => {
   const source = fs.readFileSync(path.join(root, 'skills/deep-review-workflow/references/review-execution.md'), 'utf8');
   assert.match(source, /Agent\(code-reviewer\)[\s\S]{0,500}model parameter/i);

@@ -15,6 +15,21 @@ const AUTH_PATTERN = /Reauthentication required|do not currently have an active 
 // execution plan authorizes fallback.
 const UNSUPPORTED_MODEL_PATTERN = /unsupported[^\n]*(?:model|--model)|unknown[^\n]*(?:model|--model)|invalid[^\n]*model|unrecognized[^\n]*--model/iu;
 
+// J6: parity with run-agy-reviewer.mjs's SAFE_MODEL_PATTERN defense-in-depth
+// guard - a plan-supplied model must never reach argv carrying NUL, newline,
+// or other control characters. Deliberately more permissive than agy's
+// allowlist pattern: existing Claude routing plans legitimately carry '=',
+// backslashes, spaces, and non-ASCII model labels (see
+// tests/adapter-boundary.test.js and tests/routing-integration.test.js), so
+// only C0 control bytes and DEL are treated as unsafe.
+function hasUnsafeModelCharacters(value) {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
 function requiredString(value, name) {
   if (typeof value !== 'string' || value.length === 0 || value.includes('\0')) {
     throw new TypeError(`${name} must be a non-empty NUL-free string`);
@@ -28,10 +43,6 @@ function positiveSeconds(value) {
     throw new TypeError('timeoutSeconds must be positive');
   }
   return seconds;
-}
-
-function stderrTail(stderr) {
-  return stderr.split(/\r?\n/u).filter(Boolean).slice(-5).join('\n');
 }
 
 // J4: remove a --model FLAG_VALUE pair from an already-built argv array so
@@ -50,13 +61,17 @@ function classify(result) {
   return 'success';
 }
 
-function publishResult(outputFile, result, status) {
+// J6: warnings (e.g. an omitted unsafe-character model) are surfaced ahead of
+// the process stderr tail so they remain visible even when the stderr tail
+// is later truncated to the last 5 lines.
+function publishResult(outputFile, result, status, warnings = []) {
   atomicWriteFile(outputFile, result.stdout, { mode: 0o600 });
   atomicWriteFile(`${outputFile}.status`, `${status}\n`, { encoding: 'utf8', mode: 0o600 });
-  const tail = stderrTail(result.stderr.toString('utf8'));
+  const stderrLines = result.stderr.toString('utf8').split(/\r?\n/u).filter(Boolean);
+  const tail = [...warnings, ...stderrLines].slice(-5);
   atomicWriteFile(
     `${outputFile}.stderr-tail`,
-    tail ? `${tail}\n` : '',
+    tail.length ? `${tail.join('\n')}\n` : '',
     { encoding: 'utf8', mode: 0o600 },
   );
 }
@@ -72,10 +87,24 @@ export async function runClaudeReviewer(options = {}) {
   // options.model ?? 'opus' only applies when no plan is present; it must
   // never resurrect a stale model once a plan deliberately resolved to null.
   // Mirrors the agy fix (d0459e9) in run-agy-reviewer.mjs.
-  const model = executionPlan
+  let model = executionPlan
     ? (executionPlan.model ?? '')
     : requiredString(options.model ?? 'opus', 'model');
   if (typeof model !== 'string') throw new TypeError('model must be a string');
+  const warnings = [];
+  // J6: a plan-supplied model carrying NUL/newline/control characters must
+  // never be pushed as an argv token. A strict cli- source without
+  // allowFallback fails closed (parity with agy's ERROR_UNSUPPORTED_MODEL);
+  // any other source omits --model with a visible warning instead. This runs
+  // before the --model push below and before any process spawn, and does not
+  // touch the J4 execution-time retry logic further down.
+  if (model && hasUnsafeModelCharacters(model)) {
+    if (executionPlan?.source?.startsWith('cli-') && !executionPlan.allowFallback) {
+      throw new Error('ERROR_UNSUPPORTED_MODEL: explicit claude model contains unsupported characters');
+    }
+    warnings.push('model contained unsupported characters and was omitted');
+    model = '';
+  }
   const agent = requiredString(options.agent ?? 'code-reviewer', 'agent');
   const timeoutSeconds = positiveSeconds(options.timeoutSeconds ?? 1200);
   const env = { ...(options.env ?? process.env) };
@@ -153,7 +182,7 @@ export async function runClaudeReviewer(options = {}) {
     };
   }
   const status = classify(processResult);
-  publishResult(outputFile, processResult, status);
+  publishResult(outputFile, processResult, status, warnings);
   return {
     status,
     code: processResult.code,
