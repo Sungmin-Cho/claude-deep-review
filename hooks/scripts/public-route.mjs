@@ -116,10 +116,13 @@ function parseReview(argv, host, cwd) {
   let dryRun = false;
   let explainRouting = false;
   let hasOverrides = false;
+  // G3: routing_policy and allow_fallback stay absent unless the caller
+  // actually passes --routing/--allow-fallback, so an unrelated flag (e.g.
+  // --allow-classifier or --model) never serializes an implicit 'auto'/false
+  // that would silently overlay a project/user routing.policy or
+  // allow_fallback during the downstream policy merge.
   const overrides = {
     protocol_version: '2.0',
-    routing_policy: 'auto',
-    allow_fallback: false,
     allow_classifier: false,
     providers: {},
     reviewers: {},
@@ -215,6 +218,17 @@ function parseReview(argv, host, cwd) {
     if (provider === 'agy' && expanded.includes('--no-agy')) {
       return { ...routeError(`ERROR_CONFLICTING_REVIEWER_SELECTION: reviewer override ${reviewerId} conflicts with --no-agy`), host, argv: expanded };
     }
+  }
+  // G2: transport the public --no-opus/--no-codex/--no-agy disables (including
+  // --codex-only's expansion) to the preflight so disabled providers are
+  // excluded from eligibility checks and the emitted routing plan.
+  const disabledProviders = [];
+  if (expanded.includes('--no-opus')) disabledProviders.push('claude');
+  if (expanded.includes('--no-codex')) disabledProviders.push('codex');
+  if (expanded.includes('--no-agy')) disabledProviders.push('agy');
+  if (disabledProviders.length > 0) {
+    overrides.disabled_providers = [...new Set(disabledProviders)].sort();
+    hasOverrides = true;
   }
   const route = { ok: true, route: 'review', host, argv: expanded };
   if (dryRun) route.dryRun = true;

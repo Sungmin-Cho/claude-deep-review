@@ -228,6 +228,67 @@ test('semantic cache protocol 2.0 keys full transmitted payload, not partial dis
   assert.equal(getCachedSemantic(cache, keyB), null);
 });
 
+// G5: the fingerprint must cover every classification-relevant transmitted
+// payload field (path, sibling_paths, deterministic block), not just the
+// sampled snippets/heading_index/byte_size, so materially different
+// classifier inputs never collide on the same cache key.
+test('G5: semanticFingerprint discriminates on path, sibling_paths, and deterministic.target_kind, not only snippets/headings/byte_size', async () => {
+  const { semanticFingerprint } = await import(semanticUrl);
+  const basePayload = {
+    path: 'docs/a.md',
+    metadata: { byte_size: 100, line_count: 5, extension: '.md' },
+    heading_index: ['Design'],
+    snippets: { head: 'same', middle: '', tail: 'same-tail' },
+    sibling_paths: ['docs/b.md'],
+    deterministic: { target_kind: 'generic-document', confidence: 0.5, signals: [], alternatives: [] },
+  };
+  const context = { thresholds: { confirm: 0.8 } };
+  const baseKey = semanticFingerprint(basePayload, context);
+
+  const differentPath = { ...basePayload, path: 'docs/other.md' };
+  assert.notEqual(semanticFingerprint(differentPath, context), baseKey, 'a different path must change the fingerprint');
+
+  const differentSiblings = { ...basePayload, sibling_paths: ['docs/c.md'] };
+  assert.notEqual(semanticFingerprint(differentSiblings, context), baseKey, 'different sibling_paths must change the fingerprint');
+
+  const differentTargetKind = { ...basePayload, deterministic: { ...basePayload.deterministic, target_kind: 'design-document' } };
+  assert.notEqual(semanticFingerprint(differentTargetKind, context), baseKey, 'a different deterministic.target_kind must change the fingerprint');
+
+  const identical = structuredClone(basePayload);
+  assert.equal(semanticFingerprint(identical, context), baseKey, 'identical payloads must yield identical fingerprints');
+});
+
+test('G5: classifyWithSemantic cache hit reuses the cached result for an identical descriptor and misses on a different path', async () => {
+  const { classifyWithSemantic, createSemanticCache } = await import(semanticUrl);
+  const cache = createSemanticCache();
+  let calls = 0;
+  const adapter = async () => {
+    calls += 1;
+    return {
+      classification_version: '1.0', target_kind: 'design-document', confidence: 0.9,
+      signals: [], alternative_kinds: [], uncertainty_action: 'proceed', notes: '',
+    };
+  };
+  const descriptorA = descriptor();
+  const first = await classifyWithSemantic({
+    descriptor: descriptorA, classification: provisional(), repoRoot: root, pluginRoot: root, adapter, cache,
+  });
+  assert.equal(calls, 1);
+  assert.equal(first.semantic_status, 'success');
+
+  const second = await classifyWithSemantic({
+    descriptor: descriptorA, classification: provisional(), repoRoot: root, pluginRoot: root, adapter, cache,
+  });
+  assert.equal(calls, 1, 'an identical descriptor/classification must hit the cache and skip the adapter');
+  assert.equal(second.target_kind, 'design-document');
+
+  const descriptorB = descriptor({ path: 'docs/other.md', sibling_paths: ['src/other.mjs'] });
+  await classifyWithSemantic({
+    descriptor: descriptorB, classification: provisional(), repoRoot: root, pluginRoot: root, adapter, cache,
+  });
+  assert.equal(calls, 2, 'a different path/sibling_paths must miss the cache and invoke the adapter again');
+});
+
 test('async scope orchestration calls semantic only for ambiguous artifacts and keeps sync export unchanged', async () => {
   const { classifyArtifactsScope, classifyArtifactsScopeWithSemantic } = await import(scopeUrl);
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-semantic-scope-'));

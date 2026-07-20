@@ -74,7 +74,8 @@ function capabilityFor(reviewer, capabilities) {
 }
 
 function policyValue(layer, reviewer, field) {
-  return layer?.reviewers?.[reviewer.id]?.[field]
+  return layer?.routing?.reviewers?.[reviewer.id]?.[field]
+    ?? layer?.reviewers?.[reviewer.id]?.[field]
     ?? layer?.providers?.[reviewer.provider]?.[field];
 }
 

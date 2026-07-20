@@ -245,15 +245,32 @@ function deterministicTimestamp(env) {
 function validateOverrides(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('--overrides-json must decode to an object');
   if (value.protocol_version !== '2.0') throw new Error('--overrides-json protocol_version must be "2.0"');
-  for (const field of ['allow_fallback', 'allow_classifier']) {
-    if (typeof value[field] !== 'boolean') throw new Error(`--overrides-json ${field} must be boolean`);
+  if (typeof value.allow_classifier !== 'boolean') throw new Error('--overrides-json allow_classifier must be boolean');
+  // G3: routing_policy and allow_fallback are only serialized by public-route
+  // when the corresponding flag was actually passed, so they must stay
+  // optional here too — validate their shape only when present, and never
+  // require a value that would silently overlay a project/user policy field
+  // the caller never asked to change.
+  if (value.allow_fallback !== undefined && typeof value.allow_fallback !== 'boolean') {
+    throw new Error('--overrides-json allow_fallback must be boolean');
   }
-  if (!['auto', 'fast', 'balanced', 'quality'].includes(value.routing_policy)) {
+  if (value.routing_policy !== undefined && !['auto', 'fast', 'balanced', 'quality'].includes(value.routing_policy)) {
     throw new Error('--overrides-json routing_policy is invalid');
   }
   if (!value.providers || typeof value.providers !== 'object' || Array.isArray(value.providers)
       || !value.reviewers || typeof value.reviewers !== 'object' || Array.isArray(value.reviewers)) {
     throw new Error('--overrides-json providers and reviewers must be objects');
+  }
+  // G2: disabled_providers is optional transport for the public
+  // --no-opus/--no-codex/--no-agy disables. When present it must be an array
+  // of unique values drawn from the known provider set.
+  if (value.disabled_providers !== undefined) {
+    const providers = value.disabled_providers;
+    const known = new Set(['claude', 'codex', 'agy']);
+    if (!Array.isArray(providers) || providers.some((provider) => !known.has(provider))
+        || new Set(providers).size !== providers.length) {
+      throw new Error('--overrides-json disabled_providers must be a unique array of claude, codex, or agy');
+    }
   }
   return value;
 }
@@ -448,23 +465,43 @@ export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env 
     })),
   };
 
-  const overrides = options.overrides || {
-    protocol_version: '2.0', routing_policy: policy.routing?.policy || 'auto',
-    allow_fallback: Boolean(policy.routing?.allow_fallback), allow_classifier: false,
-    providers: {}, reviewers: {},
-  };
+  // G3: options.overrides only carries routing_policy/allow_fallback when the
+  // caller actually passed --routing/--allow-fallback (public-route.mjs no
+  // longer serializes 'auto'/false defaults). The *effective* overrides used
+  // downstream (eligibility checks, buildRoutingPlan) must still resolve a
+  // concrete routing_policy/allow_fallback, falling back to the already
+  // policy-merged values so an unrelated flag (e.g. --allow-classifier) never
+  // silently downgrades a project/user routing.policy or allow_fallback.
+  // explicit_overrides continues to be computed from the RAW options.overrides
+  // below (hasExecutionOverride), not from this effective object.
+  const overrides = options.overrides
+    ? {
+      ...options.overrides,
+      routing_policy: options.overrides.routing_policy ?? policy.routing?.policy ?? 'auto',
+      allow_fallback: options.overrides.allow_fallback ?? Boolean(policy.routing?.allow_fallback),
+    }
+    : {
+      protocol_version: '2.0', routing_policy: policy.routing?.policy || 'auto',
+      allow_fallback: Boolean(policy.routing?.allow_fallback), allow_classifier: false,
+      providers: {}, reviewers: {},
+    };
+  // G2: a disabled provider (--no-opus/--no-codex/--no-agy, including
+  // --codex-only's expansion) must be excluded from eligibility checks and
+  // the emitted routing plan, not just from provenance.
+  const disabledProviders = new Set(overrides.disabled_providers || []);
+  const eligibleReviewers = reviewers.filter((reviewer) => !disabledProviders.has(reviewer.provider));
   const explicit = hasExecutionOverride(options.overrides);
   for (const provider of Object.keys(overrides.providers || {})) {
-    if (explicit && !reviewers.some((reviewer) => reviewer.provider === provider)) {
+    if (explicit && !eligibleReviewers.some((reviewer) => reviewer.provider === provider)) {
       throw new Error(`ERROR_PROVIDER_UNAVAILABLE: no eligible reviewer for explicit ${provider} override`);
     }
   }
   for (const reviewerId of Object.keys(overrides.reviewers || {})) {
-    if (!reviewers.some((reviewer) => reviewer.id === reviewerId)) {
+    if (!eligibleReviewers.some((reviewer) => reviewer.id === reviewerId)) {
       throw new Error(`ERROR_PROVIDER_UNAVAILABLE: explicit reviewer ${reviewerId} is not eligible`);
     }
   }
-  const routingPlan = buildRoutingPlan({ artifacts: result.artifacts, reviewers, policy, overrides, capabilities });
+  const routingPlan = buildRoutingPlan({ artifacts: result.artifacts, reviewers: eligibleReviewers, policy, overrides, capabilities });
   routingPlan.explicit_overrides = explicit;
   routingPlan.apply_automatic = policy.features?.automatic_model_routing === true
     && policy.features?.routing_shadow_mode === false;

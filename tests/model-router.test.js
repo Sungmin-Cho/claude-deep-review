@@ -91,6 +91,47 @@ test('override precedence is reviewer CLI > provider CLI > global > project > us
   assert.equal(resolved.requested.source, 'cli-reviewer');
 });
 
+// G4: the policy schema recognizes reviewer configuration at routing.reviewers
+// (review-policy.mjs KNOWN.routing.reviewers). policyValue must read that
+// schema-blessed location, while the existing top-level reviewers usage keeps
+// working and routing.reviewers takes precedence when both are present.
+test('G4: policyValue reads the schema-blessed routing.reviewers location, with precedence over top-level reviewers', async () => {
+  const { routeReviewer } = await import(routerUrl);
+  const base = request({
+    policy: {
+      routing: { policy: 'auto' },
+      project: { routing: { reviewers: { 'claude-opus': { model: 'opus', effort: 'high' } } } },
+    },
+  });
+  const result = routeReviewer(base);
+  assert.equal(result.requested.model, 'opus');
+  assert.equal(result.requested.effort, 'high');
+  assert.equal(result.requested.model_source, 'project-policy');
+  assert.equal(result.requested.effort_source, 'project-policy');
+
+  const both = request({
+    policy: {
+      routing: { policy: 'auto' },
+      project: {
+        routing: { reviewers: { 'claude-opus': { model: 'routing-wins', effort: 'high' } } },
+        reviewers: { 'claude-opus': { model: 'top-level-loses', effort: 'medium' } },
+      },
+    },
+  });
+  const bothResult = routeReviewer(both);
+  assert.equal(bothResult.requested.model, 'routing-wins');
+  assert.equal(bothResult.requested.effort, 'high');
+
+  // Existing top-level reviewers usage (no routing.reviewers present) keeps working.
+  const legacy = request({
+    policy: {
+      routing: { policy: 'auto' },
+      project: { reviewers: { 'claude-opus': { model: 'legacy-model', effort: 'low' } } },
+    },
+  });
+  assert.equal(routeReviewer(legacy).requested.model, 'legacy-model');
+});
+
 test('strict explicit unsupported values fail; fallback alone allows ordered substitution with provenance', async () => {
   const { routeReviewer } = await import(routerUrl);
   const explicit = request();

@@ -192,3 +192,96 @@ test('F5: a policy-file-only routing policy and --routing auto stay non-explicit
   );
   assert.equal(autoResult.routing_plan.explicit_overrides, false);
 });
+
+// ---------------------------------------------------------------------------
+// G2: --no-opus/--no-codex/--no-agy (and --codex-only's expansion) must
+// transport disabled providers to the preflight and exclude their reviewers
+// from eligibility checks and the emitted routing plan.
+// ---------------------------------------------------------------------------
+
+function g2Capabilities() {
+  return [
+    {
+      protocol_version: '2.0', adapter_id: 'claude-cli', provider: 'claude', available: true, roles: ['standard'],
+      model_selection: { supported: true, aliases: ['steady'], catalog_complete: false, transport: 'flag:--model' },
+      effort_selection: { supported: true, levels: ['low', 'medium'], transport: 'flag:--effort' },
+      structured_output: true, read_only_enforcement: 'process-contract',
+    },
+    {
+      protocol_version: '2.0', adapter_id: 'codex-companion', provider: 'codex', available: true, roles: ['standard', 'adversarial'],
+      model_selection: { supported: true, aliases: ['fast'], catalog_complete: false, transport: 'flag:--model' },
+      effort_selection: { supported: true, levels: ['low', 'medium'], transport: 'flag:--effort' },
+      structured_output: true, read_only_enforcement: 'agent-tool-allowlist',
+    },
+    {
+      protocol_version: '2.0', adapter_id: 'agy-cli', provider: 'agy', available: true, roles: ['standard'],
+      model_selection: { supported: true, aliases: ['a'], catalog_complete: false, transport: 'config:agy_model' },
+      effort_selection: { supported: false, levels: [], transport: 'none' },
+      structured_output: true, read_only_enforcement: 'process-contract',
+    },
+  ];
+}
+
+const g2Reviewers = [
+  { id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' },
+  { id: 'codex-review', provider: 'codex', role: 'standard', adapter_id: 'codex-companion' },
+  { id: 'agy', provider: 'agy', role: 'standard', adapter_id: 'agy-cli' },
+];
+
+test('G2: --no-codex emits disabled_providers and excludes codex routes from the plan', async () => {
+  const { parsePublicRoute } = await import(routeUrl);
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const route = parsePublicRoute({ entry: 'review', host: 'claude', cwd: root, argv: ['--no-codex'] });
+  assert.equal(route.ok, true);
+  assert.deepEqual(route.overrides.disabled_providers, ['codex']);
+
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-g2-no-codex-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', files, '--overrides-json', JSON.stringify(route.overrides), '--emit-routing-plan'],
+    {},
+    { capabilities: g2Capabilities(), reviewers: g2Reviewers },
+  );
+  assert.deepEqual(result.routing_plan.routes.map((r) => r.reviewer_id).sort(), ['agy', 'claude-opus']);
+  assert.equal(result.routing_plan.routes.some((r) => r.provider === 'codex'), false, 'no codex route must be emitted when --no-codex disables it');
+});
+
+test('G2: --codex-only yields disabled_providers [agy, claude] and a codex-only plan', async () => {
+  const { parsePublicRoute } = await import(routeUrl);
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const route = parsePublicRoute({ entry: 'review', host: 'claude', cwd: root, argv: ['--codex-only'] });
+  assert.equal(route.ok, true);
+  assert.deepEqual(route.overrides.disabled_providers, ['agy', 'claude']);
+
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-g2-codex-only-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', files, '--overrides-json', JSON.stringify(route.overrides), '--emit-routing-plan'],
+    {},
+    { capabilities: g2Capabilities(), reviewers: g2Reviewers },
+  );
+  assert.deepEqual(result.routing_plan.routes.map((r) => r.reviewer_id), ['codex-review'], 'only the codex reviewer must remain routable under --codex-only');
+});
+
+test('G2: no disable flags at all keeps today\'s byte-identical plan (every eligible reviewer routed)', async () => {
+  const { parsePublicRoute } = await import(routeUrl);
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const route = parsePublicRoute({ entry: 'review', host: 'claude', cwd: root, argv: [] });
+  assert.equal(route.ok, true);
+  assert.equal(route.overrides, undefined);
+
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-g2-no-flags-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', files, '--emit-routing-plan'],
+    {},
+    { capabilities: g2Capabilities(), reviewers: g2Reviewers },
+  );
+  assert.deepEqual(result.routing_plan.routes.map((r) => r.reviewer_id).sort(), ['agy', 'claude-opus', 'codex-review']);
+});

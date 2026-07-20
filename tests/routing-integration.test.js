@@ -173,3 +173,95 @@ test('F3: high-risk content under a neutral filename still routes as high risk',
   });
   assert.match(plan.routes[0].route_explanation, /\/high\//);
 });
+
+// ---------------------------------------------------------------------------
+// G3: normalized overrides must serialize only user-supplied routing
+// settings, so an unrelated override flag never silently overlays a
+// project/user routing.policy or allow_fallback during the merge.
+// ---------------------------------------------------------------------------
+
+function g3Capabilities() {
+  return [{
+    protocol_version: '2.0', adapter_id: 'claude-cli', provider: 'claude', available: true,
+    roles: ['standard'],
+    model_selection: { supported: true, aliases: ['swift', 'steady', 'deep', 'best'], catalog_complete: false, transport: 'flag:--model' },
+    effort_selection: { supported: true, levels: ['low', 'medium', 'high', 'xhigh', 'max'], transport: 'flag:--effort' },
+    structured_output: true, read_only_enforcement: 'process-contract',
+  }];
+}
+
+const g3Reviewers = [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }];
+
+test('G3: --allow-classifier alone does not downgrade a project routing.policy or allow_fallback', async () => {
+  const { parsePublicRoute } = await import(routeUrl);
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-g3-allow-classifier-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const route = parsePublicRoute({ entry: 'review', host: 'claude', cwd: repo, argv: ['--allow-classifier'] });
+  assert.equal(route.ok, true);
+  assert.equal(Object.hasOwn(route.overrides, 'routing_policy'), false, '--allow-classifier alone must not serialize routing_policy');
+  assert.equal(Object.hasOwn(route.overrides, 'allow_fallback'), false, '--allow-classifier alone must not serialize allow_fallback');
+
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', files, '--overrides-json', JSON.stringify(route.overrides), '--emit-routing-plan'],
+    {},
+    {
+      capabilities: g3Capabilities(), reviewers: g3Reviewers,
+      projectPolicy: { routing: { policy: 'quality', allow_fallback: true } },
+    },
+  );
+  assert.equal(result.routing_plan.routing_policy, 'quality', 'the project routing.policy must survive an unrelated --allow-classifier override');
+  assert.equal(result.routing_plan.explicit_overrides, false);
+  assert.equal(result.routing_plan.routes[0].fallback.allowed, true, 'the project allow_fallback must survive an unrelated --allow-classifier override');
+});
+
+test('G3: an explicit --routing fast still applies and marks the plan explicit', async () => {
+  const { parsePublicRoute } = await import(routeUrl);
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-g3-routing-fast-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const route = parsePublicRoute({ entry: 'review', host: 'claude', cwd: repo, argv: ['--routing', 'fast'] });
+  assert.equal(route.ok, true);
+  assert.equal(route.overrides.routing_policy, 'fast');
+
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', files, '--overrides-json', JSON.stringify(route.overrides), '--emit-routing-plan'],
+    {},
+    {
+      capabilities: g3Capabilities(), reviewers: g3Reviewers,
+      projectPolicy: { routing: { policy: 'quality', allow_fallback: true } },
+    },
+  );
+  assert.equal(result.routing_plan.routing_policy, 'fast');
+  assert.equal(result.routing_plan.explicit_overrides, true);
+});
+
+test('G3: an explicit --model override no longer downgrades the project routing_policy', async () => {
+  const { parsePublicRoute } = await import(routeUrl);
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-g3-model-override-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const route = parsePublicRoute({ entry: 'review', host: 'claude', cwd: repo, argv: ['--model', 'claude=deep'] });
+  assert.equal(route.ok, true);
+  assert.equal(Object.hasOwn(route.overrides, 'routing_policy'), false);
+
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', files, '--overrides-json', JSON.stringify(route.overrides), '--emit-routing-plan'],
+    {},
+    {
+      capabilities: g3Capabilities(), reviewers: g3Reviewers,
+      projectPolicy: { routing: { policy: 'quality' } },
+    },
+  );
+  assert.equal(result.routing_plan.routing_policy, 'quality', 'an explicit --model override must not silently downgrade the project routing_policy');
+  assert.equal(result.routing_plan.routes[0].requested.model, 'deep');
+});

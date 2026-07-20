@@ -154,13 +154,11 @@ export async function runSemanticClassifier(payload, { adapter, timeoutMs = 15_0
 }
 
 export function semanticFingerprint(payload, { thresholds = {}, promptVersion = SEMANTIC_PROMPT_VERSION } = {}) {
-  const material = JSON.stringify({
-    snippets: payload.snippets,
-    heading_index: payload.heading_index,
-    byte_size: payload.metadata?.byte_size,
-    thresholds,
-    prompt_version: promptVersion,
-  });
+  // G5: hash the complete transmitted payload (path, metadata, heading_index,
+  // snippets, sibling_paths, deterministic) plus context, so two artifacts
+  // that differ in any classification-relevant transmitted field never share
+  // a cache key.
+  const material = JSON.stringify({ payload, thresholds, prompt_version: promptVersion });
   return createHash('sha256').update(material).digest('hex');
 }
 
