@@ -57,7 +57,7 @@ test('public override → emit-routing-plan → leaf argv applies explicit model
     reviewers: [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }],
   });
   const plan = JSON.parse(fs.readFileSync(planPath, 'utf8'));
-  assert.equal(plan.protocol_version, '2.0');
+  assert.equal(plan.protocol_version, '3.0');
   assert.equal(plan.routes[0].transports.effort, 'flag:--effort');
 
   const promptFile = path.join(repo, 'prompt.txt');
@@ -105,8 +105,13 @@ test('I4: omitting --host-assertions-json leaves adapter selection unchanged (cl
   fs.writeFileSync(files, 'notes.md\0');
 
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-fake-claude-bin-'));
-  const claudeScript = path.join(binDir, 'claude');
-  fs.writeFileSync(claudeScript, '#!/bin/sh\necho "Claude Code v9.9.9"\n');
+  const claudeScript = path.join(binDir, process.platform === 'win32' ? 'claude.cmd' : 'claude');
+  fs.writeFileSync(
+    claudeScript,
+    process.platform === 'win32'
+      ? '@echo off\r\necho Claude Code v9.9.9\r\n'
+      : '#!/bin/sh\necho "Claude Code v9.9.9"\n',
+  );
   if (process.platform !== 'win32') fs.chmodSync(claudeScript, 0o755);
 
   const result = await runClassifyArtifactsCli(
@@ -119,11 +124,17 @@ test('I4: omitting --host-assertions-json leaves adapter selection unchanged (cl
   assert.equal(claudeRoute.adapter_id, 'claude-cli');
 });
 
-test('shadow routing defaults to report-only and preflight failures stop only explicit overrides', async () => {
+test('adaptive routing applies by default while explicit shadow mode alone may observe non-policy failures', async () => {
   const { routingPreflightDecision } = await import(classifyUrl);
-  assert.deepEqual(routingPreflightDecision({ explicit: false, error: new Error('probe failed') }), { action: 'continue', warning: 'probe failed' });
+  assert.deepEqual(routingPreflightDecision({ explicit: false, error: new Error('probe failed') }), { action: 'stop', error: 'probe failed' });
+  assert.deepEqual(routingPreflightDecision({
+    explicit: false,
+    shadowMode: true,
+    error: new Error('probe failed'),
+  }), { action: 'continue', warning: 'probe failed' });
   assert.deepEqual(routingPreflightDecision({ explicit: true, error: new Error('unsupported') }), { action: 'stop', error: 'unsupported' });
   assert.deepEqual(routingPreflightDecision({ explicit: true }), { action: 'apply', error: null });
+  assert.deepEqual(routingPreflightDecision({ shadowMode: true }), { action: 'shadow', error: null });
 });
 
 // ---------------------------------------------------------------------------
@@ -144,10 +155,18 @@ test('J1: a non-explicit policy-enforcement preflight error is terminal, not dow
     routingPreflightDecision({ explicit: false, error: Object.assign(new Error('bad yaml'), { code: 'ERROR_POLICY_INVALID' }) }),
     { action: 'stop', error: 'bad yaml' },
   );
-  // Unchanged: a non-policy environment/probe failure on a non-explicit plan
-  // still degrades to a visible warning.
+  // Applied adaptive routing cannot recover a trustworthy selected set.
   assert.deepEqual(
     routingPreflightDecision({ explicit: false, error: new Error('probe failed') }),
+    { action: 'stop', error: 'probe failed' },
+  );
+  // Observation-only shadow mode may visibly continue on a non-policy failure.
+  assert.deepEqual(
+    routingPreflightDecision({
+      explicit: false,
+      shadowMode: true,
+      error: new Error('probe failed'),
+    }),
     { action: 'continue', warning: 'probe failed' },
   );
   // Unchanged: an explicit override still stops on any error.
@@ -222,16 +241,19 @@ test('J1: a missing project review-policy.yaml stays a no-op (not an error)', as
   assert.ok(result.routing_plan, 'a missing policy file must not fail the preflight');
 });
 
-test('workflow/report contracts wire conditional routing plan consumption while preserving no-flag argv', () => {
+test('workflow/report contracts wire adaptive-default routing and assignment/readiness provenance', () => {
   const execution = fs.readFileSync(path.join(root, 'skills/deep-review-workflow/references/review-execution.md'), 'utf8');
   const report = fs.readFileSync(path.join(root, 'skills/deep-review-workflow/references/report-format.md'), 'utf8');
   const legacyClaude = 'run-claude-reviewer.mjs --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PAYLOAD_FILE --output OUTPUT_FILE --model REVIEW_MODEL --agent code-reviewer --timeout-seconds 1200';
-  assert.ok(execution.includes(legacyClaude), 'no-flag Claude dispatch changed');
+  assert.ok(execution.includes(legacyClaude), 'Claude leaf invocation is missing');
   assert.match(execution, /--emit-routing-plan/);
   assert.match(execution, /--routing-plan \.deep-review\/tmp\/routing-plan\.json --reviewer-id/);
-  assert.match(execution, /explicit_overrides[\s\S]{0,80}apply_automatic/u);
-  assert.match(execution, /apply_automatic[^\n]{0,120}/);
+  assert.match(execution, /v2\.0 default/u);
+  assert.match(execution, /protocol `3\.0`/u);
+  assert.match(execution, /needs_expansion/u);
+  assert.match(execution, /READY_FOR_IMPLEMENTATION/u);
   assert.match(report, /## Routing Plan/);
+  assert.match(report, /## Artifact Gate/);
   assert.match(report, /## Provenance/);
   assert.match(report, /requested-but-unverified/);
 });
@@ -360,4 +382,38 @@ test('G3: an explicit --model override no longer downgrades the project routing_
   );
   assert.equal(result.routing_plan.routing_policy, 'quality', 'an explicit --model override must not silently downgrade the project routing_policy');
   assert.equal(result.routing_plan.routes[0].requested.model, 'deep');
+});
+
+test('schema-2 adaptive context carries prior risk, progress, and used reviewers into production routing', async () => {
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-adaptive-context-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+  const context = {
+    schema_version: 2,
+    risk: 'high',
+    progress: 'regression',
+    used_reviewers: ['claude-opus'],
+  };
+  const result = await runClassifyArtifactsCli([
+    '--repo', repo,
+    '--change-state', 'non-git',
+    '--files-from0', files,
+    '--adaptive-context-json', JSON.stringify(context),
+  ], {}, {
+    capabilities: g3Capabilities(),
+    reviewers: g3Reviewers,
+  });
+  assert.equal(result.routing_plan.risk, 'high');
+  assert.equal(result.routing_plan.progress, 'regression');
+  await assert.rejects(() => runClassifyArtifactsCli([
+    '--repo', repo,
+    '--change-state', 'non-git',
+    '--files-from0', files,
+    '--adaptive-context-json', JSON.stringify({ ...context, schema_version: 1 }),
+  ], {}, {
+    capabilities: g3Capabilities(),
+    reviewers: g3Reviewers,
+  }), /schema-2/);
 });

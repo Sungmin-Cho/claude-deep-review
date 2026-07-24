@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const {
   chmodSync,
   copyFileSync,
@@ -104,6 +105,10 @@ function validReviewerReport() {
     '- **Issues**: {🔴 0건, 🟡 0건, ℹ️ 0건}',
     '',
   ].join('\n');
+}
+
+function reviewerOutputDigest(output) {
+  return createHash('sha256').update(output, 'utf8').digest('hex');
 }
 
 async function runGenericReviewerFake({ repo, installedRoot, behavior }) {
@@ -220,6 +225,7 @@ test('trusted installed reviewer output reaches the production one-reviewer appr
     exclusion: null,
     verdict: 'APPROVE',
     issues: { critical: 0, warning: 0, info: 0 },
+    output_digest: reviewerOutputDigest(validReviewerReport()),
   });
   const { synthesis } = await loadInstalledRuntime(installedRoot);
   assert.deepEqual(synthesis.synthesizeReviewAttempts([review]), {
@@ -237,6 +243,7 @@ test('multi-reviewer synthesis requires materialized agreement and preserves spl
   const attempts = [
     {
       role: 'codex-review',
+      output_digest: reviewerOutputDigest('codex warning voice'),
       included: true,
       exclusion: null,
       verdict: 'CONCERN',
@@ -244,6 +251,7 @@ test('multi-reviewer synthesis requires materialized agreement and preserves spl
     },
     {
       role: 'agy',
+      output_digest: reviewerOutputDigest('agy approval voice'),
       included: true,
       exclusion: null,
       verdict: 'APPROVE',
@@ -289,9 +297,22 @@ test('multi-reviewer synthesis requires materialized agreement and preserves spl
     error: 'consensus_required',
   });
 
+  assert.deepEqual(synthesis.synthesizeReviewAttempts([
+    attempts[0],
+    { ...attempts[1], output_digest: attempts[0].output_digest },
+  ], { findings: [] }), {
+    status: 'operational_failure',
+    n_actual: 0,
+    verdict: null,
+    phase6_allowed: false,
+    exclusions: [],
+    error: 'invalid_reviewer_identity',
+  });
+
   const criticalAttempts = [
     {
       role: 'codex-review',
+      output_digest: reviewerOutputDigest('codex critical voice'),
       included: true,
       exclusion: null,
       verdict: 'REQUEST_CHANGES',
@@ -318,6 +339,7 @@ test('Codex generic reviewer mutation is fingerprinted and excluded', async () =
     exclusion: 'fingerprint_mismatch',
     verdict: null,
     issues: null,
+    output_digest: reviewerOutputDigest(validReviewerReport()),
   });
   const { synthesis } = await loadInstalledRuntime(installedRoot);
   const terminal = synthesis.synthesizeReviewAttempts([review]);

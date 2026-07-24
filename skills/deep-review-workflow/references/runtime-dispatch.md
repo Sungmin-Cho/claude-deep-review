@@ -10,6 +10,12 @@ This table explains that contract for orchestrators; when prose and runtime
 data differ, use the protocol `2.0` registry output. Native host assertions are
 injected for the current run and are never restored from the executable cache.
 
+Each candidate explicitly declares supported assignment roles from
+`standard`, `feasibility`, `traceability`, `adversarial`, `security`, and
+`confirmation`. The protocol `3.0` routing plan selects a role-fit subset and
+binds one trusted rubric to each selected canonical reviewer. A role assignment
+does not create an additional `N_actual` voice.
+
 | Role | Claude Code | Codex |
 |---|---|---|
 | public review/respond entry | `/deep-review` command shim | `$deep-review:deep-review` |
@@ -24,6 +30,10 @@ injected for the current run and are never restored from the executable cache.
 - Enumerate roles by tool capability: named-agent availability and the
   detected Claude, Codex companion, and agy executables. `runtime_host` is
   diagnostic only and must never change reviewer enumeration or `N_actual`.
+- Adaptive selection is deterministic: role fit, provider-family diversity,
+  prior-round unused status, last success, then canonical reviewer id.
+  `--reviewer-strategy static` preserves the eligible candidate set; shadow
+  mode observes the adaptive plan without applying it.
 - A native Codex generic subagent is one fresh context, counts once as
   `codex-review`, and replaces the standard companion review. It is never
   labeled Opus. It is available without a separately installed companion;
@@ -35,7 +45,12 @@ injected for the current run and are never restored from the executable cache.
 - When Claude CLI exists, `run-claude-reviewer.mjs` remains the distinct
   `claude-opus` role. A named Claude agent fills the same role when available.
 - On a Claude capability profile, `run-codex-reviewer.mjs --kind review` fills
-  `codex-review`; its optional second invocation fills `codex-adversarial`.
+  `codex-review` and is eligible only for the `standard` assignment; its
+  optional `--kind adversarial-review` invocation fills `codex-adversarial`
+  and is eligible only for `adversarial`. The shared companion adapter cannot
+  satisfy `feasibility`, `traceability`, `security`, or `confirmation`
+  assignments because those invocation paths do not transport the selected
+  rubric.
 - `--no-codex` disables both the standard and adversarial Codex roles. It does
   not affect `claude-opus` or `agy`.
 - The Git-index mutation protocol runs only when a planned companion process

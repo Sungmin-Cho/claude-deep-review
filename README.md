@@ -53,6 +53,8 @@ Claude Code slash commands and Codex skills are distinct host entrypoints for th
 | `/deep-review-loop [--max=N]` | Auto-iterate review ↔ respond until convergence (also a `user-invocable` skill — `Skill({ skill: "deep-review:deep-review-loop" })` for Codex CLI / SDK consumers) |
 | `/deep-review-loop --ultracode --codex` | ultracode once (round 1) + codex every round integrated loop |
 | `/deep-review-loop --session-doc` | Maintain one consolidated per-session review document, re-rendered in place after each round (per-round reports unchanged) |
+| `/deep-review --reviewer-strategy static` | Fix the eligible reviewer set instead of adaptive selection |
+| `/deep-review --readiness-receipt PATH` | Bind an implementation review to a verified document-readiness receipt |
 | `/deep-review --dry-run` / `--explain-routing` | Classify review targets and print the capability-aware model/effort plan without running any reviewer (artifact-aware routing Phase 2) |
 | `/deep-review init` | Initialize per-project review rules interactively |
 
@@ -63,24 +65,52 @@ Claude Code slash commands and Codex skills are distinct host entrypoints for th
 | `$deep-review:deep-review` | Review current changes with the same flags and synthesis rules as `/deep-review` |
 | `$deep-review:deep-review --respond [REPORT_PATH]` | Run the evidence-based response protocol |
 | `$deep-review:deep-review-loop [--max=N]` | Alternate review and response until convergence |
+| `$deep-review:deep-review --readiness-receipt PATH` | Verify a document receipt and enforce its deferred acceptance evidence |
 
 **Composable reviewer flags**:
 
 - `--ultracode` — six focused Claude reviewer contexts collapsed into one "Claude(ultracode)" voice; an unavailable fan-out degrades visibly to one native Claude bridge.
 - `--codex` / `--no-codex` / `--no-opus` / `--no-agy`, and `--codex-only` (= `--codex --no-opus --no-agy`).
 - `/deep-review-loop --ultracode --codex`: ultracode once (round 1) + codex every round.
-- No-flag behavior is 100% unchanged.
+- Adaptive reviewer and automatic model routing are enabled by default for
+  single reviews and loops. `--reviewer-strategy static` fixes the eligible
+  set; `routing_shadow_mode: true` records but does not apply the adaptive
+  plan. Use both for pre-2.0 dispatch compatibility.
 - `/deep-review-loop` convergence is deterministic: each round's findings are compared with `compare-rounds` (identity matching, not a natural-language repeat judgment), and a stalled round stops with the last trusted verdict.
 - The loop passes a `--prior-rounds-file` advisory context between rounds explicitly (never by file existence) so reviewers can re-verify prior findings and rejected items.
-- The final loop summary reports a `rounds_saved` metric.
+- Pure document loops use a `READY_FOR_IMPLEMENTATION` gate: low/medium scopes
+  cap at two rounds, high/critical at three, and unresolved scopes stop as
+  `DOCUMENT_BLOCKED`. Implementation loops retain the five-round default.
+- A READY document emits a sealed content-addressed receipt under
+  `.deep-review/receipts/document-readiness/`. A later implementation review
+  opts in with `--readiness-receipt PATH`; stale, tampered, out-of-repo, or
+  symlink receipts fail closed, and pending deferred evidence blocks APPROVE.
+- The final loop summary reports rounds and reviewer calls saved, per-round
+  assignment/model/effort, expansion, readiness, receipt, and stop reason.
 - `--session-doc` (loop-only, opt-in) keeps one consolidated session document keyed by the loop id — current verdict, per-round history, open-vs-resolved rollup, and a final post-stop summary — while per-round reports and their fail-closed accounting stay untouched.
 - `--dry-run` / `--explain-routing` (review-only) print the artifact classification, capability-aware routing plan, and provenance, then stop before any reviewer.
 - `--routing <auto|fast|balanced|quality>` selects a routing policy. Repeated `--model <provider>=<model>` / `--effort <provider>=<effort>` set provider overrides; repeated `--reviewer-model <reviewer>=<model>` / `--reviewer-effort <reviewer>=<effort>` set canonical reviewer overrides.
 - `--allow-fallback` permits a visible fallback when an explicit model or effort cannot be applied. Without it, explicit unsupported requests fail closed before dispatch.
 - `--allow-classifier` lets dry-run/explain use semantic classification for ambiguous artifacts. Bounded artifact content is treated as untrusted data and sent through stdin; secret-like content is never sent and falls back to deterministic classification.
-- No-flag routing remains shadow-first: the plan is recorded in report provenance while reviewer dispatch arguments remain byte-identical. Automatic model routing is applied only when project policy enables `automatic_model_routing` and sets `routing_shadow_mode: false`.
+- `--no-*`, `--codex`, `--codex-only`, and `--ultracode` are hard
+  eligibility/required-assignment constraints. Reviewer-level overrides require
+  that reviewer; provider-level overrides apply only to selected reviewers.
 
 Teams can share routing policy in `.deep-review/review-policy.yaml`. If the project currently ignores `.deep-review/`, replace that directory rule with the following two rules; Git cannot re-include a file beneath a wholly ignored directory:
+
+```yaml
+schema_version: 2
+features:
+  adaptive_reviewer_routing: true
+  automatic_model_routing: true
+  routing_shadow_mode: false
+routing:
+  reviewer_strategy: adaptive
+  document_round_limit: 2
+  high_risk_document_round_limit: 3
+  maximum_reviewers: 4
+  max_expansion_waves: 1
+```
 
 ```gitignore
 .deep-review/*
@@ -94,8 +124,8 @@ deep-review runs a 4-stage pipeline on every invocation, with an optional Stage 
 ```
 Stage 1: Collect      — Detect environment, gather diff
 Stage 2: Contract     — Load Sprint Contract if present
-Stage 3: Deep Review  — Dispatch the available independent reviewer roles
-Stage 4: Verdict      — Synthesize findings, emit APPROVE / CONCERN / REQUEST_CHANGES
+Stage 3: Deep Review  — Adaptively assign independent reviewer roles (one optional expansion)
+Stage 4: Verdict      — Synthesize once; emit verdict and optional document readiness
 Stage 5: Respond      — Evidence-based response to findings (via --respond)
 ```
 

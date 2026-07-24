@@ -40,6 +40,8 @@ import {
   mergeRoutingConfig,
 } from './lib/review-policy.mjs';
 import { writeContainedFile } from './lib/runtime-context.mjs';
+import { isReviewerId } from './lib/reviewer-ids.mjs';
+import { verifyReadinessReceipt } from './document-readiness.mjs';
 
 const SIGNAL_LABELS = {
   frontmatter: 'frontmatter',
@@ -261,6 +263,7 @@ const VALUE_FLAGS = {
   '--files-from0': 'filesFrom',
   '--routing-plan-out': 'routingPlanOut',
   '--host-assertions-json': 'hostAssertionsJson',
+  '--adaptive-context-json': 'adaptiveContextJson',
 };
 
 // I4: the internal preflight argv-only transport for native host tool
@@ -276,6 +279,23 @@ function validateHostAssertions(value) {
     || Object.values(value).some((entry) => typeof entry !== 'boolean');
   if (invalid) {
     throw new Error('--host-assertions-json keys must be claudeNativeAgent/codexNativeGeneric with boolean values');
+  }
+  return value;
+}
+
+function validateAdaptiveContext(value) {
+  const states = new Set(['regression', 'confirmation', 'stalled', 'changed']);
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+      || value.schema_version !== 2
+      || !['low', 'medium', 'high', 'critical'].includes(value.risk)
+      || !states.has(value.progress)
+      || !Array.isArray(value.used_reviewers)
+      || value.used_reviewers.some((id) => !isReviewerId(id))
+      || new Set(value.used_reviewers).size !== value.used_reviewers.length
+      || Object.keys(value).some((key) => ![
+        'schema_version', 'risk', 'progress', 'used_reviewers',
+      ].includes(key))) {
+    throw new Error('--adaptive-context-json must be a schema-2 risk/progress/used_reviewers object');
   }
   return value;
 }
@@ -306,6 +326,12 @@ function validateOverrides(value) {
   if (value.routing_policy !== undefined && !['auto', 'fast', 'balanced', 'quality'].includes(value.routing_policy)) {
     throw new Error('--overrides-json routing_policy is invalid');
   }
+  if (value.reviewer_strategy !== undefined && !['adaptive', 'static'].includes(value.reviewer_strategy)) {
+    throw new Error('--overrides-json reviewer_strategy is invalid');
+  }
+  if (value.readiness_receipt !== undefined && typeof value.readiness_receipt !== 'string') {
+    throw new Error('--overrides-json readiness_receipt must be a string');
+  }
   if (!value.providers || typeof value.providers !== 'object' || Array.isArray(value.providers)
       || !value.reviewers || typeof value.reviewers !== 'object' || Array.isArray(value.reviewers)) {
     throw new Error('--overrides-json providers and reviewers must be objects');
@@ -319,6 +345,22 @@ function validateOverrides(value) {
     if (!Array.isArray(providers) || providers.some((provider) => !known.has(provider))
         || new Set(providers).size !== providers.length) {
       throw new Error('--overrides-json disabled_providers must be a unique array of claude, codex, or agy');
+    }
+  }
+  if (value.required_providers !== undefined) {
+    const providers = value.required_providers;
+    const known = new Set(['claude', 'codex', 'agy']);
+    if (!Array.isArray(providers) || providers.some((provider) => !known.has(provider))
+        || new Set(providers).size !== providers.length) {
+      throw new Error('--overrides-json required_providers must be a unique array of claude, codex, or agy');
+    }
+  }
+  if (value.required_reviewers !== undefined) {
+    const reviewers = value.required_reviewers;
+    const known = new Set(['claude-opus', 'codex-review', 'codex-adversarial', 'agy']);
+    if (!Array.isArray(reviewers) || reviewers.some((reviewer) => !known.has(reviewer))
+        || new Set(reviewers).size !== reviewers.length) {
+      throw new Error('--overrides-json required_reviewers must contain unique canonical reviewer ids');
     }
   }
   return value;
@@ -411,8 +453,20 @@ function defaultReviewers(capabilities, overrides) {
     }
   } else if (has('claude-cli')) reviewers.push({ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' });
   if (has('codex-native-generic')) reviewers.push({ id: 'codex-review', provider: 'codex', role: 'standard', adapter_id: 'codex-native-generic' });
-  else if (has('codex-companion')) reviewers.push({ id: 'codex-review', provider: 'codex', role: 'standard', adapter_id: 'codex-companion' });
-  if (has('codex-companion')) reviewers.push({ id: 'codex-adversarial', provider: 'codex', role: 'adversarial', adapter_id: 'codex-companion' });
+  else if (has('codex-companion')) reviewers.push({
+    id: 'codex-review',
+    provider: 'codex',
+    role: 'standard',
+    adapter_id: 'codex-companion',
+    assignment_roles: ['standard'],
+  });
+  if (has('codex-companion')) reviewers.push({
+    id: 'codex-adversarial',
+    provider: 'codex',
+    role: 'adversarial',
+    adapter_id: 'codex-companion',
+    assignment_roles: ['adversarial'],
+  });
   if (has('agy-cli')) reviewers.push({ id: 'agy', provider: 'agy', role: 'standard', adapter_id: 'agy-cli' });
   return reviewers;
 }
@@ -447,12 +501,16 @@ function isPolicyEnforcementError(error) {
   return POLICY_ENFORCEMENT_ERROR_PREFIXES.some((prefix) => code.startsWith(prefix) || message.startsWith(prefix));
 }
 
-export function routingPreflightDecision({ explicit, error } = {}) {
+export function routingPreflightDecision({ explicit, shadowMode = false, error } = {}) {
   if (error) {
-    if (explicit || isPolicyEnforcementError(error)) return { action: 'stop', error: error.message };
+    if (explicit || !shadowMode || isPolicyEnforcementError(error)) {
+      return { action: 'stop', error: error.message };
+    }
     return { action: 'continue', warning: error.message };
   }
-  return explicit ? { action: 'apply', error: null } : { action: 'shadow', error: null };
+  return shadowMode
+    ? { action: 'shadow', error: null }
+    : { action: 'apply', error: null };
 }
 
 async function routingInputs(repo, env, runtime, knownEnvironment, overrides) {
@@ -475,7 +533,7 @@ async function routingInputs(repo, env, runtime, knownEnvironment, overrides) {
   const invalidationKeys = capabilityCacheKeys(detected, {});
   let cached = null;
   try {
-    cached = loadCapabilityCache(capabilityCacheFilePath(repo), invalidationKeys);
+    cached = loadCapabilityCache(repo, capabilityCacheFilePath(repo), invalidationKeys);
   } catch {
     cached = null;
   }
@@ -501,7 +559,7 @@ async function routingInputs(repo, env, runtime, knownEnvironment, overrides) {
     || (detected.codex_cli && probes.codex?.ok !== true);
   if (!probeFailed) {
     try {
-      saveCapabilityCache(capabilityCacheFilePath(repo), capabilities, invalidationKeys);
+      saveCapabilityCache(repo, capabilityCacheFilePath(repo), capabilities, invalidationKeys);
     } catch {
       // Best-effort persistence: a cache write failure must never affect this run's result.
     }
@@ -511,8 +569,22 @@ async function routingInputs(repo, env, runtime, knownEnvironment, overrides) {
 
 function routingPolicy(repo, env, overrides, runtime) {
   const defaults = {
-    features: { semantic_classifier: true, automatic_model_routing: true, routing_shadow_mode: true },
-    routing: { policy: 'auto', allow_fallback: false, require_read_only: true },
+    features: {
+      semantic_classifier: true,
+      adaptive_reviewer_routing: true,
+      automatic_model_routing: true,
+      routing_shadow_mode: false,
+    },
+    routing: {
+      policy: 'auto',
+      reviewer_strategy: 'adaptive',
+      allow_fallback: false,
+      require_read_only: true,
+      document_round_limit: 2,
+      high_risk_document_round_limit: 3,
+      maximum_reviewers: 4,
+      max_expansion_waves: 1,
+    },
     providers: {}, constraints: {}, classification: {},
   };
   // J1: loadUserConfig/loadReviewPolicy already return null (never throw) for
@@ -566,7 +638,8 @@ function computeChangeRiskFloor(repo, changeState, reviewBase) {
     // Bound the scanned text well below the maxBuffer capture ceiling — the
     // patch itself is discarded immediately after this local scan.
     const patchText = result.stdout.toString('utf8').slice(0, 512 * 1024);
-    return assessRisk([{ diff: patchText }]) === 'high' ? 'high' : undefined;
+    const assessed = assessRisk([{ diff: patchText }]);
+    return ['high', 'critical'].includes(assessed) ? assessed : undefined;
   } catch {
     return undefined;
   }
@@ -722,13 +795,47 @@ export async function runClassifyArtifactsCli(argv = process.argv.slice(2), env 
     }
   }
   const riskFloor = computeChangeRiskFloor(repo, changeState, reviewBase);
+  let adaptiveContext = null;
+  if (options.adaptiveContextJson !== undefined) {
+    try {
+      adaptiveContext = validateAdaptiveContext(JSON.parse(options.adaptiveContextJson));
+    } catch (error) {
+      if (error.message.startsWith('--adaptive-context-json')) throw error;
+      throw new Error(`--adaptive-context-json must contain valid JSON: ${error.message}`);
+    }
+  }
+  const verifiedReadiness = overrides.readiness_receipt
+    ? verifyReadinessReceipt({ repo, receiptPath: overrides.readiness_receipt })
+    : null;
   const routingPlan = buildRoutingPlan({
-    artifacts: result.artifacts, reviewers: eligibleReviewers, policy, overrides, capabilities, riskFloor,
+    artifacts: result.artifacts,
+    reviewers: eligibleReviewers,
+    policy,
+    overrides,
+    capabilities,
+    riskFloor,
+    priorRisk: adaptiveContext?.risk,
+    receiptRisk: verifiedReadiness?.risk,
+    progress: adaptiveContext ? {
+      state: adaptiveContext.progress,
+      used_reviewers: adaptiveContext.used_reviewers,
+    } : undefined,
   });
   routingPlan.explicit_overrides = explicit;
-  routingPlan.apply_automatic = policy.features?.automatic_model_routing === true
-    && policy.features?.routing_shadow_mode === false;
-  result = { ...result, routing_plan: routingPlan };
+  routingPlan.apply_automatic = policy.features?.automatic_model_routing !== false
+    && policy.features?.routing_shadow_mode !== true;
+  result = {
+    ...result,
+    routing_plan: routingPlan,
+    ...(verifiedReadiness ? {
+      readiness_receipt: {
+        status: verifiedReadiness.status,
+        scope_sha256: verifiedReadiness.scope_sha256,
+        risk: verifiedReadiness.risk,
+        deferred_finding_count: verifiedReadiness.deferred_findings.length,
+      },
+    } : {}),
+  };
 
   const outPath = options.out ? resolve(options.out) : defaultProvenancePath(repo);
   writeProvenance(repo, result, outPath);

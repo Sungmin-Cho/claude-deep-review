@@ -12,12 +12,15 @@ import {
 } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { isAssignmentRole } from './lib/assignment-rubrics.mjs';
+import { isReviewerId } from './lib/reviewer-ids.mjs';
 import { canonicalizeRepoPath, extractFindings, matchFindings } from './lib/finding-identity.mjs';
 import { isSessionDocReportName } from './lib/session-doc.js';
 import { classifyLiveness, currentHostHash, processStartMs } from './mutation-protocol.mjs';
 
 const SNAPSHOT_SCHEMA = 1;
-const ROUND_STATE_SCHEMA = 1;
+const ROUND_STATE_SCHEMA = 2;
+const LEGACY_ROUND_STATE_SCHEMA = 1;
 const PRIOR_CONTEXT_MAX_BYTES_DEFAULT = 16384;
 const PRIOR_CONTEXT_REJECT_NOTICE = '재검증 필수, 억제 금지 (advisory — re-verify, never suppress)';
 const STALLED_REPEAT_RATIO_THRESHOLD = 0.5;
@@ -34,6 +37,10 @@ const TAXONOMY = new Set([
   'performance',
   'architecture',
 ]);
+const ARTIFACT_PHASES = new Set(['document', 'implementation']);
+const RISK_VALUES = new Set(['low', 'medium', 'high', 'critical']);
+const READINESS_VALUES = new Set(['READY_FOR_IMPLEMENTATION', 'DOCUMENT_BLOCKED']);
+const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 class LoopStateError extends Error {
   constructor(message, code = 'LOOP_STATE_ERROR', details = {}) {
@@ -379,6 +386,189 @@ function buildOwnerStamp(env = process.env) {
   };
 }
 
+function uniqueReviewerIds(value, label) {
+  if (!Array.isArray(value)
+      || value.some((entry) => !isReviewerId(entry))
+      || new Set(value).size !== value.length) {
+    throw new LoopStateError(`${label} must be an array of unique reviewer ids`, 'INVALID_ROUTING_METADATA');
+  }
+  return [...value];
+}
+
+function responseMetrics(response) {
+  const itemCounts = /\*\*Items\*\*\s*:\s*(?:수락|accepted?)\s*(\d+)[^\n]*?(?:반박|rejected?)\s*(\d+)[^\n]*?(?:보류|deferred?)\s*(\d+)/iu.exec(response);
+  const execution = /\*\*execution_path\*\*\s*:\s*(subagent|main_fallback|mixed|n\/a)/iu.exec(response);
+  const halted = /\*\*halted\*\*\s*:\s*(true|false)/iu.exec(response);
+  return {
+    accepted_count: itemCounts ? Number(itemCounts[1]) : 0,
+    rejected_count: itemCounts ? Number(itemCounts[2]) : 0,
+    deferred_count: itemCounts ? Number(itemCounts[3]) : 0,
+    implemented_count: integerMatch(response, /\*\*implemented_count\*\*\s*:\s*(\d+)/iu),
+    halted: halted ? halted[1].toLowerCase() === 'true' : false,
+    execution_path: execution ? execution[1].toLowerCase() : 'n/a',
+  };
+}
+
+function readRoutingMetadata(options) {
+  if (options.routingMetadata !== undefined && options.routingMetadataFile !== undefined) {
+    throw new LoopStateError(
+      'routingMetadata and routingMetadataFile are mutually exclusive',
+      'INVALID_ROUTING_METADATA',
+    );
+  }
+  let metadata = options.routingMetadata;
+  if (options.routingMetadataFile !== undefined) {
+    try {
+      metadata = JSON.parse(readFileSync(absolute(options.routingMetadataFile, 'routing metadata file'), 'utf8'));
+    } catch (error) {
+      throw new LoopStateError(
+        `cannot read routing metadata: ${error.message}`,
+        'INVALID_ROUTING_METADATA',
+      );
+    }
+  }
+  if (metadata === undefined || metadata === null) {
+    return {
+      artifact_phase: null,
+      risk: null,
+      routing_plan_digest: null,
+      planned_reviewers: [],
+      actual_reviewers: [],
+      wave: 1,
+      expansion: false,
+      reviewer_calls_saved: 0,
+      readiness: null,
+      receipt_path: null,
+      assignments: [],
+    };
+  }
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)
+      || !ARTIFACT_PHASES.has(metadata.artifact_phase)
+      || !RISK_VALUES.has(metadata.risk)
+      || !SHA256_PATTERN.test(metadata.routing_plan_digest || '')) {
+    throw new LoopStateError('routing metadata header is invalid', 'INVALID_ROUTING_METADATA');
+  }
+  const plannedReviewers = uniqueReviewerIds(metadata.planned_reviewers, 'planned_reviewers');
+  const actualReviewers = uniqueReviewerIds(metadata.actual_reviewers, 'actual_reviewers');
+  if (![1, 2].includes(metadata.wave)
+      || typeof metadata.expansion !== 'boolean'
+      || !Number.isInteger(metadata.reviewer_calls_saved)
+      || metadata.reviewer_calls_saved < 0
+      || (metadata.readiness !== null
+        && metadata.readiness !== undefined
+        && !READINESS_VALUES.has(metadata.readiness))
+      || !Array.isArray(metadata.assignments)) {
+    throw new LoopStateError('routing metadata fields are invalid', 'INVALID_ROUTING_METADATA');
+  }
+  const assignmentReviewers = new Set();
+  const assignments = metadata.assignments.map((assignment) => {
+    if (!assignment || typeof assignment !== 'object' || Array.isArray(assignment)
+        || !isReviewerId(assignment.reviewer_id)
+        || !actualReviewers.includes(assignment.reviewer_id)
+        || assignmentReviewers.has(assignment.reviewer_id)
+        || !isAssignmentRole(assignment.assignment_role)
+        || (assignment.model !== null
+          && (typeof assignment.model !== 'string' || assignment.model.length === 0))
+        || (assignment.effort !== null
+          && (typeof assignment.effort !== 'string' || assignment.effort.length === 0))
+        || ![1, 2].includes(assignment.wave)) {
+      throw new LoopStateError('routing assignment is invalid', 'INVALID_ROUTING_METADATA');
+    }
+    assignmentReviewers.add(assignment.reviewer_id);
+    return {
+      reviewer_id: assignment.reviewer_id,
+      assignment_role: assignment.assignment_role,
+      model: assignment.model,
+      effort: assignment.effort,
+      wave: assignment.wave,
+    };
+  });
+  return {
+    artifact_phase: metadata.artifact_phase,
+    risk: metadata.risk,
+    routing_plan_digest: metadata.routing_plan_digest,
+    planned_reviewers: plannedReviewers,
+    actual_reviewers: actualReviewers,
+    wave: metadata.wave,
+    expansion: metadata.expansion,
+    reviewer_calls_saved: metadata.reviewer_calls_saved,
+    readiness: metadata.readiness ?? null,
+    receipt_path: metadata.receipt_path ? absolute(metadata.receipt_path, 'readiness receipt') : null,
+    assignments,
+  };
+}
+
+export function resolveLoopRoundPolicy({
+  artifactPhase = 'implementation',
+  risk = 'low',
+  max,
+  maxExplicit = false,
+  documentRoundLimit = 2,
+  highRiskDocumentRoundLimit = 3,
+} = {}) {
+  if (!ARTIFACT_PHASES.has(artifactPhase) || !RISK_VALUES.has(risk)) {
+    throw new LoopStateError('loop artifact phase or risk is invalid', 'INVALID_LOOP_POLICY');
+  }
+  const explicitMax = Number(max);
+  if (maxExplicit && (!Number.isInteger(explicitMax) || explicitMax < 1)) {
+    throw new LoopStateError('explicit loop max must be a positive integer', 'INVALID_LOOP_POLICY');
+  }
+  const configured = ['high', 'critical'].includes(risk)
+    ? Number(highRiskDocumentRoundLimit)
+    : Number(documentRoundLimit);
+  const roundLimit = maxExplicit
+    ? explicitMax
+    : artifactPhase === 'document'
+      ? configured
+      : 5;
+  if (!Number.isInteger(roundLimit) || roundLimit < 1) {
+    throw new LoopStateError('loop round limit must be a positive integer', 'INVALID_LOOP_POLICY');
+  }
+  return {
+    artifact_phase: artifactPhase,
+    risk,
+    round_limit: roundLimit,
+    max_explicit: Boolean(maxExplicit),
+  };
+}
+
+export function evaluateLoopTermination({
+  roundNumber,
+  roundLimit,
+  artifactPhase,
+  readiness = null,
+} = {}) {
+  const round = Number(roundNumber);
+  const limit = Number(roundLimit);
+  if (!Number.isInteger(round) || round < 1 || !Number.isInteger(limit) || limit < 1
+      || !ARTIFACT_PHASES.has(artifactPhase)
+      || (readiness !== null && !READINESS_VALUES.has(readiness))) {
+    throw new LoopStateError('loop termination input is invalid', 'INVALID_LOOP_POLICY');
+  }
+  if (artifactPhase === 'document' && readiness === 'READY_FOR_IMPLEMENTATION') {
+    return {
+      should_stop: true,
+      stop_reason: 'READY_FOR_IMPLEMENTATION',
+      start_another_review: false,
+      run_respond: false,
+    };
+  }
+  if (round >= limit) {
+    return {
+      should_stop: true,
+      stop_reason: artifactPhase === 'document' ? 'DOCUMENT_BLOCKED' : 'MAX_ROUNDS',
+      start_another_review: false,
+      run_respond: false,
+    };
+  }
+  return {
+    should_stop: false,
+    stop_reason: null,
+    start_another_review: true,
+    run_respond: artifactPhase === 'implementation',
+  };
+}
+
 /**
  * Record one round's finding-state snapshot from a canonical review report
  * (+ optional response report) into a loop-bound, schema-versioned JSON file.
@@ -413,6 +603,7 @@ export function recordRound(options = {}) {
     category: categoryFor(recurring, finding.path, finding.line),
   }));
   const { rejected, skippedRejects } = parseRejectedItems(response, { repoRoot: options.repoRoot });
+  const routingMetadata = readRoutingMetadata(options);
 
   const loopId = options.loopId || randomUUID();
   const stateDir = absolute(options.stateDir, 'state directory');
@@ -433,6 +624,8 @@ export function recordRound(options = {}) {
     findings,
     rejected,
     skipped_rejects: skippedRejects,
+    ...routingMetadata,
+    response_metrics: responseMetrics(response),
     owner: buildOwnerStamp(options.env || process.env),
   };
   atomicJson(stateFile, state);
@@ -448,7 +641,7 @@ function readRoundState(stateFile) {
     throw new LoopStateError(`cannot read round state: ${error.message}`, 'INVALID_STATE');
   }
   if (
-    parsed?.schema_version !== ROUND_STATE_SCHEMA
+    ![LEGACY_ROUND_STATE_SCHEMA, ROUND_STATE_SCHEMA].includes(parsed?.schema_version)
     || typeof parsed.loop_id !== 'string'
     || typeof parsed.base_commit !== 'string'
     || !Number.isInteger(parsed.round_number)
@@ -532,6 +725,13 @@ export function renderPriorContext(options = {}) {
  * pair — so this stays the single source of truth for the "half of the larger
  * set repeats" rule without any parallel identity logic.
  */
+export function classifyRoundProgress(summary = {}) {
+  if (Number(summary.added_count) > 0) return 'regression';
+  if (Number(summary.resolved_count) > 0) return 'confirmation';
+  if (summary.stalled === true) return 'stalled';
+  return 'changed';
+}
+
 function summarizeAdjacent(previousFindings, currentFindings, { platform } = {}) {
   const previous = Array.isArray(previousFindings) ? previousFindings : [];
   const current = Array.isArray(currentFindings) ? currentFindings : [];
@@ -541,7 +741,7 @@ function summarizeAdjacent(previousFindings, currentFindings, { platform } = {})
   const { repeated, resolved, added } = matchFindings(previous, current, { platform });
   const largerSetSize = Math.max(previous.length, current.length);
   const repeatRatio = largerSetSize > 0 ? repeated.length / largerSetSize : 0;
-  return {
+  const summary = {
     repeated_count: repeated.length,
     resolved_count: resolved.length,
     added_count: added.length,
@@ -551,6 +751,7 @@ function summarizeAdjacent(previousFindings, currentFindings, { platform } = {})
     progressed: resolved.length > 0,
     resolved,
   };
+  return { ...summary, progress: classifyRoundProgress(summary) };
 }
 
 /**
@@ -566,11 +767,10 @@ export function compareRounds(options = {}) {
   const previous = readRoundState(options.previous);
   const current = readRoundState(options.current);
   if (
-    previous.schema_version !== current.schema_version
-    || previous.loop_id !== current.loop_id
+    previous.loop_id !== current.loop_id
     || previous.base_commit !== current.base_commit
   ) {
-    throw new LoopStateError('previous/current round state is from a different loop or schema', 'STALE_STATE', {
+    throw new LoopStateError('previous/current round state is from a different loop or base', 'STALE_STATE', {
       previous_loop_id: previous.loop_id,
       current_loop_id: current.loop_id,
       previous_base_commit: previous.base_commit,
@@ -688,8 +888,17 @@ function renderFinalSummaryLines(summary) {
   if (summary.rounds_saved !== undefined && summary.rounds_saved !== null) {
     out.push(`- **Rounds saved**: ${Number(summary.rounds_saved)}`);
   }
+  if (summary.reviewer_calls_saved !== undefined && summary.reviewer_calls_saved !== null) {
+    out.push(`- **Reviewer calls saved**: ${Number(summary.reviewer_calls_saved)}`);
+  }
   if (summary.implemented_total !== undefined && summary.implemented_total !== null) {
     out.push(`- **Total implemented**: ${Number(summary.implemented_total)}`);
+  }
+  if (typeof summary.readiness === 'string' && summary.readiness.length > 0) {
+    out.push(`- **Readiness**: ${summary.readiness}`);
+  }
+  if (typeof summary.receipt_path === 'string' && summary.receipt_path.length > 0) {
+    out.push(`- **Readiness receipt**: ${summary.receipt_path}`);
   }
   const remaining = Array.isArray(summary.remaining_work)
     ? summary.remaining_work.filter((item) => typeof item === 'string' && item.length > 0)
@@ -770,18 +979,36 @@ export function renderSessionDoc(options = {}) {
     let progress = '—';
     if (index > 0) {
       const summary = summarizeAdjacent(rounds[index - 1].findings, round.findings);
-      const parts = [];
-      if (summary.progressed) parts.push('progressed');
-      if (summary.stalled) parts.push('stalled');
-      // Findings were added with none resolved and a sub-threshold repeat ratio:
-      // neither "progressed" nor "stalled", but the set genuinely changed — label
-      // it accurately instead of the misleading "no change".
-      if (parts.length === 0 && summary.added_count > 0) parts.push(`changed (+${summary.added_count})`);
-      progress = parts.length > 0 ? parts.join(', ') : 'no change';
+      progress = summary.progress === 'regression'
+        ? `regression (+${summary.added_count})`
+        : summary.progress;
     }
     lines.push(`| ${round.round_number} | ${round.verdict} | ${counts.critical ?? 0} | ${counts.warning ?? 0} | ${counts.info ?? 0} | ${progress} |`);
   }
   lines.push('');
+
+  const adaptiveRounds = rounds.filter((round) => round.schema_version === ROUND_STATE_SCHEMA
+    && round.artifact_phase !== null);
+  if (adaptiveRounds.length > 0) {
+    lines.push('## Adaptive routing', '');
+    lines.push('| Round | Phase / risk | Assignments | Wave | Expansion | Calls saved | Readiness | Receipt |');
+    lines.push('| --- | --- | --- | --- | --- | --- | --- | --- |');
+    for (const round of adaptiveRounds) {
+      const assignments = round.assignments.length === 0
+        ? '(none)'
+        : round.assignments.map((assignment) => (
+          `${assignment.reviewer_id} (${assignment.assignment_role}; `
+          + `${assignment.model ?? 'provider-default'}/${assignment.effort ?? 'provider-default'}; wave ${assignment.wave})`
+        )).join('<br>');
+      const receipt = round.receipt_path ? reportLink(round.receipt_path) : '(none)';
+      lines.push(
+        `| ${round.round_number} | ${round.artifact_phase} / ${round.risk} `
+        + `| ${assignments} | ${round.wave} | ${round.expansion ? 'yes' : 'no'} `
+        + `| ${round.reviewer_calls_saved} | ${round.readiness ?? '(none)'} | ${receipt} |`,
+      );
+    }
+    lines.push('');
+  }
 
   lines.push(`## Open findings (round ${latest.round_number}) — ${openFindings.length}`);
   if (openFindings.length === 0) lines.push('- (none)');
@@ -1001,6 +1228,7 @@ function commandOptions(command, flags) {
       ['--state-dir', 'stateDir'],
       ['--repo-root', 'repoRoot'],
       ['--recurring-findings', 'recurringFindings'],
+      ['--routing-metadata-file', 'routingMetadataFile'],
     ]),
     'render-prior-context': new Map([
       ['--state-file', 'stateFile'],

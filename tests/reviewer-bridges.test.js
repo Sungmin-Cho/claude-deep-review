@@ -7,7 +7,10 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { runClaudeReviewer } from '../hooks/scripts/run-claude-reviewer.mjs';
-import { runCodexReviewer } from '../hooks/scripts/run-codex-reviewer.mjs';
+import {
+  normalizeAdversarialReport,
+  runCodexReviewer,
+} from '../hooks/scripts/run-codex-reviewer.mjs';
 
 const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const codexBridgePath = join(pluginRoot, 'hooks', 'scripts', 'run-codex-reviewer.mjs');
@@ -30,7 +33,13 @@ if (behavior === 'auth') { process.stderr.write('Authentication failed: Not sign
 if (behavior === 'failed') { process.stderr.write('generic failure\\n'); process.exit(9); }
 if (behavior === 'empty') process.exit(0);
 if (behavior === 'timeout') setInterval(() => {}, 1000);
-if (behavior === 'success') process.stdout.write('review ok Ω\\n');
+if (behavior === 'success') {
+  if (process.argv.includes('adversarial-review')) {
+    process.stdout.write('# Codex Adversarial Review\\n\\nTarget: working tree diff\\nVerdict: needs-attention\\n\\nFindings:\\n- [high] reachable security regression (src/a.js:1)\\n');
+  } else {
+    process.stdout.write('review ok Ω\\n');
+  }
+}
 `, { mode: 0o700 });
   chmodSync(script, 0o700);
   if (process.platform !== 'win32' || nodeModule) return script;
@@ -188,6 +197,10 @@ test('Codex review and adversarial bridges use process.execPath, exact target ar
 
   assert.equal(review.status, 'success');
   assert.equal(adversarial.status, 'success');
+  assert.match(adversarial.stdout, /^# Deep Review Report — /u);
+  assert.match(adversarial.stdout, /\*\*Verdict\*\*: REQUEST_CHANGES/u);
+  assert.match(adversarial.raw_stdout, /^# Codex Adversarial Review/u);
+  assert.equal(readFileSync(adversarialOutput, 'utf8'), adversarial.stdout);
   const [reviewRow, adversarialRow] = rows(log);
   assert.deepEqual(reviewRow.argv, ['review', '--base', 'abc123']);
   assert.deepEqual(adversarialRow.argv, ['adversarial-review', '--scope', 'working-tree', '-']);
@@ -195,6 +208,40 @@ test('Codex review and adversarial bridges use process.execPath, exact target ar
   assert.equal(adversarialRow.stdin, 'hostile $(touch never) ; 리뷰 Ω');
   assert.equal(adversarialRow.argv.join(' ').includes('touch never'), false);
   assertNoAtomicDebris(root);
+});
+
+test('Codex adversarial normalization is fail-closed and preserves finding counts', () => {
+  const normalized = normalizeAdversarialReport([
+    '# Codex Adversarial Review',
+    '',
+    'Target: working tree diff',
+    'Verdict: needs-attention',
+    '',
+    'Findings:',
+    '- [high] critical path',
+    '- [warning] split concern',
+    '- [info] observation',
+  ].join('\n'), new Date('2026-07-24T00:00:00Z'));
+  assert.match(normalized, /^# Deep Review Report — 2026-07-24$/mu);
+  assert.match(normalized, /🔴 1건, 🟡 1건, ℹ️ 1건/u);
+  assert.match(normalized, /\*\*Verdict\*\*: REQUEST_CHANGES/u);
+  assert.equal(normalizeAdversarialReport(
+    '# Codex Adversarial Review\nTarget: working tree\nVerdict: needs-attention\nFindings:\n',
+  ), null);
+  assert.equal(normalizeAdversarialReport(
+    '# Codex Adversarial Review\nTarget: working tree\nVerdict: reject\nFindings:\n1. issue\n',
+  ), null);
+  assert.equal(normalizeAdversarialReport(
+    '# Codex Adversarial Review\nTarget: working tree\nVerdict: unknown\nFindings:\n',
+  ), null);
+  assert.equal(normalizeAdversarialReport(
+    '# Codex Adversarial Review\nTarget: working tree\nVerdict: clean\nFindings:\n- [high] contradiction\n',
+  ), null);
+  assert.equal(normalizeAdversarialReport(
+    '# Codex Adversarial Review\nTarget: working tree\nVerdict: clean\nFindings:\n',
+    new Date('2026-07-24T00:00:00Z'),
+  ).includes('**Verdict**: APPROVE'), true);
+  assert.equal(normalizeAdversarialReport('review ok'), null);
 });
 
 test('Codex bridge classifies auth, timeout, generic failure, and empty output with atomic status', async (t) => {

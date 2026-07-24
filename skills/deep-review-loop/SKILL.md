@@ -2,7 +2,7 @@
 name: deep-review-loop
 description: Alternate independent review and evidence-based response until convergence on Claude Code or Codex.
 user-invocable: true
-argument-hint: "[--contract [SLICE-NNN]] [--entropy] [--ultracode] [--codex|--no-codex] [--no-opus] [--no-agy] [--codex-only] [--max=N] [--session-doc]"
+argument-hint: "[--contract [SLICE-NNN]] [--entropy] [--ultracode] [--codex|--no-codex] [--no-opus] [--no-agy] [--codex-only] [--reviewer-strategy adaptive|static] [--readiness-receipt PATH] [--routing auto|fast|balanced|quality] [--model PROVIDER=MODEL] [--effort PROVIDER=EFFORT] [--reviewer-model REVIEWER=MODEL] [--reviewer-effort REVIEWER=EFFORT] [--allow-fallback] [--allow-classifier] [--max=N] [--session-doc]"
 ---
 
 # deep-review-loop — Review and Respond loop
@@ -23,9 +23,12 @@ expanded `argv` without independently reparsing it.
 
 - Reject `init`, `--respond`, and `--qa`; those are terminal routes of the
   public `$deep-review:deep-review` skill.
-- `--max=N` defaults to 5 and must be a positive integer. It counts Review
-  calls, not Respond work.
-- Accept `--contract [SLICE-NNN]`, `--entropy`, and all public reviewer flags.
+- `--max=N` must be a positive integer and counts Review calls, not Respond
+  work. When it is omitted, implementation scope defaults to 5 rounds,
+  low/medium document scope to 2, and high/critical document scope to 3.
+- Accept `--contract [SLICE-NNN]`, `--entropy`, every public reviewer flag,
+  routing/model/effort override, `--reviewer-strategy`, `--allow-fallback`,
+  `--allow-classifier`, and `--readiness-receipt`.
 - Accept `--session-doc` (opt-in, **default OFF**). When present, maintain one
   consolidated per-session review document (§4/§6); the terminal review and
   respond routes never accept it. Default OFF is byte-identical to today.
@@ -69,15 +72,17 @@ never disrupted. Round 1's `record-round` (§4) mints a fresh `loop_id` and
 echoes it; store that value and reuse it via `--loop-id` on every later round in
 this session — never re-mint mid-session.
 
-- Round 1 forwards the user's review, contract, entropy, and reviewer flags.
+- Every round forwards the user's review, contract, entropy, reviewer,
+  reviewer-strategy, routing, model/effort, fallback/classifier, and explicit
+  readiness-receipt flags. A leaf adapter receives only its selected route.
 - If round 1 requested `--ultracode`, mark `ultracode_consumed=true` after that
   attempt. Rounds 2+ remove `--ultracode`, retain Codex, and inject
   `--no-opus --no-agy`.
 - If that round reports Codex unavailable, withhold the injected `--no-opus`
   on the next round so at least one reviewer remains. Do not repeat ultracode.
 - When the user never requested ultracode, preserve the original reviewer
-  flags on every round. Plain loops therefore keep their normal reviewer set;
-  `--codex-only` loops remain Codex-only.
+  constraints on every round. Adaptive routing derives each round's role-fit
+  selected set; `--codex-only` loops remain Codex-only.
 - `review_model` is read by the review pipeline and forwarded unchanged on
   every eligible Claude round. Custom installed aliases such as `fable` are
   never replaced with a hardcoded model.
@@ -129,10 +134,32 @@ Apply reviewer-count rules before Respond:
   `CONCERN`, and no blocking issue is `APPROVE`.
 - Larger sets use the synthesis contract in `review-execution.md`.
 
+Review synthesis is two-wave at most. First produce a provisional result with
+`review-synthesis.mjs`. When it reports `needs_expansion`, dispatch exactly one
+unused reviewer from wave 2. Atomically save the returned
+`expanded_routing_plan`, then build the added reviewer's payload from that plan;
+this binds the returned model/effort and trusted rubric without hand-editing
+the plan. Use the same original evidence and never reveal another reviewer's
+conclusion. Re-synthesize all trusted attempts once and emit one final verdict.
+Critical implementation scope requires at least three trusted reviewers across
+two provider families; a shortage is an operational failure without a verdict.
+
+For round 2+, pass `classify-artifacts.mjs --adaptive-context-json` a schema-2
+JSON object containing the previous risk, code-owned progress result, and
+canonical reviewer IDs used in the previous round. Schema 1 state is advisory
+only and must not populate this carrier.
+
+For pure document scope, evaluate the `Artifact Gate` after synthesis.
+`READY_FOR_IMPLEMENTATION` skips Respond and stops the loop after atomically
+writing the content-addressed readiness receipt. If the document cap is
+reached without readiness, preserve the last canonical verdict, record
+`DOCUMENT_BLOCKED`, and do not start another Review.
+
 ## 3. Respond sub-step
 
-Skip Respond for `APPROVE` with zero Critical and Warning issues. Also skip it
-for a split-only `CONCERN` with no accepted actionable item.
+Skip Respond for `READY_FOR_IMPLEMENTATION`, for `APPROVE` with zero Critical
+and Warning issues, and for a split-only `CONCERN` with no accepted actionable
+item.
 
 Otherwise execute the public `--respond` branch with the exact absolute
 `round_review_report_path`. After the response reference loads its source path,
@@ -189,6 +216,13 @@ resolvable), which §1's `cleanup-residue` consults to tell a crashed loop's
 residue from a live sibling's — the live sibling's durable session process is
 still probeable, so its residue is kept.
 
+Write a private routing-metadata JSON file and pass
+`--routing-metadata-file ROUTING_METADATA_FILE`. It records schema-2 evidence:
+artifact phase/risk, routing-plan digest, planned/actual reviewers,
+assignment/model/effort and wave, response metrics, expansion, calls saved,
+readiness, and receipt path. A schema-1 state remains readable as legacy
+convergence evidence but must never be used to infer adaptive routing.
+
 ### 4a. Session doc (only when `--session-doc`)
 
 When `--session-doc` was accepted (§0), re-render this session's single
@@ -204,7 +238,9 @@ The document always lives at `.deep-review/reports/loop-{loop_id}-review.md`
 review doc). `render-session-doc` is pure and deterministic: it reads only this
 session's sorted per-round `loop-{loop_id}-round-{N}.state.json` files (and the
 review/response paths recorded in them) and re-renders the latest verdict, the
-per-round verdict/count history with `compare-rounds` progressed/stalled, the
+per-round verdict/count history with code-owned
+`regression > confirmation > stalled > changed` progress, adaptive assignments,
+model/effort, expansion and readiness, the
 open-vs-resolved findings rollup (via `matchFindings`), and per-round
 review/response links, written atomically. Because its name matches the
 `loop-<id>-review.md` session-doc pattern (not the timestamp-prefixed canonical
@@ -219,8 +255,11 @@ and behave exactly as before.
 
 Stop immediately when any condition holds:
 
-1. `APPROVE` with zero Critical and Warning issues.
-2. Review count reaches `--max`.
+1. `READY_FOR_IMPLEMENTATION` for pure document scope, or implementation
+   `APPROVE` with zero Critical and Warning issues and every deferred receipt
+   item verified.
+2. Review count reaches the resolved cap. For a non-ready document this stop
+   reason is `DOCUMENT_BLOCKED`; no additional Review is created.
 3. `compare-rounds` (previous round's `state_file` vs. this round's) reports
    `stalled=true` AND this round's `implemented_count == 0`, or the response halted:
 
@@ -261,7 +300,7 @@ current round regardless of other conditions.
 
 Continue when the verdict is actionable, at least one change was implemented,
 the response did not halt, `compare-rounds` shows progress (`progressed=true`
-or `stalled=false`), and the safety maximum is not reached. In a gray area,
+or `stalled=false`), and the resolved round cap is not reached. In a gray area,
 stop on external dependency or repeatedly failing dispatch rather than
 cycling without evidence.
 
@@ -273,10 +312,11 @@ in one paragraph.
 **Default (no `--session-doc`)**: use a direct host file tool to write one unique
 `.deep-review/responses/{YYYY-MM-DD}-{HHmmss}-loop-summary.md`. Include each
 round's review and response paths, counts, implemented total, final verdict,
-stop reason, `rounds_saved` (the safety maximum `--max` minus the number of
-rounds that actually executed a Review), and remaining human or external
-work. Loop state is otherwise session-local; existing reports allow a later
-explicit response to resume.
+stop reason, `rounds_saved` (the resolved cap minus the number of rounds that
+actually executed a Review), `reviewer_calls_saved`, per-round assignments,
+expansion, readiness and receipt path, and remaining human or external work.
+Loop state is otherwise session-local; existing reports allow a later explicit
+response to resume.
 
 **When `--session-doc` is ON**: after the loop stops (§5), run one FINAL
 `render-session-doc` pass — the per-round renders (§4a) run before the stop is
@@ -288,9 +328,10 @@ node {plugin_root}/hooks/scripts/loop-state.mjs render-session-doc --loop-id LOO
 ```
 
 `FINAL_SUMMARY_FILE` is a private JSON object with `stop_reason`, `rounds_saved`
-(the safety maximum `--max` minus the number of rounds that actually executed a
-Review), `implemented_total` (the summed `implemented_count` across rounds), and
-`remaining_work` (an array of remaining human or external items). This final
+(the resolved cap minus the number of rounds that actually executed a Review),
+`reviewer_calls_saved`, `implemented_total` (the summed `implemented_count`
+across rounds), `readiness`, `receipt_path`, and `remaining_work` (an array of
+remaining human or external items). This final
 pass appends a `## Final summary` section, so the single durable document
 `.deep-review/reports/loop-{loop_id}-review.md` **absorbs** the loop summary — do
 **not** write a separate `*-loop-summary.md`, avoiding a duplicated

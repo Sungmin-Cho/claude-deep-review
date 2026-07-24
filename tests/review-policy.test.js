@@ -39,6 +39,14 @@ test('review policy rejects duplicate keys, aliases, anchors, tags, and wrong sc
   assert.throws(() => parseReviewPolicy('schema_version: 2\nx: *shared\n'), /anchor|alias/i);
   assert.throws(() => parseReviewPolicy('schema_version: 2\nx: !thing value\n'), /tag/i);
   assert.throws(() => parseReviewPolicy('schema_version: 1\n'), /schema_version.*2/i);
+  assert.throws(
+    () => parseReviewPolicy('schema_version: 2\nclassification:\n  overrides:\n    - glob: "docs/**"\n      kind: typo-document\n'),
+    /classification\.overrides\[0\].*invalid/i,
+  );
+  assert.throws(
+    () => parseReviewPolicy('schema_version: 2\nclassification:\n  overrides:\n    - glob: ""\n      kind: design-document\n'),
+    /classification\.overrides\[0\].*invalid/i,
+  );
 });
 
 // R2I3: __proto__/constructor/prototype mapping keys must fail parsing with a
@@ -74,7 +82,7 @@ test('loaders resolve project, XDG, and Windows APPDATA config locations', async
   const xdg = path.join(temp, 'xdg');
   fs.mkdirSync(path.join(xdg, 'deep-review'), { recursive: true });
   fs.writeFileSync(path.join(xdg, 'deep-review', 'config.yaml'), 'schema_version: 2\nfeatures:\n  routing_shadow_mode: true\n');
-  assert.equal(loadUserConfig({ XDG_CONFIG_HOME: xdg }).policy.features.routing_shadow_mode, true);
+  assert.equal(loadUserConfig({ XDG_CONFIG_HOME: xdg }, 'linux').policy.features.routing_shadow_mode, true);
   assert.equal(userConfigPath({ APPDATA: 'C:\\Users\\Me\\AppData\\Roaming' }, 'win32'), path.win32.join('C:\\Users\\Me\\AppData\\Roaming', 'deep-review', 'config.yaml'));
 });
 
@@ -110,4 +118,52 @@ test('merge precedence is defaults < user < project < CLI while project enforced
   assert.equal(merged.providers.claude.model, 'forbidden');
   assert.deepEqual(merged.constraints.deny_models, ['forbidden']);
   assert.deepEqual(merged.constraints.allowed_providers, ['claude']);
+});
+
+test('v2 policy schema recognizes adaptive reviewer routing and convergence limits', async () => {
+  const { parseReviewPolicy, mergeRoutingConfig } = await import(policyUrl);
+  const source = [
+    'schema_version: 2',
+    'features:',
+    '  adaptive_reviewer_routing: true',
+    '  automatic_model_routing: true',
+    '  routing_shadow_mode: false',
+    'routing:',
+    '  reviewer_strategy: adaptive',
+    '  document_round_limit: 2',
+    '  high_risk_document_round_limit: 3',
+    '  maximum_reviewers: 4',
+    '  max_expansion_waves: 1',
+  ].join('\n');
+  const parsed = parseReviewPolicy(source);
+  assert.deepEqual(parsed.warnings, []);
+  assert.equal(parsed.policy.features.adaptive_reviewer_routing, true);
+  assert.equal(parsed.policy.routing.reviewer_strategy, 'adaptive');
+  assert.equal(parsed.policy.routing.document_round_limit, 2);
+  assert.equal(parsed.policy.routing.high_risk_document_round_limit, 3);
+  assert.equal(parsed.policy.routing.maximum_reviewers, 4);
+  assert.equal(parsed.policy.routing.max_expansion_waves, 1);
+
+  const merged = mergeRoutingConfig({
+    defaults: parsed.policy,
+    cli: { reviewer_strategy: 'static' },
+  });
+  assert.equal(merged.routing.reviewer_strategy, 'static');
+});
+
+test('adaptive policy enums, booleans, and convergence limits fail closed on malformed values', async () => {
+  const { parseReviewPolicy } = await import(policyUrl);
+  for (const [body, message] of [
+    ['features:\\n  adaptive_reviewer_routing: yes', /must be boolean/],
+    ['routing:\\n  reviewer_strategy: random', /adaptive or static/],
+    ['routing:\\n  document_round_limit: 0', /positive integer/],
+    ['routing:\\n  high_risk_document_round_limit: 2.5', /positive integer/],
+    ['routing:\\n  maximum_reviewers: 5', /1 through 4/],
+    ['routing:\\n  max_expansion_waves: 2', /must be 0 or 1/],
+  ]) {
+    assert.throws(
+      () => parseReviewPolicy(`schema_version: 2\n${body.replaceAll('\\n', '\n')}\n`),
+      message,
+    );
+  }
 });

@@ -30,8 +30,80 @@ function classify(result) {
   return 'success';
 }
 
-function publishResult(outputFile, result, status) {
-  atomicWriteFile(outputFile, result.stdout, { mode: 0o600 });
+const ADVERSARIAL_FINDING_PATTERN = /^- \[(critical|high|warning|medium|info|low)\]\s+(.+)$/gmu;
+const CLEAN_ADVERSARIAL_VERDICT = /^(?:clean|no[- ]issues?|pass(?:ed)?|ok|approve(?:d)?)\b/iu;
+const BLOCKING_ADVERSARIAL_VERDICT = /\b(?:needs-attention|request.?changes|concern|block(?:ed)?|reject(?:ed)?|fail(?:ed)?|unsafe)\b/iu;
+
+function normalizedSeverity(value) {
+  if (value === 'critical' || value === 'high') return 'critical';
+  if (value === 'warning' || value === 'medium') return 'warning';
+  return 'info';
+}
+
+export function normalizeAdversarialReport(output, date = new Date()) {
+  if (typeof output !== 'string' || !/^# Codex Adversarial Review\s*$/mu.test(output)) return null;
+  const verdictLine = /^Verdict:\s*(.+?)\s*$/mu.exec(output)?.[1]?.toLowerCase() ?? '';
+  if (verdictLine.length === 0
+    || !/^Target:\s*\S.+$/mu.test(output)
+    || !/^Findings:\s*$/mu.test(output)) return null;
+  const findings = [...output.matchAll(ADVERSARIAL_FINDING_PATTERN)].map((match) => ({
+    severity: normalizedSeverity(match[1].toLowerCase()),
+    title: match[2].trim(),
+  }));
+  const counts = findings.reduce(
+    (result, finding) => ({ ...result, [finding.severity]: result[finding.severity] + 1 }),
+    { critical: 0, warning: 0, info: 0 },
+  );
+  const clean = CLEAN_ADVERSARIAL_VERDICT.test(verdictLine);
+  const attention = BLOCKING_ADVERSARIAL_VERDICT.test(verdictLine);
+  if (clean === attention) return null;
+  const blockingFindings = counts.critical + counts.warning;
+  if ((attention && blockingFindings === 0) || (clean && blockingFindings > 0)) return null;
+  const verdict = counts.critical > 0
+    ? 'REQUEST_CHANGES'
+    : counts.warning > 0
+      ? 'CONCERN'
+      : 'APPROVE';
+  const day = [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+  const section = (severity, icon, label) => {
+    const matching = findings.filter((finding) => finding.severity === severity);
+    return [
+      `### ${icon} ${label}`,
+      '',
+      ...(matching.length > 0
+        ? matching.map((finding) => `- ${finding.title}`)
+        : ['없음.']),
+      '',
+    ];
+  };
+  const indentedOriginal = output.trimEnd().split(/\r?\n/u).map((line) => `    ${line}`).join('\n');
+  return [
+    `# Deep Review Report — ${day}`,
+    '',
+    '## Summary',
+    '',
+    `- **Verdict**: ${verdict}`,
+    '- **Review Mode**: 1-way (codex-adversarial)',
+    `- **Issues**: 🔴 ${counts.critical}건, 🟡 ${counts.warning}건, ℹ️ ${counts.info}건`,
+    '',
+    '## Code Review',
+    '',
+    ...section('critical', '🔴', 'Critical'),
+    ...section('warning', '🟡', 'Warning'),
+    ...section('info', 'ℹ️', 'Info'),
+    '## Original Adapter Output',
+    '',
+    indentedOriginal,
+    '',
+  ].join('\n');
+}
+
+function publishResult(outputFile, result, status, output = result.stdout) {
+  atomicWriteFile(outputFile, output, { mode: 0o600 });
   atomicWriteFile(`${outputFile}.status`, `${status}\n`, { encoding: 'utf8', mode: 0o600 });
   const lines = result.stderr.toString('utf8').split(/\r?\n/u).filter(Boolean).slice(-5);
   atomicWriteFile(
@@ -81,13 +153,20 @@ export async function runCodexReviewer(options = {}) {
       input,
       timeoutMs: timeoutSeconds * 1000,
     });
-    const status = classify(processResult);
-    publishResult(outputFile, processResult, status);
+    let status = classify(processResult);
+    const rawStdout = processResult.stdout.toString('utf8');
+    const normalized = status === 'success' && kind === 'adversarial'
+      ? normalizeAdversarialReport(rawStdout)
+      : null;
+    if (status === 'success' && kind === 'adversarial' && normalized === null) status = 'failed';
+    const published = normalized === null ? processResult.stdout : Buffer.from(normalized, 'utf8');
+    publishResult(outputFile, processResult, status, published);
     return {
       status,
       code: processResult.code,
       timedOut: processResult.timedOut,
-      stdout: processResult.stdout.toString('utf8'),
+      stdout: published.toString('utf8'),
+      raw_stdout: rawStdout,
       stderr: processResult.stderr.toString('utf8'),
       outputFile,
     };

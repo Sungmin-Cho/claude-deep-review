@@ -53,6 +53,8 @@ Claude Code 슬래시 커맨드와 Codex 스킬은 동일한 라우트 문법을
 | `/deep-review-loop [--max=N]` | 리뷰 ↔ 대응을 수렴까지 자동 반복 (`user-invocable` 스킬이기도 함 — Codex CLI / SDK 진입용 `Skill({ skill: "deep-review:deep-review-loop" })`) |
 | `/deep-review-loop --ultracode --codex` | ultracode 1회(라운드 1) + codex 매 라운드 통합 루프 |
 | `/deep-review-loop --session-doc` | 세션당 하나의 통합 리뷰 문서를 유지하며 매 라운드 in-place 재렌더 (라운드별 리포트는 그대로) |
+| `/deep-review --reviewer-strategy static` | adaptive 선택 대신 eligible reviewer set 고정 |
+| `/deep-review --readiness-receipt PATH` | 구현 리뷰를 검증된 문서 readiness receipt에 연결 |
 | `/deep-review --dry-run` / `--explain-routing` | 리뷰어 실행 없이 리뷰 대상을 분류하고 capability-aware model/effort 계획 출력 (artifact-aware routing Phase 2) |
 | `/deep-review init` | 프로젝트별 리뷰 규칙 대화형 초기화 |
 
@@ -63,24 +65,52 @@ Claude Code 슬래시 커맨드와 Codex 스킬은 동일한 라우트 문법을
 | `$deep-review:deep-review` | `/deep-review`와 동일한 플래그·합성 규칙으로 현재 변경사항 리뷰 |
 | `$deep-review:deep-review --respond [REPORT_PATH]` | 증거 기반 대응 프로토콜 실행 |
 | `$deep-review:deep-review-loop [--max=N]` | 수렴할 때까지 리뷰와 대응 반복 |
+| `$deep-review:deep-review --readiness-receipt PATH` | 문서 receipt를 검증하고 이월 acceptance evidence 강제 |
 
 **합성 리뷰어 플래그**:
 
 - `--ultracode` — 6개 집중 Claude reviewer context를 단일 "Claude(ultracode)" 보이스로 collapse하며, fan-out 불가 시 하나의 네이티브 Claude 브리지로 명시적으로 degrade.
 - `--codex` / `--no-codex` / `--no-opus` / `--no-agy`, 슈가 `--codex-only`(= `--codex --no-opus --no-agy`).
 - `/deep-review-loop --ultracode --codex`: ultracode 1회(라운드 1) + codex 매 라운드.
-- 무플래그 시 기존 동작 100% 유지.
+- 단발 리뷰와 loop 모두 adaptive reviewer routing과 automatic model
+  routing이 기본 활성화됩니다. `--reviewer-strategy static`은 eligible set을
+  고정하고, `routing_shadow_mode: true`는 adaptive plan을 기록만 합니다.
+  둘을 함께 사용하면 2.0 이전 dispatch 호환 동작을 얻습니다.
 - `/deep-review-loop` 수렴은 결정적입니다: 각 라운드의 finding을 `compare-rounds`로 비교하며(자연어 반복 판정이 아닌 identity 매칭), 정체된 라운드는 마지막으로 신뢰할 수 있는 verdict로 정지합니다.
 - 루프는 라운드 사이에 `--prior-rounds-file` advisory 컨텍스트를 명시적으로 전달합니다(파일 존재 여부로 자동 소비하지 않음) — 리뷰어가 이전 발견·반박 항목을 재검증할 수 있습니다.
-- 최종 루프 요약에는 `rounds_saved` 지표가 포함됩니다.
+- 순수 문서 loop는 `READY_FOR_IMPLEMENTATION` gate를 사용합니다.
+  low/medium은 2라운드, high/critical은 3라운드가 기본 cap이며 미해결
+  문서는 `DOCUMENT_BLOCKED`로 종료합니다. 구현 loop 기본값은 5입니다.
+- READY 문서는 `.deep-review/receipts/document-readiness/` 아래에 sealed
+  content-addressed receipt를 생성합니다. 이후 구현 리뷰는
+  `--readiness-receipt PATH`로 명시 연결하며 stale/tampered/out-of-repo/
+  symlink receipt는 fail-closed하고 미검증 이월 evidence는 APPROVE를 막습니다.
+- 최종 loop summary는 절약한 라운드/reviewer call, 라운드별
+  assignment/model/effort, expansion, readiness, receipt, stop reason을 보고합니다.
 - `--session-doc`(루프 전용, opt-in)은 loop id로 키잉된 통합 세션 문서 하나를 유지합니다 — 현재 verdict, 라운드별 히스토리, open-vs-resolved 롤업, 종료 후 최종 요약 — 라운드별 리포트와 그 fail-closed 계상은 그대로 유지됩니다.
 - `--dry-run` / `--explain-routing`(리뷰 전용)은 artifact 분류, capability-aware 라우팅 계획, provenance를 출력하고 리뷰어 실행 전에 정지합니다.
 - `--routing <auto|fast|balanced|quality>`은 라우팅 정책을 선택합니다. 반복 가능한 `--model <provider>=<model>` / `--effort <provider>=<effort>`은 provider override를, `--reviewer-model <reviewer>=<model>` / `--reviewer-effort <reviewer>=<effort>`은 canonical reviewer override를 설정합니다.
 - `--allow-fallback`은 명시한 model 또는 effort를 적용할 수 없을 때 보이는 fallback을 허용합니다. 이 플래그가 없으면 지원되지 않는 명시 요청은 dispatch 전에 fail-closed합니다.
 - `--allow-classifier`는 dry-run/explain에서 모호한 artifact에 semantic 분류를 사용할 수 있게 합니다. 제한된 artifact 내용은 untrusted data로 취급해 stdin으로만 전달하며, secret-like 내용은 외부로 보내지 않고 결정적 분류로 fallback합니다.
-- 무플래그 라우팅은 shadow-first입니다. 계획은 report provenance에 기록하지만 reviewer dispatch 인자는 byte-identical하게 유지합니다. 자동 model 라우팅은 프로젝트 정책이 `automatic_model_routing`을 활성화하고 `routing_shadow_mode: false`로 설정한 경우에만 적용합니다.
+- `--no-*`, `--codex`, `--codex-only`, `--ultracode`는 hard
+  eligibility/required-assignment 제약입니다. reviewer-level override는 해당
+  reviewer를 필수화하며 provider-level override는 선택된 reviewer에만 적용됩니다.
 
 팀 라우팅 정책은 `.deep-review/review-policy.yaml`로 공유할 수 있습니다. 프로젝트가 현재 `.deep-review/`를 무시한다면 아래 두 규칙으로 디렉터리 규칙을 교체해야 합니다. Git은 완전히 무시된 디렉터리 아래 파일을 다시 포함할 수 없습니다:
+
+```yaml
+schema_version: 2
+features:
+  adaptive_reviewer_routing: true
+  automatic_model_routing: true
+  routing_shadow_mode: false
+routing:
+  reviewer_strategy: adaptive
+  document_round_limit: 2
+  high_risk_document_round_limit: 3
+  maximum_reviewers: 4
+  max_expansion_waves: 1
+```
 
 ```gitignore
 .deep-review/*
@@ -94,8 +124,8 @@ deep-review는 매 실행 시 4단계 파이프라인을 수행하며, 선택적
 ```
 Stage 1: Collect      — 환경 감지, diff 수집
 Stage 2: Contract     — Sprint Contract가 있으면 로드
-Stage 3: Deep Review  — 사용 가능한 독립 리뷰어 역할 디스패치
-Stage 4: Verdict      — 결과 합성, APPROVE / CONCERN / REQUEST_CHANGES 판정
+Stage 3: Deep Review  — 독립 reviewer role adaptive 배정 (선택적 1회 확장)
+Stage 4: Verdict      — 1회 최종 합성, verdict와 선택적 문서 readiness 출력
 Stage 5: Respond      — 증거 기반 피드백 대응 (--respond로 진입)
 ```
 

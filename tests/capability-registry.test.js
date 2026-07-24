@@ -39,9 +39,12 @@ test('buildCapabilities emits five distinct protocol 2.0 adapter contracts', asy
   ]);
   for (const item of capabilities) {
     assert.equal(item.protocol_version, '2.0');
-    for (const field of ['provider', 'available', 'roles', 'model_selection', 'effort_selection', 'structured_output', 'read_only_enforcement']) {
+    for (const field of ['provider', 'available', 'roles', 'assignment_roles', 'model_selection', 'effort_selection', 'structured_output', 'read_only_enforcement']) {
       assert.ok(Object.hasOwn(item, field), `${item.adapter_id} missing ${field}`);
     }
+    assert.ok(item.assignment_roles.every((role) => [
+      'standard', 'feasibility', 'traceability', 'adversarial', 'security', 'confirmation',
+    ].includes(role)));
   }
   assert.equal(capabilities[0].available, true);
   assert.equal(capabilities[1].effort_selection.transport, 'flag:--effort');
@@ -49,6 +52,22 @@ test('buildCapabilities emits five distinct protocol 2.0 adapter contracts', asy
   assert.equal(capabilities[3].model_selection.supported, false);
   assert.equal(capabilities[3].effort_selection.supported, false);
   assert.notEqual(capabilities[2].adapter_id, capabilities[3].adapter_id);
+});
+
+test('assignment role support is explicit per adapter capability', async () => {
+  const { buildCapabilities } = await import(registryUrl);
+  const capabilities = buildCapabilities({
+    detected: detected({ codex_plugin: true, agy_cli: true }),
+    hostAssertions: { claudeNativeAgent: true, codexNativeGeneric: true },
+  });
+  const byId = new Map(capabilities.map((item) => [item.adapter_id, item]));
+  assert.ok(byId.get('claude-native-agent').assignment_roles.includes('feasibility'));
+  assert.ok(byId.get('codex-native-generic').assignment_roles.includes('security'));
+  assert.deepEqual(
+    byId.get('codex-companion').assignment_roles,
+    ['standard', 'adversarial'],
+  );
+  assert.ok(byId.get('agy-cli').assignment_roles.includes('traceability'));
 });
 
 // F4: codex-native-generic must fail closed on model overrides — no dispatch
@@ -96,18 +115,18 @@ test('capability cache has protocol 2.0 and invalidates on path, mtime, or versi
   const file = path.join(temp, 'capabilities.json');
   const capabilities = buildCapabilities({ detected: detected() });
   const keys = { claude: { path: '/bin/claude', mtime_ms: 10, version: '1.0.0' } };
-  saveCapabilityCache(file, capabilities, keys);
+  saveCapabilityCache(temp, file, capabilities, keys);
   const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.equal(raw.protocol_version, '2.0');
   assert.deepEqual(
-    loadCapabilityCache(file, keys),
+    loadCapabilityCache(temp, file, keys),
     capabilities.filter((item) => !['claude-native-agent', 'codex-native-generic', 'codex-companion'].includes(item.adapter_id)),
   );
   for (const changed of [
     { claude: { path: '/other/claude', mtime_ms: 10, version: '1.0.0' } },
     { claude: { path: '/bin/claude', mtime_ms: 11, version: '1.0.0' } },
     { claude: { path: '/bin/claude', mtime_ms: 10, version: '1.0.1' } },
-  ]) assert.equal(loadCapabilityCache(file, changed), null);
+  ]) assert.equal(loadCapabilityCache(temp, file, changed), null);
 });
 
 // ---------------------------------------------------------------------------
@@ -125,7 +144,7 @@ test('H8: saveCapabilityCache output contains no codex-companion entry', async (
   const capabilities = buildCapabilities({
     detected: detected({ codex_plugin: true, codex_companion_path: '/plugins/codex-companion.mjs' }),
   });
-  saveCapabilityCache(file, capabilities, {});
+  saveCapabilityCache(temp, file, capabilities, {});
   const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.equal(raw.capabilities.some((item) => item.adapter_id === 'codex-companion'), false);
 });

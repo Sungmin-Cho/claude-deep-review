@@ -31,7 +31,7 @@ function request(overrides = {}) {
 
 test('risk and size classifiers use deterministic high-risk signals and configurable thresholds', async () => {
   const { assessRisk, assessSize } = await import(routerUrl);
-  assert.equal(assessRisk([{ path: 'src/auth/permissions.ts', diff: '+ destructive data operation' }]), 'high');
+  assert.equal(assessRisk([{ path: 'src/auth/permissions.ts', diff: '+ destructive data operation' }]), 'critical');
   assert.equal(assessRisk([{ path: 'docs/readme.md', content: 'typo correction' }]), 'low');
   assert.equal(assessSize({ target_kind: 'code-change', changed_lines: 101 }), 'small');
   assert.equal(assessSize({ target_kind: 'design-document', byte_size: 31 * 1024 }), 'medium');
@@ -82,7 +82,7 @@ test('auto matrix routes kind × risk × size × role with symbolic tiers', asyn
       unit: { target_kind }, risk, size,
       reviewer: { id: 'claude-opus', provider: 'claude', role, adapter_id: 'claude-cli' },
     }));
-    assert.equal(result.protocol_version, '2.0');
+    assert.equal(result.protocol_version, '3.0');
     assert.equal(result.requested.model_tier, tier, target_kind);
     assert.equal(result.requested.effort, effort, target_kind);
   }
@@ -339,20 +339,152 @@ test('H3: buildRoutingPlan honors an additive riskFloor even when artifacts asse
   assert.match(withFloor.routes[0].route_explanation, /\/high\//, 'riskFloor: \'high\' must raise the routed risk even though the artifacts alone assess low');
 });
 
-test('buildRoutingPlan preserves the eligible reviewer set and emits protocol 2.0', async () => {
+test('an unknown non-schema routing.risk field cannot influence risk assessment', async () => {
+  const { buildRoutingPlan } = await import(routerUrl);
+  const plan = buildRoutingPlan({
+    artifacts: [{ target_kind: 'generic-document', path: 'README.md', byte_size: 1000 }],
+    reviewers: [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }],
+    policy: { routing: { policy: 'auto', risk: 'banana' } },
+    overrides: {
+      protocol_version: '2.0',
+      routing_policy: 'auto',
+      allow_fallback: false,
+      providers: {},
+      reviewers: {},
+    },
+    capabilities: [capability()],
+  });
+  assert.equal(plan.risk, 'low');
+});
+
+test('buildRoutingPlan emits protocol 3.0 with adaptive assignments and full candidate provenance', async () => {
   const { buildRoutingPlan, renderRoutingExplanation } = await import(routerUrl);
   const reviewers = [
     { id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' },
     { id: 'agy', provider: 'agy', role: 'standard', adapter_id: 'agy-cli' },
+    { id: 'codex-review', provider: 'codex', role: 'standard', adapter_id: 'codex-native-generic' },
   ];
   const plan = buildRoutingPlan({
     artifacts: [{ target_kind: 'generic-document', path: 'README.md', byte_size: 1000 }],
     reviewers,
     policy: { routing: { policy: 'auto' } },
     overrides: { protocol_version: '2.0', routing_policy: 'auto', allow_fallback: false, providers: {}, reviewers: {} },
-    capabilities: [capability(), capability({ adapter_id: 'agy-cli', provider: 'agy', model_selection: { supported: true, aliases: ['a', 'b', 'c', 'd'], catalog_complete: false, transport: 'config:agy_model' }, effort_selection: { supported: false, levels: [], transport: 'none' } })],
+    capabilities: [
+      capability(),
+      capability({ adapter_id: 'agy-cli', provider: 'agy', model_selection: { supported: true, aliases: ['a', 'b', 'c', 'd'], catalog_complete: false, transport: 'config:agy_model' }, effort_selection: { supported: false, levels: [], transport: 'none' } }),
+      capability({ adapter_id: 'codex-native-generic', provider: 'codex', model_selection: { supported: false, aliases: [], catalog_complete: false, transport: 'none' } }),
+    ],
   });
-  assert.equal(plan.protocol_version, '2.0');
-  assert.deepEqual(plan.routes.map((route) => route.reviewer_id), reviewers.map((reviewer) => reviewer.id));
+  assert.equal(plan.protocol_version, '3.0');
+  assert.equal(plan.reviewer_strategy, 'adaptive');
+  assert.deepEqual(
+    plan.candidate_reviewers.map((route) => route.reviewer_id),
+    ['claude-opus', 'codex-review', 'agy'],
+  );
+  assert.ok(plan.routes.length >= 1);
+  assert.ok(plan.routes.every((route) => route.assignment_role && route.rubric_id && route.wave === 1));
+  const unused = plan.candidate_reviewers.filter((candidate) => (
+    !plan.routes.some((route) => route.reviewer_id === candidate.reviewer_id)
+  ));
+  assert.ok(unused.length >= 1);
+  assert.ok(unused.every((candidate) => candidate.expansion_route_templates
+    .every((route) => route.wave === 2 && route.resolved)));
   assert.match(renderRoutingExplanation(plan), /claude-opus/);
+});
+
+test('reviewer-specific assignment roles narrow a shared companion capability', async () => {
+  const { buildRoutingPlan } = await import(routerUrl);
+  const companion = capability({
+    adapter_id: 'codex-companion',
+    provider: 'codex',
+    assignment_roles: ['standard', 'adversarial'],
+    model_selection: { supported: false, aliases: [], catalog_complete: false, transport: 'none' },
+    effort_selection: { supported: false, levels: [], transport: 'none' },
+  });
+  const plan = buildRoutingPlan({
+    artifacts: [{ target_kind: 'code-change', path: 'src/auth.js', changed_lines: 120, content_risk: 'critical' }],
+    reviewers: [
+      {
+        id: 'codex-review',
+        provider: 'codex',
+        role: 'standard',
+        adapter_id: 'codex-companion',
+        assignment_roles: ['standard'],
+      },
+      {
+        id: 'codex-adversarial',
+        provider: 'codex',
+        role: 'adversarial',
+        adapter_id: 'codex-companion',
+        assignment_roles: ['adversarial'],
+      },
+    ],
+    policy: { routing: { policy: 'auto', maximum_reviewers: 4 } },
+    overrides: {
+      protocol_version: '2.0',
+      routing_policy: 'auto',
+      allow_fallback: false,
+      providers: {},
+      reviewers: {},
+    },
+    capabilities: [companion],
+  });
+
+  const byId = new Map(plan.candidate_reviewers.map((candidate) => [candidate.reviewer_id, candidate]));
+  assert.deepEqual(byId.get('codex-review').assignment_roles, ['standard']);
+  assert.deepEqual(byId.get('codex-adversarial').assignment_roles, ['adversarial']);
+  const allRoutedAssignments = [
+    ...plan.routes,
+    ...[...byId.values()].flatMap((candidate) => candidate.expansion_route_templates || []),
+  ];
+  assert.ok(
+    allRoutedAssignments.every((route) => ['standard', 'adversarial'].includes(route.assignment_role)),
+    'the shared adapter must not advertise feasibility, traceability, security, or confirmation routes',
+  );
+});
+
+test('maximum_reviewers below the ideal floor still emits a leaf-valid bounded plan', async () => {
+  const { buildRoutingPlan } = await import(routerUrl);
+  const plan = buildRoutingPlan({
+    artifacts: [{ target_kind: 'code-change', path: 'src/a.js', changed_lines: 1 }],
+    reviewers: [{ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' }],
+    policy: { routing: { policy: 'auto', maximum_reviewers: 1 } },
+    overrides: { protocol_version: '2.0', routing_policy: 'auto', allow_fallback: false, providers: {}, reviewers: {} },
+    capabilities: [capability()],
+  });
+  assert.equal(plan.minimum_reviewers, 1);
+  assert.equal(plan.maximum_reviewers, 1);
+  assert.equal(plan.planned_reviewers, 1);
+  assert.equal(plan.provider_family_minimum, 1);
+  assert.equal(plan.confidence_floor, 'CONCERN');
+});
+
+test('an unselected expansion candidate cannot fail the initial plan through its provider override', async () => {
+  const { buildRoutingPlan } = await import(routerUrl);
+  const reviewers = [
+    { id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' },
+    { id: 'codex-review', provider: 'codex', role: 'standard', adapter_id: 'codex-native-generic' },
+    { id: 'agy', provider: 'agy', role: 'standard', adapter_id: 'agy-cli' },
+  ];
+  const plan = buildRoutingPlan({
+    artifacts: [{ target_kind: 'code-change', path: 'src/a.js', changed_lines: 1 }],
+    reviewers,
+    policy: { routing: { policy: 'auto', maximum_reviewers: 4 } },
+    overrides: {
+      protocol_version: '2.0',
+      routing_policy: 'auto',
+      allow_fallback: false,
+      providers: { agy: { model: 'unsupported-explicit-model' } },
+      reviewers: {},
+    },
+    capabilities: [
+      capability(),
+      capability({ adapter_id: 'codex-native-generic', provider: 'codex', model_selection: { supported: false, aliases: [], catalog_complete: false, transport: 'none' } }),
+      capability({ adapter_id: 'agy-cli', provider: 'agy', model_selection: { supported: true, aliases: ['allowed'], catalog_complete: true, transport: 'flag:--model' } }),
+    ],
+  });
+  assert.equal(plan.routes.some((route) => route.reviewer_id === 'agy'), false);
+  const agy = plan.candidate_reviewers.find((candidate) => candidate.reviewer_id === 'agy');
+  assert.equal(agy.expansion_route_templates.length, 0);
+  assert.ok(agy.expansion_route_errors.length > 0);
 });

@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runProcess } from './process.mjs';
-import { atomicWriteFile } from './runtime-context.mjs';
+import { readContainedFile, writeContainedFile } from './runtime-context.mjs';
+import { ASSIGNMENT_ROLES } from './assignment-rubrics.mjs';
 
 export const CAPABILITY_PROTOCOL_VERSION = '2.0';
 
@@ -35,6 +36,7 @@ export function detectEffortTransport(help, probeSucceeded = true) {
 }
 
 function baseCapability({ adapterId, provider, available, version = '', invocationModes, roles = REVIEW_ROLES,
+  assignmentRoles = ASSIGNMENT_ROLES,
   modelSelection, effortSelection, structuredOutput = true, background = true,
   readOnlyEnforcement = 'process-contract', customPrompt = true, inlinePayload = true, repoRead = true }) {
   return {
@@ -46,6 +48,7 @@ function baseCapability({ adapterId, provider, available, version = '', invocati
     invocation_modes: invocationModes,
     target_kinds: [...ALL_TARGETS],
     roles: [...roles],
+    assignment_roles: [...assignmentRoles],
     model_selection: modelSelection,
     effort_selection: effortSelection,
     structured_output: structuredOutput,
@@ -98,6 +101,7 @@ export function buildCapabilities({ detected = {}, hostAssertions = {}, probes =
     baseCapability({
       adapterId: 'codex-companion', provider: 'codex', available: Boolean(detected.codex_plugin),
       version: '', invocationModes: ['code-review'], roles: ['standard', 'adversarial'],
+      assignmentRoles: ['standard', 'adversarial'],
       modelSelection: { supported: false, aliases: [], catalog_complete: false, transport: 'none' },
       effortSelection: { supported: false, levels: [], transport: 'none' },
       structuredOutput: false, readOnlyEnforcement: 'companion-read-only', inlinePayload: false,
@@ -179,21 +183,23 @@ function sameKeys(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-export function loadCapabilityCache(filePath, invalidationKeys) {
-  if (!existsSync(filePath)) return null;
+export function loadCapabilityCache(repoRoot, filePath, invalidationKeys) {
   try {
-    const cache = JSON.parse(readFileSync(filePath, 'utf8'));
+    const cache = JSON.parse(readContainedFile(repoRoot, filePath).toString('utf8'));
     if (cache.protocol_version !== CAPABILITY_PROTOCOL_VERSION
         || !Array.isArray(cache.capabilities)
         || !sameKeys(cache.invalidation_keys, invalidationKeys)) return null;
-    if (cache.capabilities.some((item) => item.protocol_version !== CAPABILITY_PROTOCOL_VERSION)) return null;
+    if (cache.capabilities.some((item) => (
+      item.protocol_version !== CAPABILITY_PROTOCOL_VERSION
+      || !Array.isArray(item.assignment_roles)
+    ))) return null;
     return cache.capabilities;
   } catch {
     return null;
   }
 }
 
-export function saveCapabilityCache(filePath, capabilities, invalidationKeys) {
+export function saveCapabilityCache(repoRoot, filePath, capabilities, invalidationKeys) {
   if (!Array.isArray(capabilities)) throw new TypeError('capabilities must be an array');
   // H8: codex-companion availability derives purely from detected.codex_plugin
   // (a different file than the keyed claude/codex/agy CLI paths+mtime), so a
@@ -210,6 +216,9 @@ export function saveCapabilityCache(filePath, capabilities, invalidationKeys) {
     invalidation_keys: invalidationKeys,
     capabilities: cacheable,
   };
-  atomicWriteFile(filePath, `${JSON.stringify(document, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  writeContainedFile(repoRoot, filePath, `${JSON.stringify(document, null, 2)}\n`, {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
   return filePath;
 }

@@ -162,13 +162,13 @@ test('both workflows cover every release-relevant path class', () => {
   }
 });
 
-test('release version is exactly 1.15.0 on all three package surfaces', () => {
+test('release version is exactly 2.0.0 on all three package surfaces', () => {
   const versions = [
     JSON.parse(read('.claude-plugin/plugin.json')).version,
     JSON.parse(read('.codex-plugin/plugin.json')).version,
     JSON.parse(read('package.json')).version,
   ];
-  assert.deepEqual(versions, ['1.15.0', '1.15.0', '1.15.0']);
+  assert.deepEqual(versions, ['2.0.0', '2.0.0', '2.0.0']);
 });
 
 test('evergreen bilingual READMEs advertise both native hosts and portable runtime', () => {
@@ -287,6 +287,36 @@ test('bilingual 1.15.0 release surfaces document artifact-aware routing Phase 2'
     assert.match(source, /^\.deep-review\/\*$/mu);
     assert.match(source, /^!\.deep-review\/review-policy\.yaml$/mu);
     assert.match(source, /shadow/iu);
+  }
+});
+
+test('bilingual 2.0.0 release surfaces adaptive convergence and readiness receipts', () => {
+  const english = releaseBlockAnyDate(read('CHANGELOG.md'), '2.0.0');
+  const korean = releaseBlockAnyDate(read('CHANGELOG.ko.md'), '2.0.0');
+  assert.deepEqual(
+    ['### Added', '### Changed', '### Security'].map((heading) => bulletCount(english, heading)),
+    ['### 추가', '### 변경', '### 보안'].map((heading) => bulletCount(korean, heading)),
+  );
+  for (const block of [english, korean]) {
+    for (const anchor of [
+      /adaptive/iu,
+      /protocol `3\.0`/iu,
+      /READY_FOR_IMPLEMENTATION/iu,
+      /DOCUMENT_BLOCKED/iu,
+      /readiness-receipt/iu,
+      /static/iu,
+      /shadow/iu,
+      /critical/iu,
+    ]) assert.match(block, anchor);
+  }
+
+  for (const source of [read('README.md'), read('README.ko.md')]) {
+    assert.match(source, /--reviewer-strategy static/u);
+    assert.match(source, /--readiness-receipt PATH/u);
+    assert.match(source, /document_round_limit: 2/u);
+    assert.match(source, /high_risk_document_round_limit: 3/u);
+    assert.match(source, /READY_FOR_IMPLEMENTATION/u);
+    assert.match(source, /DOCUMENT_BLOCKED/u);
   }
 });
 

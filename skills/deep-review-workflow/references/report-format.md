@@ -32,9 +32,11 @@
 
 ## Routing Plan
 
-For every eligible reviewer, record symbolic tier, requested and resolved model
-and effort, route source, shadow/applied mode, and any fallback reason. Preserve
-the eligible reviewer set; routing never silently adds or removes a reviewer.
+Record protocol `3.0`, artifact phase/risk/progress, the full candidate set,
+reviewer floor and cap, and every selected route's canonical reviewer id,
+assignment role, rubric id, wave, required flag, requested/resolved model and
+effort, selection reason, shadow/applied mode, and fallback reason. Assignment
+roles never add voices. Record a single expansion and its trigger when present.
 
 ## Provenance
 
@@ -43,6 +45,39 @@ adapter result fields `requested_*`, `resolved_*`, `applied_*`, and
 `verification_status`. When a transmitted request cannot be observed in provider
 output, render `requested-but-unverified`; never use that label for a request
 that was omitted. Include fallback authorization, applied substitute, and reason.
+
+For pure document scope, every trusted reviewer report must emit the literal
+heading `## Artifact Gate` exactly once. The `json` fence must be on the
+immediately following line with no intervening prose:
+
+## Artifact Gate
+```json
+{
+  "schema_version": 1,
+  "findings": [
+    {
+      "id": "DOC-1",
+      "severity": "warning",
+      "stage": "implementation_verification",
+      "acceptance_evidence": [
+        "named final implementation test or observable rollback evidence"
+      ]
+    }
+  ]
+}
+```
+
+`severity` is `critical|warning|info`; `stage` is
+`pre_implementation|implementation_verification|advisory`. Every Critical is
+`pre_implementation`. Critical/Warning items require non-empty objective
+acceptance evidence, and JSON counts must equal the Summary Issues counts.
+Document feasibility/traceability/rollback/testability are evaluated without
+applying the code-only rule “missing implementation tests = Critical”.
+
+After synthesis, report `READY_FOR_IMPLEMENTATION` plus the sealed receipt path,
+or `DOCUMENT_BLOCKED` plus blocker ids/reviewer-floor reasons. Readiness is
+separate from verdict: a Warning-only CONCERN may be READY when every Warning
+is deferred to verifiable implementation evidence.
 
 ## Code Review
 ### 🔴 Critical

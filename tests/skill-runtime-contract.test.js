@@ -163,12 +163,36 @@ test('public review skill documents every Phase 2 routing override', () => {
     '--reviewer-model',
     '--effort',
     '--routing',
+    '--reviewer-strategy',
+    '--readiness-receipt',
     '--allow-fallback',
     '--allow-classifier',
   ]) assert.match(hint, new RegExp(flag));
   assert.match(publicSkill, /--allow-classifier.{0,240}semantic/isu);
   assert.match(publicSkill, /review-policy\.yaml/u);
   assert.match(publicSkill, /shadow/iu);
+  assert.match(publicSkill, /Adaptive reviewer routing and automatic model routing are enabled by default/u);
+});
+
+test('loop public contract forwards routing controls and codifies document readiness caps', () => {
+  const loop = read('skills/deep-review-loop/SKILL.md');
+  const hint = loop.match(/^argument-hint: (.+)$/mu)?.[1] ?? '';
+  for (const flag of [
+    '--reviewer-strategy',
+    '--readiness-receipt',
+    '--routing',
+    '--model',
+    '--effort',
+    '--reviewer-model',
+    '--reviewer-effort',
+    '--allow-fallback',
+    '--allow-classifier',
+  ]) assert.match(hint, new RegExp(flag));
+  assert.match(loop, /low\/medium document scope to 2/u);
+  assert.match(loop, /high\/critical document scope to 3/u);
+  assert.match(loop, /READY_FOR_IMPLEMENTATION/u);
+  assert.match(loop, /DOCUMENT_BLOCKED/u);
+  assert.match(loop, /routing-metadata-file/u);
 });
 
 test('supported runtime references use Node/direct tools and the runtime-root contract', () => {
