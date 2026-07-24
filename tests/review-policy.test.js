@@ -82,7 +82,7 @@ test('loaders resolve project, XDG, and Windows APPDATA config locations', async
   const xdg = path.join(temp, 'xdg');
   fs.mkdirSync(path.join(xdg, 'deep-review'), { recursive: true });
   fs.writeFileSync(path.join(xdg, 'deep-review', 'config.yaml'), 'schema_version: 2\nfeatures:\n  routing_shadow_mode: true\n');
-  assert.equal(loadUserConfig({ XDG_CONFIG_HOME: xdg }).policy.features.routing_shadow_mode, true);
+  assert.equal(loadUserConfig({ XDG_CONFIG_HOME: xdg }, 'linux').policy.features.routing_shadow_mode, true);
   assert.equal(userConfigPath({ APPDATA: 'C:\\Users\\Me\\AppData\\Roaming' }, 'win32'), path.win32.join('C:\\Users\\Me\\AppData\\Roaming', 'deep-review', 'config.yaml'));
 });
 

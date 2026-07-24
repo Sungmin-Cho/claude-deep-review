@@ -100,9 +100,10 @@ test('low-risk warning-only plan becomes READY and emits a sealed content-addres
     generatedAt: '2026-07-24T00:00:00.000Z',
   });
   assert.equal(created.status, 'READY_FOR_IMPLEMENTATION');
-  assert.match(created.receipt_path, new RegExp(
-    `${path.sep}\\.deep-review${path.sep}receipts${path.sep}document-readiness${path.sep}[a-f0-9]{64}-[a-f0-9]{64}\\.json$`,
-  ));
+  assert.match(
+    created.receipt_path.replaceAll('\\', '/'),
+    /\/\.deep-review\/receipts\/document-readiness\/[a-f0-9]{64}-[a-f0-9]{64}\.json$/,
+  );
   const onDisk = JSON.parse(fs.readFileSync(created.receipt_path, 'utf8'));
   assert.equal(
     path.basename(created.receipt_path, '.json'),

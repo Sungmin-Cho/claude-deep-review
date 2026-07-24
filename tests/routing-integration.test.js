@@ -105,8 +105,13 @@ test('I4: omitting --host-assertions-json leaves adapter selection unchanged (cl
   fs.writeFileSync(files, 'notes.md\0');
 
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-fake-claude-bin-'));
-  const claudeScript = path.join(binDir, 'claude');
-  fs.writeFileSync(claudeScript, '#!/bin/sh\necho "Claude Code v9.9.9"\n');
+  const claudeScript = path.join(binDir, process.platform === 'win32' ? 'claude.cmd' : 'claude');
+  fs.writeFileSync(
+    claudeScript,
+    process.platform === 'win32'
+      ? '@echo off\r\necho Claude Code v9.9.9\r\n'
+      : '#!/bin/sh\necho "Claude Code v9.9.9"\n',
+  );
   if (process.platform !== 'win32') fs.chmodSync(claudeScript, 0o755);
 
   const result = await runClassifyArtifactsCli(
