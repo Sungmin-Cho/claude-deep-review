@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   openSync,
+  readFileSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -160,6 +161,42 @@ export function writeContainedFile(repoRoot, destPath, data, options = {}) {
   mkdirSync(dirname(destination), { recursive: true });
   atomicWriteFile(destination, data, options);
   return destination;
+}
+
+/**
+ * Read a repository-owned regular file without following any symlinked path
+ * component. Missing files and containment failures are intentionally
+ * distinguishable only through the thrown filesystem/error result so callers
+ * such as best-effort caches can fail open without probing external paths.
+ */
+export function readContainedFile(repoRoot, sourcePath) {
+  const repoRootResolved = resolve(repoRoot);
+  const repoRealRoot = realpathSync(repoRootResolved);
+  const source = resolve(sourcePath);
+  const relFromRoot = relative(repoRootResolved, source);
+  if (relFromRoot === '' || relFromRoot.startsWith('..') || isAbsolute(relFromRoot)) {
+    throw new Error(`refusing to read outside the repository root: ${source}`);
+  }
+  const segments = relFromRoot.split(sep).filter(Boolean);
+  let current = repoRootResolved;
+  for (const segment of segments) {
+    current = join(current, segment);
+    const stat = lstatSync(current);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`refusing to read through symlinked path component: ${current}`);
+    }
+    if (current !== source && !stat.isDirectory()) {
+      throw new Error(`refusing to read through a non-directory path component: ${current}`);
+    }
+    if (current === source && !stat.isFile()) {
+      throw new Error(`refusing to read a non-regular file: ${current}`);
+    }
+  }
+  const realSource = realpathSync(source);
+  if (!isContained(repoRealRoot, realSource)) {
+    throw new Error(`refusing to read a path that escapes the repository root: ${source}`);
+  }
+  return readFileSync(source);
 }
 
 export function makeSecureTempPath(prefix, suffix = '') {

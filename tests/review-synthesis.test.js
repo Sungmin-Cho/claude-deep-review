@@ -1,0 +1,885 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const { mkdtempSync, writeFileSync } = require('node:fs');
+const { tmpdir } = require('node:os');
+const { pathToFileURL } = require('node:url');
+
+const root = path.resolve(__dirname, '..');
+const synthesisUrl = pathToFileURL(path.join(root, 'hooks/scripts/review-synthesis.mjs')).href;
+
+function attempt(role, { critical = 0, warning = 0, included = true, exclusion = null } = {}) {
+  return {
+    reviewer_id: role,
+    role,
+    output_digest: createHash('sha256').update(`review:${role}`).digest('hex'),
+    included,
+    exclusion,
+    verdict: !included ? null : critical > 0 ? 'REQUEST_CHANGES' : warning > 0 ? 'CONCERN' : 'APPROVE',
+    issues: !included ? null : { critical, warning, info: 0 },
+  };
+}
+
+const candidates = [
+  {
+    reviewer_id: 'claude-opus',
+    provider: 'claude',
+    adapter_id: 'claude-cli',
+    assignment_roles: ['standard', 'feasibility', 'traceability', 'adversarial', 'security', 'confirmation'],
+    last_status: 'success',
+  },
+  {
+    reviewer_id: 'codex-review',
+    provider: 'codex',
+    adapter_id: 'codex-native-generic',
+    assignment_roles: ['standard', 'feasibility', 'traceability', 'security', 'confirmation'],
+    last_status: 'success',
+  },
+  {
+    reviewer_id: 'codex-adversarial',
+    provider: 'codex',
+    adapter_id: 'codex-companion',
+    assignment_roles: ['adversarial', 'security', 'confirmation'],
+    last_status: 'success',
+  },
+  {
+    reviewer_id: 'agy',
+    provider: 'agy',
+    adapter_id: 'agy-cli',
+    assignment_roles: ['standard', 'traceability', 'adversarial', 'security', 'confirmation'],
+    last_status: 'success',
+    expansion_route_templates: ['standard', 'traceability', 'adversarial', 'security', 'confirmation']
+      .map((assignmentRole) => ({
+        reviewer_id: 'agy',
+        provider: 'agy',
+        adapter_id: 'agy-cli',
+        assignment_role: assignmentRole,
+        rubric_id: `${assignmentRole}-v1`,
+        wave: 2,
+        required: false,
+        selection_reason: 'same-round expansion route template',
+        resolved: { model: null, effort: 'high' },
+      })),
+  },
+];
+
+function routingPlan(overrides = {}) {
+  const plan = {
+    protocol_version: '3.0',
+    artifact_phase: 'implementation',
+    risk: 'low',
+    reviewer_strategy: 'adaptive',
+    shadow_mode: false,
+    progress: 'initial',
+    minimum_reviewers: 2,
+    planned_reviewers: 2,
+    provider_family_minimum: 2,
+    maximum_reviewers: 4,
+    max_expansion_waves: 1,
+    initial_reviewer_ids: ['claude-opus', 'codex-review'],
+    required_reviewer_ids: [],
+    candidate_reviewers: candidates,
+    routes: [
+      {
+        reviewer_id: 'claude-opus', provider: 'claude', adapter_id: 'claude-cli',
+        assignment_role: 'standard', rubric_id: 'standard-v1', wave: 1, required: false,
+        selection_reason: 'initial standard route', resolved: { model: null, effort: 'high' },
+      },
+      {
+        reviewer_id: 'codex-review', provider: 'codex', adapter_id: 'codex-native-generic',
+        assignment_role: 'traceability', rubric_id: 'traceability-v1', wave: 1, required: false,
+        selection_reason: 'initial traceability route', resolved: { model: null, effort: 'high' },
+      },
+    ],
+    ...overrides,
+  };
+  if (Object.hasOwn(overrides, 'routes')
+      && !Object.hasOwn(overrides, 'initial_reviewer_ids')) {
+    plan.initial_reviewer_ids = plan.routes
+      .filter((route) => route.wave === 1)
+      .map((route) => route.reviewer_id);
+  }
+  if (Object.hasOwn(overrides, 'routes')
+      && !Object.hasOwn(overrides, 'required_reviewer_ids')) {
+    plan.required_reviewer_ids = plan.routes
+      .filter((route) => route.wave === 1 && route.required === true)
+      .map((route) => route.reviewer_id);
+  }
+  return plan;
+}
+
+test('split warning requests exactly one blind expansion reviewer', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const attempts = [attempt('claude-opus', { warning: 1 }), attempt('codex-review')];
+  const result = synthesizeReviewRound({
+    attempts,
+    consensus: { findings: [{ severity: 'warning', roles: ['claude-opus'] }] },
+    routingPlan: routingPlan(),
+    expansionWavesUsed: 0,
+  });
+  assert.equal(result.status, 'needs_expansion');
+  assert.equal(result.needs_expansion, true);
+  assert.deepEqual(result.expansion_reasons, ['split_concern']);
+  assert.equal(result.next_assignment.wave, 2);
+  assert.equal(result.next_assignment.reviewer_id, 'agy');
+  assert.equal(result.next_assignment.independent, true);
+  assert.equal(result.expanded_routing_plan.routes.at(-1).reviewer_id, 'agy');
+  assert.equal(result.verdict, null);
+});
+
+test('single critical, readiness mismatch, and reviewer-floor failure trigger one expansion', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const loneCritical = synthesizeReviewRound({
+    attempts: [attempt('claude-opus', { critical: 1 }), attempt('codex-review')],
+    consensus: { findings: [{ severity: 'critical', roles: ['claude-opus'] }] },
+    routingPlan: routingPlan(),
+  });
+  assert.equal(loneCritical.status, 'needs_expansion');
+  assert.ok(loneCritical.expansion_reasons.includes('single_critical_or_security'));
+
+  const readiness = synthesizeReviewRound({
+    attempts: [attempt('claude-opus'), attempt('codex-review')],
+    consensus: { findings: [] },
+    routingPlan: routingPlan(),
+    readinessMismatch: true,
+  });
+  assert.equal(readiness.status, 'needs_expansion');
+  assert.ok(readiness.expansion_reasons.includes('readiness_mismatch'));
+
+  const timeout = synthesizeReviewRound({
+    attempts: [
+      attempt('claude-opus'),
+      attempt('codex-review', { included: false, exclusion: 'timeout' }),
+    ],
+    routingPlan: routingPlan(),
+  });
+  assert.equal(timeout.status, 'needs_expansion');
+  assert.ok(timeout.expansion_reasons.includes('reviewer_minimum_broken'));
+});
+
+test('a lone finding from a security assignment requests security confirmation', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const plan = routingPlan({
+    routes: [
+      routingPlan().routes[0],
+      {
+        ...routingPlan().routes[1],
+        assignment_role: 'security',
+        rubric_id: 'security-v1',
+      },
+    ],
+  });
+  const result = synthesizeReviewRound({
+    attempts: [attempt('claude-opus'), attempt('codex-review', { warning: 1 })],
+    consensus: { findings: [{ severity: 'warning', roles: ['codex-review'] }] },
+    routingPlan: plan,
+  });
+  assert.equal(result.status, 'needs_expansion');
+  assert.ok(result.expansion_reasons.includes('single_critical_or_security'));
+  assert.equal(result.next_assignment.assignment_role, 'security');
+});
+
+test('expansion skips an earlier candidate without a usable route template', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const unusable = {
+    ...candidates[2],
+    expansion_route_templates: [],
+  };
+  const result = synthesizeReviewRound({
+    attempts: [attempt('claude-opus', { warning: 1 }), attempt('codex-review')],
+    consensus: { findings: [{ severity: 'warning', roles: ['claude-opus'] }] },
+    routingPlan: routingPlan({
+      candidate_reviewers: [candidates[0], candidates[1], unusable, candidates[3]],
+    }),
+  });
+  assert.equal(result.status, 'needs_expansion');
+  assert.equal(result.next_assignment.reviewer_id, 'agy');
+});
+
+test('an unavailable adaptive floor route is atomically replaced by the expansion route', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const result = synthesizeReviewRound({
+    attempts: [
+      attempt('claude-opus'),
+      attempt('codex-review', { included: false, exclusion: 'privacy_declined' }),
+    ],
+    routingPlan: routingPlan(),
+  });
+  assert.equal(result.status, 'needs_expansion');
+  assert.equal(result.next_assignment.reviewer_id, 'agy');
+  assert.equal(result.next_assignment.required, true);
+  assert.equal(
+    result.expanded_routing_plan.routes.some((route) => route.reviewer_id === 'codex-review'),
+    false,
+  );
+  assert.equal(result.expanded_routing_plan.initial_reviewer_ids.includes('codex-review'), false);
+  assert.equal(result.verdict, null);
+});
+
+test('an unavailable explicitly required reviewer fails closed without replacement', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const plan = routingPlan({
+    required_reviewer_ids: ['codex-review'],
+    routes: routingPlan().routes.map((route) => (
+      route.reviewer_id === 'codex-review'
+        ? {
+          ...route,
+          required: true,
+          selection_reason: 'explicit reviewer override requires this canonical reviewer',
+        }
+        : route
+    )),
+  });
+  const result = synthesizeReviewRound({
+    attempts: [
+      attempt('claude-opus'),
+      attempt('codex-review', { included: false, exclusion: 'privacy_declined' }),
+    ],
+    routingPlan: plan,
+  });
+  assert.equal(result.status, 'operational_failure');
+  assert.equal(result.error, 'required_reviewer_unavailable');
+  assert.deepEqual(result.missing_required_reviewers, ['codex-review']);
+  assert.equal(result.verdict, null);
+});
+
+test('an unavailable adaptive route applies the high-risk confidence floor once actual reviewer floors are met', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const plan = routingPlan({
+    risk: 'high',
+    minimum_reviewers: 2,
+    planned_reviewers: 3,
+    provider_family_minimum: 2,
+    initial_reviewer_ids: ['claude-opus', 'codex-review', 'agy'],
+    routes: [
+      ...routingPlan().routes,
+      {
+        reviewer_id: 'agy',
+        provider: 'agy',
+        adapter_id: 'agy-cli',
+        assignment_role: 'security',
+        rubric_id: 'security-v1',
+        wave: 1,
+        required: false,
+        selection_reason: 'initial security route',
+        resolved: { model: null, effort: 'high' },
+      },
+    ],
+  });
+  const result = synthesizeReviewRound({
+    attempts: [
+      attempt('claude-opus', { included: false, exclusion: 'timeout' }),
+      attempt('codex-review'),
+      attempt('agy'),
+    ],
+    consensus: { findings: [] },
+    routingPlan: plan,
+    expansionWavesUsed: 0,
+  });
+
+  assert.equal(result.status, 'reviewed');
+  assert.equal(result.n_actual, 2);
+  assert.equal(result.verdict, 'CONCERN');
+  assert.equal(result.confidence_floor_applied, true);
+  assert.equal(result.phase6_allowed, true);
+});
+
+test('an unavailable required expansion replacement fails closed after the only wave', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const plan = routingPlan({
+    routes: [
+      routingPlan().routes[0],
+      {
+        reviewer_id: 'agy',
+        provider: 'agy',
+        adapter_id: 'agy-cli',
+        assignment_role: 'standard',
+        rubric_id: 'standard-v1',
+        wave: 2,
+        required: true,
+        selection_reason: 'opaque human-readable explanation',
+        resolved: { model: null, effort: 'high' },
+      },
+    ],
+  });
+  const result = synthesizeReviewRound({
+    attempts: [
+      attempt('claude-opus'),
+      attempt('agy', { included: false, exclusion: 'timeout' }),
+    ],
+    routingPlan: plan,
+    expansionWavesUsed: 1,
+  });
+
+  assert.equal(result.status, 'operational_failure');
+  assert.equal(result.error, 'required_reviewer_unavailable');
+  assert.deepEqual(result.missing_required_reviewers, ['agy']);
+  assert.equal(result.verdict, null);
+  assert.equal(result.phase6_allowed, false);
+});
+
+test('a missing wave-2 route cannot bypass a broken reviewer floor by clearing required', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const plan = routingPlan({
+    routes: [
+      routingPlan().routes[0],
+      {
+        reviewer_id: 'agy',
+        provider: 'agy',
+        adapter_id: 'agy-cli',
+        assignment_role: 'standard',
+        rubric_id: 'standard-v1',
+        wave: 2,
+        required: false,
+        selection_reason: 'tampered replacement flag',
+        resolved: { model: null, effort: 'high' },
+      },
+    ],
+  });
+  const result = synthesizeReviewRound({
+    attempts: [
+      attempt('claude-opus'),
+      attempt('agy', { included: false, exclusion: 'timeout' }),
+    ],
+    routingPlan: plan,
+    expansionWavesUsed: 1,
+  });
+
+  assert.equal(result.status, 'operational_failure');
+  assert.equal(result.error, 'required_reviewer_unavailable');
+  assert.deepEqual(result.missing_required_reviewers, ['agy']);
+  assert.equal(result.verdict, null);
+  assert.equal(result.phase6_allowed, false);
+});
+
+test('a missing wave-2 confirmation fails closed even when the base reviewer floor is met', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const plan = routingPlan({
+    routes: [
+      ...routingPlan().routes,
+      {
+        reviewer_id: 'agy',
+        provider: 'agy',
+        adapter_id: 'agy-cli',
+        assignment_role: 'traceability',
+        rubric_id: 'traceability-v1',
+        wave: 2,
+        required: false,
+        selection_reason: 'readiness confirmation',
+        resolved: { model: null, effort: 'high' },
+      },
+    ],
+  });
+  const result = synthesizeReviewRound({
+    attempts: [
+      attempt('claude-opus'),
+      attempt('codex-review'),
+      attempt('agy', { included: false, exclusion: 'timeout' }),
+    ],
+    consensus: { findings: [] },
+    routingPlan: plan,
+    expansionWavesUsed: 1,
+    readinessMismatch: true,
+  });
+
+  assert.equal(result.status, 'operational_failure');
+  assert.equal(result.error, 'required_reviewer_unavailable');
+  assert.deepEqual(result.missing_required_reviewers, ['agy']);
+  assert.equal(result.verdict, null);
+  assert.equal(result.phase6_allowed, false);
+});
+
+test('a materialized wave-2 route is authoritative when the caller wave counter is stale', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const plan = routingPlan({
+    routes: [
+      ...routingPlan().routes,
+      {
+        reviewer_id: 'agy',
+        provider: 'agy',
+        adapter_id: 'agy-cli',
+        assignment_role: 'confirmation',
+        rubric_id: 'confirmation-v1',
+        wave: 2,
+        required: false,
+        selection_reason: 'materialized confirmation',
+        resolved: { model: null, effort: 'high' },
+      },
+    ],
+  });
+  const result = synthesizeReviewRound({
+    attempts: [
+      attempt('claude-opus'),
+      attempt('codex-review'),
+      attempt('agy', { included: false, exclusion: 'timeout' }),
+    ],
+    consensus: { findings: [] },
+    routingPlan: plan,
+    expansionWavesUsed: 0,
+  });
+  assert.equal(result.status, 'operational_failure');
+  assert.equal(result.error, 'required_reviewer_unavailable');
+  assert.equal(result.verdict, null);
+  assert.equal(result.phase6_allowed, false);
+});
+
+test('a positive wave counter without a materialized wave-2 route is malformed', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const result = synthesizeReviewRound({
+    attempts: [attempt('claude-opus'), attempt('codex-review')],
+    consensus: { findings: [] },
+    routingPlan: routingPlan(),
+    expansionWavesUsed: 1,
+  });
+  assert.equal(result.status, 'operational_failure');
+  assert.equal(result.error, 'invalid_routing_plan_identity');
+  assert.equal(result.verdict, null);
+  assert.equal(result.phase6_allowed, false);
+});
+
+test('an initial reviewer cannot be relabeled as a materialized wave-2 voice', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const plan = routingPlan({
+    initial_reviewer_ids: ['claude-opus', 'codex-review'],
+    routes: routingPlan().routes.map((route) => (
+      route.reviewer_id === 'codex-review'
+        ? {
+          ...route,
+          assignment_role: 'confirmation',
+          rubric_id: 'confirmation-v1',
+          wave: 2,
+          selection_reason: 'forged materialized confirmation',
+        }
+        : route
+    )),
+  });
+  const result = synthesizeReviewRound({
+    attempts: [attempt('claude-opus'), attempt('codex-review')],
+    consensus: { findings: [] },
+    routingPlan: plan,
+  });
+  assert.equal(result.status, 'operational_failure');
+  assert.equal(result.error, 'invalid_routing_plan_identity');
+  assert.equal(result.verdict, null);
+  assert.equal(result.phase6_allowed, false);
+});
+
+test('synthesis rejects forged canonical provider identities before counting provider families', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const plan = routingPlan({
+    risk: 'critical',
+    minimum_reviewers: 3,
+    planned_reviewers: 3,
+    provider_family_minimum: 2,
+    candidate_reviewers: [
+      candidates[0],
+      candidates[1],
+      { ...candidates[2], provider: 'agy' },
+    ],
+    routes: [
+      routingPlan().routes[0],
+      routingPlan().routes[1],
+      {
+        reviewer_id: 'codex-adversarial',
+        provider: 'agy',
+        assignment_role: 'security',
+        rubric_id: 'security-v1',
+        wave: 1,
+        required: true,
+      },
+    ],
+  });
+  const result = synthesizeReviewRound({
+    attempts: [
+      attempt('claude-opus'),
+      attempt('codex-review'),
+      attempt('codex-adversarial'),
+    ],
+    consensus: { findings: [] },
+    routingPlan: plan,
+    expansionWavesUsed: 1,
+  });
+
+  assert.equal(result.status, 'operational_failure');
+  assert.equal(result.error, 'invalid_routing_plan_identity');
+  assert.equal(result.verdict, null);
+  assert.equal(result.phase6_allowed, false);
+});
+
+test('synthesis rejects malformed required and wave types before required-route evaluation', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  for (const malformedRoute of [
+    { wave: '2', required: true },
+    { wave: 2, required: 'true' },
+    { wave: 0, required: true },
+  ]) {
+    const plan = routingPlan({
+      routes: [
+        routingPlan().routes[0],
+        {
+          reviewer_id: 'agy',
+          provider: 'agy',
+          assignment_role: 'standard',
+          rubric_id: 'standard-v1',
+          selection_reason: 'opaque',
+          ...malformedRoute,
+        },
+      ],
+    });
+    const result = synthesizeReviewRound({
+      attempts: [attempt('claude-opus')],
+      routingPlan: plan,
+      expansionWavesUsed: 1,
+    });
+    assert.equal(result.status, 'operational_failure');
+    assert.equal(result.error, 'invalid_routing_plan_identity');
+    assert.equal(result.verdict, null);
+    assert.equal(result.phase6_allowed, false);
+  }
+});
+
+test('CLI refuses pre-evaluated attempts without raw fingerprint-bound output', () => {
+  const rootDir = mkdtempSync(path.join(tmpdir(), 'deep-review-synthesis-'));
+  const inputPath = path.join(rootDir, 'attempts.json');
+  writeFileSync(inputPath, JSON.stringify({
+    attempts: [
+      attempt('claude-opus'),
+      attempt('codex-review'),
+      attempt('agy'),
+    ],
+    consensus: { findings: [] },
+    routing_plan: routingPlan({
+      risk: 'critical',
+      minimum_reviewers: 3,
+      planned_reviewers: 3,
+      routes: [
+        ...routingPlan().routes,
+        {
+          reviewer_id: 'agy',
+          provider: 'agy',
+          assignment_role: 'security',
+          rubric_id: 'security-v1',
+          wave: 1,
+          required: false,
+        },
+      ],
+    }),
+  }));
+  const result = spawnSync(process.execPath, [
+    path.join(root, 'hooks/scripts/review-synthesis.mjs'),
+    '--input',
+    inputPath,
+  ], { encoding: 'utf8' });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /require raw output and fingerprint evidence/u);
+});
+
+test('a final wave uses every trusted attempt and refuses a second expansion', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const attempts = [
+    attempt('claude-opus', { warning: 1 }),
+    attempt('codex-review'),
+    attempt('agy'),
+  ];
+  const result = synthesizeReviewRound({
+    attempts,
+    consensus: { findings: [{ severity: 'warning', roles: ['claude-opus'] }] },
+    routingPlan: routingPlan({
+      routes: [
+        ...routingPlan().routes,
+        {
+          reviewer_id: 'agy',
+          provider: 'agy',
+          adapter_id: 'agy-cli',
+          assignment_role: 'adversarial',
+          rubric_id: 'adversarial-v1',
+          wave: 2,
+          required: false,
+          selection_reason: 'materialized adversarial confirmation',
+          resolved: { model: null, effort: 'high' },
+        },
+      ],
+    }),
+    expansionWavesUsed: 1,
+  });
+  assert.equal(result.status, 'reviewed');
+  assert.equal(result.n_actual, 3);
+  assert.equal(result.verdict, 'CONCERN');
+  assert.equal(result.expansion_rejected, 'maximum_expansion_waves_reached');
+  assert.equal(result.needs_expansion, false);
+});
+
+test('expansion candidate exhaustion applies a confidence floor without lowering blocking verdicts', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const noUnused = routingPlan({
+    candidate_reviewers: candidates.slice(0, 1),
+    routes: [routingPlan().routes[0]],
+  });
+  const approval = synthesizeReviewRound({
+    attempts: [attempt('claude-opus')],
+    routingPlan: noUnused,
+  });
+  assert.equal(approval.status, 'reviewed');
+  assert.equal(approval.verdict, 'CONCERN');
+  assert.equal(approval.confidence_floor_applied, true);
+  assert.equal(approval.expansion_rejected, 'no_unused_candidate');
+
+  const blocking = synthesizeReviewRound({
+    attempts: [attempt('claude-opus', { critical: 1 })],
+    routingPlan: noUnused,
+  });
+  assert.equal(blocking.verdict, 'REQUEST_CHANGES');
+  assert.equal(blocking.confidence_floor_applied, false);
+});
+
+test('critical implementation reviewer/family shortfall is an operational failure with no verdict', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const result = synthesizeReviewRound({
+    attempts: [attempt('claude-opus'), attempt('codex-review')],
+    consensus: { findings: [] },
+    routingPlan: routingPlan({
+      risk: 'critical',
+      minimum_reviewers: 3,
+      planned_reviewers: 3,
+      provider_family_minimum: 2,
+      candidate_reviewers: candidates.slice(0, 2),
+    }),
+  });
+  assert.equal(result.status, 'operational_failure');
+  assert.equal(result.n_actual, 2);
+  assert.equal(result.verdict, null);
+  assert.equal(result.phase6_allowed, false);
+  assert.equal(result.error, 'critical_reviewer_floor');
+});
+
+test('N_actual=0 remains fail-closed when no expansion candidate exists', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const result = synthesizeReviewRound({
+    attempts: [attempt('claude-opus', { included: false, exclusion: 'timeout' })],
+    routingPlan: routingPlan({
+      candidate_reviewers: [candidates[0]],
+      routes: [routingPlan().routes[0]],
+    }),
+  });
+  assert.equal(result.status, 'operational_failure');
+  assert.equal(result.n_actual, 0);
+  assert.equal(result.verdict, null);
+  assert.equal(result.phase6_allowed, false);
+});
+
+test('implementation approval is floored when a verified readiness receipt still has deferred evidence', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const result = synthesizeReviewRound({
+    attempts: [attempt('claude-opus'), attempt('codex-review')],
+    consensus: { findings: [] },
+    routingPlan: routingPlan(),
+    deferredAcceptance: {
+      complete: false,
+      pending_finding_ids: ['DOC-1'],
+      verified_finding_ids: [],
+    },
+  });
+  assert.equal(result.status, 'reviewed');
+  assert.equal(result.verdict, 'CONCERN');
+  assert.equal(result.deferred_acceptance_floor, true);
+  assert.deepEqual(result.pending_deferred_finding_ids, ['DOC-1']);
+});
+
+test('shadow mode records but does not apply adaptive expansion or confidence floors', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const result = synthesizeReviewRound({
+    attempts: [attempt('claude-opus')],
+    routingPlan: routingPlan({
+      shadow_mode: true,
+      routes: [routingPlan().routes[0]],
+      candidate_reviewers: candidates.slice(0, 1),
+    }),
+  });
+  assert.equal(result.status, 'reviewed');
+  assert.equal(result.verdict, 'APPROVE');
+  assert.equal(result.needs_expansion, false);
+  assert.equal(result.shadow_mode, true);
+  assert.equal(result.adaptive_plan_applied, false);
+});
+
+test('shadow mode still enforces critical implementation and explicit deferred receipt gates', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const critical = synthesizeReviewRound({
+    attempts: [attempt('claude-opus')],
+    routingPlan: routingPlan({
+      shadow_mode: true,
+      risk: 'critical',
+      routes: [routingPlan().routes[0]],
+      candidate_reviewers: candidates.slice(0, 1),
+    }),
+  });
+  assert.equal(critical.status, 'operational_failure');
+  assert.equal(critical.verdict, null);
+  assert.equal(critical.error, 'critical_reviewer_floor');
+
+  const deferred = synthesizeReviewRound({
+    attempts: [attempt('claude-opus')],
+    routingPlan: routingPlan({
+      shadow_mode: true,
+      routes: [routingPlan().routes[0]],
+      candidate_reviewers: candidates.slice(0, 1),
+    }),
+    deferredAcceptance: {
+      complete: false,
+      pending_finding_ids: ['DOC-1'],
+    },
+  });
+  assert.equal(deferred.verdict, 'CONCERN');
+  assert.equal(deferred.deferred_acceptance_floor, true);
+});
+
+test('protocol-3 synthesis rejects duplicate or non-canonical reviewer voices before N_actual', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const duplicate = synthesizeReviewRound({
+    attempts: [attempt('claude-opus'), attempt('claude-opus')],
+    routingPlan: routingPlan(),
+  });
+  assert.equal(duplicate.status, 'operational_failure');
+  assert.equal(duplicate.verdict, null);
+  assert.equal(duplicate.error, 'invalid_reviewer_identity');
+
+  const forged = synthesizeReviewRound({
+    attempts: [attempt('security-reviewer')],
+    routingPlan: routingPlan(),
+  });
+  assert.equal(forged.status, 'operational_failure');
+  assert.equal(forged.n_actual, 0);
+  assert.equal(forged.error, 'invalid_reviewer_identity');
+});
+
+test('protocol-3 synthesis rejects a canonical reviewer_id and role identity swap', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const result = synthesizeReviewRound({
+    attempts: [
+      { ...attempt('claude-opus'), reviewer_id: 'codex-review' },
+      { ...attempt('codex-review'), reviewer_id: 'claude-opus' },
+    ],
+    consensus: { findings: [] },
+    routingPlan: routingPlan(),
+  });
+  assert.equal(result.status, 'operational_failure');
+  assert.equal(result.error, 'invalid_reviewer_identity');
+  assert.equal(result.verdict, null);
+  assert.equal(result.phase6_allowed, false);
+});
+
+test('protocol-3 synthesis requires reviewer_id on every included attempt', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const withoutReviewerId = { ...attempt('claude-opus') };
+  delete withoutReviewerId.reviewer_id;
+  const result = synthesizeReviewRound({
+    attempts: [withoutReviewerId, attempt('codex-review')],
+    consensus: { findings: [] },
+    routingPlan: routingPlan(),
+  });
+  assert.equal(result.status, 'operational_failure');
+  assert.equal(result.error, 'invalid_reviewer_identity');
+  assert.equal(result.verdict, null);
+  assert.equal(result.phase6_allowed, false);
+});
+
+test('protocol-3 synthesis validates excluded attempt identities before expansion bookkeeping', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const swappedExcludedAttempt = {
+    ...attempt('codex-review', { included: false, exclusion: 'timeout' }),
+    role: 'agy',
+  };
+  const result = synthesizeReviewRound({
+    attempts: [attempt('claude-opus'), swappedExcludedAttempt],
+    routingPlan: routingPlan(),
+  });
+  assert.equal(result.status, 'operational_failure');
+  assert.equal(result.error, 'invalid_reviewer_identity');
+  assert.equal(result.verdict, null);
+  assert.equal(result.phase6_allowed, false);
+});
+
+test('protocol-3 synthesis requires a SHA-256 output digest on every included attempt', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  for (const outputDigest of [undefined, 'not-a-sha256']) {
+    const withoutTrustedDigest = { ...attempt('claude-opus'), output_digest: outputDigest };
+    const result = synthesizeReviewRound({
+      attempts: [withoutTrustedDigest, attempt('codex-review')],
+      consensus: { findings: [] },
+      routingPlan: routingPlan(),
+    });
+    assert.equal(result.status, 'operational_failure');
+    assert.equal(result.error, 'invalid_reviewer_identity');
+    assert.equal(result.verdict, null);
+    assert.equal(result.phase6_allowed, false);
+  }
+});
+
+test('protocol-3 synthesis rejects duplicated raw reviewer output relabeled as another voice', async () => {
+  const { evaluateReviewerAttempt, synthesizeReviewRound } = await import(synthesisUrl);
+  const output = '# Deep Review Report — 2026-07-24\n\n## Summary\n\n'
+    + '- **Verdict**: APPROVE\n'
+    + '- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건\n';
+  const fingerprint = { mode: 'hybrid', digest: 'same', error: null };
+  const evaluated = evaluateReviewerAttempt({
+    reviewer_id: 'claude-opus',
+    role: 'claude-opus',
+    output,
+    beforeFingerprint: fingerprint,
+    afterFingerprint: fingerprint,
+  });
+  const result = synthesizeReviewRound({
+    attempts: [
+      evaluated,
+      {
+        ...evaluated,
+        reviewer_id: 'codex-review',
+        role: 'codex-review',
+      },
+    ],
+    consensus: { findings: [] },
+    routingPlan: routingPlan(),
+  });
+  assert.equal(result.status, 'operational_failure');
+  assert.equal(result.error, 'invalid_reviewer_identity');
+  assert.equal(result.verdict, null);
+  assert.equal(result.phase6_allowed, false);
+});
+
+test('protocol-3 synthesis rejects candidate voices without a selected route', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const result = synthesizeReviewRound({
+    attempts: [
+      attempt('claude-opus'),
+      attempt('codex-review'),
+      attempt('agy'),
+    ],
+    consensus: { findings: [] },
+    routingPlan: routingPlan(),
+  });
+  assert.equal(result.status, 'operational_failure');
+  assert.equal(result.error, 'invalid_reviewer_identity');
+  assert.equal(result.verdict, null);
+});
+
+test('a routing-plan operational failure cannot emit a verdict or allow Phase 6', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const result = synthesizeReviewRound({
+    attempts: [attempt('claude-opus')],
+    routingPlan: routingPlan({
+      operational_failure: true,
+      shortfalls: ['required_provider:codex'],
+      routes: [routingPlan().routes[0]],
+    }),
+  });
+  assert.equal(result.status, 'operational_failure');
+  assert.equal(result.n_actual, 0);
+  assert.equal(result.verdict, null);
+  assert.equal(result.phase6_allowed, false);
+  assert.equal(result.error, 'routing_plan_operational_failure');
+  assert.deepEqual(result.routing_shortfalls, ['required_provider:codex']);
+});

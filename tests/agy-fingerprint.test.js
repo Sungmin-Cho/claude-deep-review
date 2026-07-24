@@ -13,7 +13,11 @@ import {
   ensureCutover,
   __testing as mutationTesting,
 } from '../hooks/scripts/mutation-protocol.mjs';
-import { __testing as agyTesting, runAgyReviewer } from '../hooks/scripts/run-agy-reviewer.mjs';
+import {
+  __testing as agyTesting,
+  normalizeAgyReport,
+  runAgyReviewer,
+} from '../hooks/scripts/run-agy-reviewer.mjs';
 
 const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const privacyCliPath = join(pluginRoot, 'hooks', 'scripts', 'agy-privacy-preflight.mjs');
@@ -53,7 +57,7 @@ if (process.env.FAKE_BEHAVIOR === 'failed') { process.stderr.write('ordinary fai
 if (process.env.FAKE_BEHAVIOR === 'unsupported' && process.argv.includes('--model')) {
   process.stderr.write('unsupported model value\\n'); process.exit(2);
 }
-process.stdout.write('agy review ok\\n');
+process.stdout.write('# Deep Review Report — 2026-07-24\\n\\n## Summary\\n\\n- **Verdict**: APPROVE\\n- **Review Mode**: 1-way (agy only)\\n- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건\\n\\n## Code Review\\n\\n### 🔴 Critical\\n\\nNone.\\n\\n### 🟡 Warning\\n\\nNone.\\n\\n### ℹ️ Info\\n\\nNone.\\n\\n### 🟢 Passed\\n\\n- Contract valid.\\n');
 `, { mode: 0o700 });
   chmodSync(script, 0o700);
   if (process.platform !== 'win32') return script;
@@ -81,6 +85,66 @@ function config(repo, fingerprint = '', at = '') {
   ].join('\n'));
   return path;
 }
+
+test('agy report normalization accepts only canonical reports with section/count consistency', () => {
+  const clean = normalizeAgyReport([
+    '# Deep Review Report — 2026-07-24',
+    '',
+    '## Summary',
+    '- **Verdict**: APPROVE',
+    '- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건',
+    '',
+    '## Code Review',
+    '### 🔴 Critical',
+    'None.',
+    '### 🟡 Warning',
+    'None.',
+    '### ℹ️ Info',
+    'None.',
+    '### 🟢 Passed',
+    '- Security assignment cleared.',
+  ].join('\n'));
+  assert.equal(clean.includes('**Verdict**: APPROVE'), true);
+  assert.equal(normalizeAgyReport(clean.replaceAll('None.', '(없음)')) !== null, true);
+
+  const findingReport = [
+    '# Deep Review Report — 2026-07-24',
+    '',
+    '## Summary',
+    '- **Verdict**: REQUEST_CHANGES',
+    '- **Issues**: 🔴 1건, 🟡 1건, ℹ️ 0건',
+    '',
+    '## Code Review',
+    '### 🔴 Critical',
+    '#### C1. reachable authorization bypass',
+    'Evidence and remediation.',
+    '### 🟡 Warning',
+    '- Missing regression coverage.',
+    '### ℹ️ Info',
+    'None.',
+  ].join('\n');
+  assert.equal(normalizeAgyReport(findingReport), findingReport);
+
+  const contradictory = [
+    '# Deep Review Report — 2026-07-24',
+    '',
+    '## Summary',
+    '- **Verdict**: APPROVE',
+    '- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건',
+    '## Code Review',
+    '### 🔴 Critical',
+    '#### C1. hidden blocker',
+    '### 🟡 Warning',
+    'None.',
+    '### ℹ️ Info',
+    'None.',
+  ].join('\n');
+  assert.equal(normalizeAgyReport(contradictory), null);
+  assert.equal(normalizeAgyReport(clean.replace('ℹ️ Info', 'Info')), null);
+  assert.equal(normalizeAgyReport(clean.replace('🟡 0건', '🟡 1건')), null);
+  assert.equal(normalizeAgyReport('# Deep Review v2.0 — Security Review Report\n**Verdict**: **PASS**'), null);
+  assert.equal(normalizeAgyReport('agy review ok'), null);
+});
 
 test('fingerprint modes detect tracked, untracked, HEAD, sensitive ignored, and runtime-state drift', async () => {
   const repo = repository('fingerprint');
@@ -430,6 +494,9 @@ test('agy bridge enforces privacy before spawn, prepends readonly text, retries 
   assert.equal(second.argv.includes('--model'), false);
   const prompt = first.argv[first.argv.indexOf('-p') + 1];
   assert.equal(prompt.startsWith('READ-ONLY REVIEW MODE'), true);
+  assert.match(prompt, /OUTPUT CONTRACT - REQUIRED/u);
+  assert.match(prompt, /# Deep Review Report — YYYY-MM-DD/u);
+  assert.match(prompt, /\*\*Issues\*\*: 🔴 N건, 🟡 N건, ℹ️ N건/u);
   assert.equal(prompt.endsWith('ORIGINAL BODY 리뷰 Ω'), true);
   assert.equal(readFileSync(`${outputFile}.status`, 'utf8'), 'success\n');
   assert.equal(readdirSync(repo).some((name) => name.endsWith('.tmp')), false);

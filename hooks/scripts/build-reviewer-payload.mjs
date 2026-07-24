@@ -11,18 +11,60 @@ import {
   makeSecureTempPath,
   resolvePluginRoot,
 } from './lib/runtime-context.mjs';
+import { loadExecutionPlan } from './lib/execution-plan.mjs';
+import { rubricTextForRole } from './lib/assignment-rubrics.mjs';
+import { verifyReadinessReceipt } from './document-readiness.mjs';
 
 const DOCTRINE_WARNING = 'fp-doctrine extraction failed (injection skipped)';
 const PRIOR_ROUNDS_TITLE = 'PRIOR ROUND CONTEXT (advisory — re-verify, never suppress)';
 const PRIOR_ROUNDS_MAX_BYTES = 32 * 1024;
 const PRIOR_CONTEXT_HEADER_PATTERN = /^<!-- PRIOR-CONTEXT v1 loop_id=(\S+) base_commit=(\S+) round=(\d+) -->\s*$/u;
 const SECTION_ORDER = [
+  ['TRUSTED REVIEW ASSIGNMENT', 'assignment'],
+  ['VERIFIED DOCUMENT READINESS RECEIPT', 'readinessReceipt'],
   ['REVIEW SUPPRESSION DOCTRINE', 'doctrine'],
   ['CHANGED FILES (cross-file context)', 'changeFiles'],
   ['PROJECT RULES / CONTRACT / HEALTH', 'context'],
   [PRIOR_ROUNDS_TITLE, 'priorRounds'],
   ['DIFF UNDER REVIEW', 'diff'],
 ];
+
+function trustedAssignmentSection(options) {
+  if (Boolean(options.routingPlan) !== Boolean(options.reviewerId)) {
+    throw new Error('routingPlan and reviewerId must be provided together');
+  }
+  if (!options.routingPlan) return { content: '', executionPlan: null };
+  const executionPlan = loadExecutionPlan(options.routingPlan, options.reviewerId);
+  const lines = [
+    `reviewer_id: ${options.reviewerId}`,
+    `assignment_role: ${executionPlan.assignmentRole}`,
+    `rubric_id: ${executionPlan.rubricId}`,
+    `wave: ${executionPlan.wave}`,
+    `required: ${executionPlan.required}`,
+    '',
+    rubricTextForRole(executionPlan.assignmentRole),
+  ];
+  return { content: lines.join('\n'), executionPlan };
+}
+
+function trustedReadinessReceiptSection(options) {
+  if (!options.readinessReceipt) return { content: '', verified: null };
+  if (!options.repo) throw new Error('repo is required with readinessReceipt');
+  const verified = verifyReadinessReceipt({
+    repo: options.repo,
+    receiptPath: options.readinessReceipt,
+  });
+  const bounded = {
+    status: verified.status,
+    scope_sha256: verified.scope_sha256,
+    risk: verified.risk,
+    deferred_findings: verified.deferred_findings,
+  };
+  return {
+    content: JSON.stringify(bounded, null, 2),
+    verified,
+  };
+}
 
 function markerLine(name, side) {
   return `<!-- ${name}:${side} -->`;
@@ -157,6 +199,8 @@ function contentFromOption(options, valueKey, fileKey) {
 export function buildReviewerPayload(options = {}) {
   const root = resolve(options.pluginRoot ?? resolvePluginRoot());
   const warnings = [];
+  const assignment = trustedAssignmentSection(options);
+  const readinessReceipt = trustedReadinessReceiptSection(options);
   let doctrine = '';
   try {
     const criteriaPath = join(
@@ -193,10 +237,31 @@ export function buildReviewerPayload(options = {}) {
   const context = contentFromOption(options, 'context', 'contextFile');
   const diff = contentFromOption(options, 'diff', 'diffFile');
   const priorRounds = ingestPriorRounds(options, warnings);
-  const payload = assembleReviewerPayload({ doctrine, changeFiles, context, priorRounds, diff });
+  const payload = assembleReviewerPayload({
+    assignment: assignment.content,
+    readinessReceipt: readinessReceipt.content,
+    doctrine,
+    changeFiles,
+    context,
+    priorRounds,
+    diff,
+  });
   const promptFile = makeSecureTempPath('deep-review-prompt', '.md');
   atomicWriteFile(promptFile, payload, { encoding: 'utf8', mode: 0o600 });
-  return { promptFile: resolve(promptFile), warnings, changeFilesCount };
+  return {
+    promptFile: resolve(promptFile),
+    warnings,
+    changeFilesCount,
+    ...(assignment.executionPlan ? {
+      assignmentRole: assignment.executionPlan.assignmentRole,
+      rubricId: assignment.executionPlan.rubricId,
+      wave: assignment.executionPlan.wave,
+    } : {}),
+    ...(readinessReceipt.verified ? {
+      readinessScopeSha256: readinessReceipt.verified.scope_sha256,
+      readinessRisk: readinessReceipt.verified.risk,
+    } : {}),
+  };
 }
 
 function parseArguments(argv) {
@@ -211,6 +276,9 @@ function parseArguments(argv) {
     ['--diff-file', 'diffFile'],
     ['--prior-rounds-file', 'priorRoundsFile'],
     ['--prior-base', 'priorBase'],
+    ['--routing-plan', 'routingPlan'],
+    ['--reviewer-id', 'reviewerId'],
+    ['--readiness-receipt', 'readinessReceipt'],
     ['--max-entries', 'maxEntries'],
     ['--max-bytes', 'maxBytes'],
   ]);

@@ -104,6 +104,11 @@ file tools, then invoke:
 node {plugin_root}/hooks/scripts/build-reviewer-payload.mjs --plugin-root PLUGIN_ROOT_ABS --repo PROJECT_ROOT --change-state CHANGE_STATE --review-base REVIEW_BASE --context-file CONTEXT_FILE --diff-file DIFF_FILE
 ```
 
+When the public route carries `--readiness-receipt`, append
+`--readiness-receipt RECEIPT_PATH`. The builder re-verifies repository/path
+containment, rejects symlinks, and rehashes every bound document and report;
+`ERROR_READINESS_RECEIPT_STALE` is terminal.
+
 If (and only if) the caller's argv carried `--prior-rounds-file=PATH`
 (deep-review-loop round 2+ — see its §2), forward that same path to
 `build-reviewer-payload.mjs` unchanged as `--prior-rounds-file PATH` together
@@ -123,14 +128,12 @@ builder warning in the final report.
 
 Resolve reviewer flags before any privacy work:
 
-Build the current adapter set with `buildCapabilities` from
+Build the current adapter candidate set with `buildCapabilities` from
 `{plugin_root}/hooks/scripts/lib/capability-registry.mjs`, combining detected
-executables and fresh host assertions. Feed those protocol `2.0` capability
-objects, normalized public-route overrides, merged review policy, and artifact
-classification directly to `buildRoutingPlan` in
-`{plugin_root}/hooks/scripts/lib/model-router.mjs`. Do not infer support from a
-host label, duplicate the routing matrix in prose, or move model IDs through a
-shell string.
+executables and fresh host assertions. Each protocol `2.0` capability declares
+its supported assignment roles. Do not infer support from a host label,
+duplicate the routing matrix in prose, or move model IDs through a shell
+string.
 
 1. Expand `--codex-only` to `--codex --no-opus --no-agy`.
 2. Reject `--ultracode` with `--no-opus`; reject `--codex` with `--no-codex`.
@@ -153,8 +156,9 @@ no-op privacy branch.
 
 ### 3.1 agy privacy preflight
 
-Only when `agy` remains eligible, invoke this before any bridge can receive an
-`--add-dir` argument:
+Run this only after §3.3 selects `agy`; an eligible but unselected agy performs
+no privacy work and creates no state. Invoke before any selected bridge can
+receive an `--add-dir` argument:
 
 ```text
 node {plugin_root}/hooks/scripts/agy-privacy-preflight.mjs --repo PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --config CONFIG_FILE --approval auto
@@ -169,7 +173,7 @@ node {plugin_root}/hooks/scripts/agy-privacy-preflight.mjs --repo PROJECT_ROOT -
 
 ### 3.2 planned companion index exposure
 
-Run index mutation only if an eligible companion needs ignored-path exposure.
+Run index mutation only if a selected companion needs ignored-path exposure.
 Send `scan-sensitive`, then `perform`, as framed JSON requests to
 `mutation-protocol.mjs`. Obtain approval for sensitive files before `perform`.
 Keep the returned owner token private for Stage 5 restoration. A generic Codex
@@ -178,8 +182,8 @@ index mutation merely because Codex is the host.
 
 ### 3.3 artifact classification and routing preflight
 
-Immediately before Stage 4, invoke the reviewer-free preflight with argv-array
-transport:
+Immediately before §§3.1–3.2 and Stage 4, invoke the reviewer-free preflight
+with argv-array transport:
 
 ```text
 node {plugin_root}/hooks/scripts/classify-artifacts.mjs --repo PROJECT_ROOT --emit-routing-plan --routing-plan-out .deep-review/tmp/routing-plan.json --host-assertions-json '{"claudeNativeAgent":true,"codexNativeGeneric":false}'
@@ -193,34 +197,45 @@ omitting either key or the whole flag leaves that adapter `unknown`.
 
 When public-route returned normalized overrides, append `--overrides-json` and
 the compact `JSON.stringify(route.overrides)` as one argv value. An explicit
-override makes this preflight mandatory and any error stops dispatch. With no
-explicit override, the plan is shadow provenance: a non-policy preflight error
-(an environment/probe failure unrelated to policy enforcement) is a visible
-warning and dispatch continues with the existing arguments unchanged.
+override makes this preflight mandatory and any error stops dispatch. Adaptive
+reviewer and automatic model routing are also default policy, so a preflight
+failure that prevents a trustworthy selected set is terminal. Only an explicit
+`routing_shadow_mode: true` observation plan may fail open on a non-policy
+environment/probe error with a visible warning.
 
 A preflight error caused by policy enforcement — a denied or unavailable
 provider, a denied model, read-only unavailable, or an unparseable/type-invalid
 EXISTING policy file (`ERROR_PROVIDER_DENIED`, `ERROR_MODEL_DENIED`,
 `ERROR_READ_ONLY_UNAVAILABLE`, `ERROR_PROVIDER_UNAVAILABLE`, or
 `ERROR_POLICY_INVALID`) is TERMINAL for the whole review regardless of whether
-the plan is explicit or shadow-only: stop dispatch entirely rather than
+the plan is applied or shadow-only: stop dispatch entirely rather than
 downgrading it to a warning and falling back to legacy dispatch. A missing
 policy file is not an error and never triggers this path.
 
-Automatic routes are applied only when policy enables `automatic_model_routing`
-and sets `routing_shadow_mode: false`. When that condition holds, the emitted
-plan carries `apply_automatic: true`, and an applicable automatic plan is
-consumed by the same leaf-adapter path as explicit overrides.
+Adaptive reviewer routing and automatic model routing default to enabled, with
+`routing_shadow_mode: false`. `--reviewer-strategy static` fixes the eligible
+reviewer set; shadow mode records the adaptive plan without applying it. Hard
+manual eligibility/required-assignment constraints are applied before
+selection. Reviewer-level overrides require that reviewer; provider-level
+overrides affect selected reviewers only.
 
 Treat the emitted routing plan as the dispatch authority. It carries one
-validated execution plan per canonical reviewer plus requested, resolved,
-applied, fallback, and semantic provenance. Stage 4 leaf adapters consume that
-plan by path and reviewer id; they do not reinterpret provider or reviewer
-flags.
+validated protocol `3.0` route per selected canonical reviewer, plus the full
+candidate set, assignment role/rubric/wave/required fields, reviewer floors,
+risk, phase, progress, requested/resolved/applied/fallback, and semantic
+provenance. Protocol `2.0` plans remain readable. Stage 4 leaf adapters consume
+only their own route by path and reviewer id; they do not reinterpret provider
+or reviewer flags.
+
+After the plan exists, invoke `build-reviewer-payload.mjs` once per selected
+route with `--routing-plan ROUTING_PLAN --reviewer-id REVIEWER_ID` (and the same
+context, diff, prior-context, and readiness inputs). The builder injects only
+the canonical trusted rubric for that assignment. Never pass raw selection
+reasons or another reviewer's route to the leaf.
 
 ## 4. Dispatch independent reviewers
 
-Launch every eligible role in a fresh background context. Capture a repository
+Launch every selected route in a fresh background context. Capture a repository
 fingerprint immediately before and after each reviewer. A changed fingerprint
 makes that output untrusted and excluded.
 
@@ -233,8 +248,9 @@ never expose file contents.
 
 ### 4.1 `claude-opus`
 
-When named-agent capability exists, call `Agent(code-reviewer)` with the shared
-payload. Before native dispatch, only when the emitted plan is applicable —
+When named-agent capability exists, call `Agent(code-reviewer)` with its
+route-specific payload. The assignment role does not add another voice. Before
+native dispatch, only when the emitted plan is applicable —
 `explicit_overrides: true` or `apply_automatic: true` — read the `claude-opus`
 route from the emitted routing plan and pass its `resolved.model` as the Agent
 model parameter. With a shadow-only plan or no emitted plan, preserve the
@@ -248,8 +264,7 @@ Claude CLI exists, invoke:
 node {plugin_root}/hooks/scripts/run-claude-reviewer.mjs --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PAYLOAD_FILE --output OUTPUT_FILE --model REVIEW_MODEL --agent code-reviewer --timeout-seconds 1200
 ```
 
-Only when the emitted plan is applicable — `explicit_overrides: true` or
-`apply_automatic: true` — append
+When the emitted plan is applicable — the v2.0 default — append
 `--routing-plan .deep-review/tmp/routing-plan.json --reviewer-id claude-opus`.
 With a shadow-only plan, preserve the command above byte-for-byte.
 
@@ -297,8 +312,7 @@ After a successful current privacy outcome, invoke:
 node {plugin_root}/hooks/scripts/run-agy-reviewer.mjs --binary AGY_FILE --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PAYLOAD_FILE --output OUTPUT_FILE --mode hybrid --model AGY_MODEL --timeout-seconds 900
 ```
 
-Only when the emitted plan is applicable — `explicit_overrides: true` or
-`apply_automatic: true` — append
+When the emitted plan is applicable — the v2.0 default — append
 `--routing-plan .deep-review/tmp/routing-plan.json --reviewer-id agy`. With a
 shadow-only plan, preserve the command above byte-for-byte.
 
@@ -307,9 +321,11 @@ untrusted even if the process produced report text.
 
 ### 4.5 `--ultracode`
 
-Follow `ultracode-integration.md`. Six lenses collapse to one Anthropic voice;
-they never increase `N_actual` above one for the Claude family. The loop may
-request ultracode only on its first round.
+Follow `ultracode-integration.md`.
+Launch every eligible role in a fresh background context.
+Six lenses collapse to one Anthropic voice; they never increase `N_actual`
+above one for the Claude family. The loop may request ultracode only on its
+first round.
 
 ## 5. Restore, synthesize, and report
 
@@ -323,7 +339,13 @@ remain trusted, perform the issue matching from `codex-integration.md` and add
 a `consensus.findings` array. Each finding records `severity` (`critical` or
 `warning`) and the unique admitted reviewer `roles` that reported that material
 finding. Include every admitted critical and warning exactly once per reporting
-role. Serialize `{ attempts, consensus }`, then invoke:
+role. Serialize `{ attempts, consensus, routing_plan, expansion_waves_used }`,
+then invoke:
+
+`role` is the canonical reviewer ID, not the assignment role or a display
+label. Ultracode's single Anthropic voice uses `claude-opus`. Duplicate,
+non-canonical, or plan-absent identities are an operational failure and never
+increase `N_actual`.
 
 ```text
 node {plugin_root}/hooks/scripts/review-synthesis.mjs --input ATTEMPTS_FILE
@@ -331,10 +353,41 @@ node {plugin_root}/hooks/scripts/review-synthesis.mjs --input ATTEMPTS_FILE
 
 This production helper validates the report contract, excludes fingerprint
 drift or malformed/empty output, and is the executable authority for
-`N_actual`, terminal status, verdict, and `phase6_allowed`. Stop when it returns
-`operational_failure`; no later response or Phase 6 commit may proceed. A
+`N_actual`, terminal status, provisional expansion, final verdict, and
+`phase6_allowed`. Its CLI never accepts caller-pre-evaluated attempts: every
+attempt must carry raw output plus pre/post fingerprint evidence and is
+re-evaluated at this boundary. If provisional synthesis returns `needs_expansion`, dispatch
+exactly its one unused wave-2 route against the same original evidence and
+independent rubric, then re-run synthesis once with all trusted attempts. Never
+expand twice and never publish a provisional verdict. Stop when it returns
+`operational_failure`; no later response or Phase 6 commit may proceed. When
+the provisional result requests expansion, atomically persist its
+`expanded_routing_plan` and use that file for the added reviewer's leaf adapter;
+the added protocol-3 route already contains the trusted rubric and resolved
+model/effort. A
 missing, invalid, or count-inconsistent materialized consensus for two or more
 trusted roles fails closed with `consensus_required`.
+
+An unavailable explicitly required reviewer/provider is an immediate
+operational failure. An unavailable adaptive floor route may be replaced once:
+the provisional result removes that failed soft floor route and marks the
+materialized expansion route required in `expanded_routing_plan`. Adaptive
+reviewer/provider counts are carried by the numeric floors, while
+`required: true` is reserved for explicit constraints and the materialized
+floor replacement. Final synthesis rejects a missing required route and also
+rejects any missing materialized wave-2 route, so clearing or changing the
+required flag cannot authorize Phase 6. Raw reviewer output is SHA-256-bound at
+the synthesis boundary; reusing one identical output under two canonical voice
+identities is an operational identity failure. Protocol-3 attempts require
+`reviewer_id == role`, and the materialized wave-2 route set is cross-checked
+against the expansion counter so neither carrier can be omitted. The plan's
+`initial_reviewer_ids` and `required_reviewer_ids` are structural carriers:
+every wave-1 route must remain in the initial set, every initial ID must have a
+route, every wave-2 route must remain outside the set, and a wave-1 `required`
+flag must agree with the hard-required set. The one allowed adaptive-floor
+replacement atomically removes its failed soft ID from both the route list and
+the initial set. Synthesis rejects route-only wave relabeling, dangling carrier
+IDs, or required-bit clearing before any reviewer or provider-family count.
 
 Count only successful trusted reviewer roles:
 
@@ -343,6 +396,12 @@ Count only successful trusted reviewer roles:
   warnings alone yield `CONCERN`, and no blocking finding yields `APPROVE`.
 - `N_actual >= 2`: critical findings or agreed warnings yield
   `REQUEST_CHANGES`; split warnings yield `CONCERN`; otherwise `APPROVE`.
+
+For critical implementation scope, require `N_actual >= 3` and at least two
+provider families; a shortage is operational failure with no verdict. Other
+floor shortages raise only an `APPROVE` to `CONCERN` and never lower a blocking
+verdict. One critical/security finding, split CONCERN, a readiness mismatch, or
+a failed minimum may request the single expansion wave.
 
 Ultracode's six lenses are one role. A degraded failed Claude role never
 downgrades a blocking verdict; it raises a low-confidence `APPROVE` to
@@ -353,6 +412,24 @@ artifact. Create one unique
 `.deep-review/reports/{YYYY-MM-DD}-{HHmmss}-review.md` through a direct host
 file tool. Record every attempted role, terminal status, `N_actual`, builder
 warning, privacy exclusion, mutation outcome, and fingerprint exclusion.
+
+For pure document scope, require every trusted reviewer report to contain
+exactly one `Artifact Gate` JSON block from `report-format.md`. Invoke
+`document-readiness.mjs` after final synthesis. Any pre-implementation Critical
+or Warning, or a reviewer/provider-family shortage, yields
+`DOCUMENT_BLOCKED`. `READY_FOR_IMPLEMENTATION` atomically writes
+`.deep-review/receipts/document-readiness/{scope_sha256}-{receipt_sha256}.json`; return that path
+and skip Respond. Warnings may coexist with READY only when they are
+implementation-verification items with objective acceptance evidence.
+Before readiness evaluation, atomically persist each trusted individual report
+under `.deep-review/tmp/reviewer-reports/{round}-{reviewer_id}.md`. These private
+files are receipt evidence and do not count as canonical round reports; the
+exact-one `*-review.md` report-set delta remains unchanged.
+
+For an implementation linked by a verified readiness receipt, evaluate every
+deferred finding against fresh final-implementation evidence before allowing
+`APPROVE`. Pending items raise APPROVE to CONCERN while preserving more
+blocking verdicts.
 
 ## 6. Stage 5.5 and optional entropy
 

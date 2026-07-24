@@ -1,10 +1,16 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { isTargetKind, SCOPE_KIND_MIXED } from './target-taxonomy.mjs';
 
 const KNOWN = Object.freeze({
   schema_version: null,
-  features: { semantic_classifier: null, automatic_model_routing: null, routing_shadow_mode: null },
+  features: {
+    semantic_classifier: null,
+    adaptive_reviewer_routing: null,
+    automatic_model_routing: null,
+    routing_shadow_mode: null,
+  },
   classification: {
     mode: null,
     thresholds: null,
@@ -12,7 +18,17 @@ const KNOWN = Object.freeze({
     max_classifier_bytes_per_artifact: null,
     overrides: null,
   },
-  routing: { policy: null, allow_fallback: null, require_read_only: null, reviewers: null },
+  routing: {
+    policy: null,
+    reviewer_strategy: null,
+    allow_fallback: null,
+    require_read_only: null,
+    reviewers: null,
+    document_round_limit: null,
+    high_risk_document_round_limit: null,
+    maximum_reviewers: null,
+    max_expansion_waves: null,
+  },
   providers: null,
   constraints: null,
 });
@@ -180,9 +196,61 @@ function collectWarnings(value, schema = KNOWN, prefix = '', warnings = []) {
   return warnings;
 }
 
+function validateAdaptivePolicy(policy) {
+  for (const key of [
+    'adaptive_reviewer_routing',
+    'automatic_model_routing',
+    'routing_shadow_mode',
+  ]) {
+    if (policy.features?.[key] !== undefined && typeof policy.features[key] !== 'boolean') {
+      throw new Error(`review policy features.${key} must be boolean`);
+    }
+  }
+  if (policy.routing?.reviewer_strategy !== undefined
+      && !['adaptive', 'static'].includes(policy.routing.reviewer_strategy)) {
+    throw new Error('review policy routing.reviewer_strategy must be adaptive or static');
+  }
+  for (const key of ['document_round_limit', 'high_risk_document_round_limit']) {
+    const value = policy.routing?.[key];
+    if (value !== undefined && (!Number.isInteger(value) || value < 1)) {
+      throw new Error(`review policy routing.${key} must be a positive integer`);
+    }
+  }
+  const maximumReviewers = policy.routing?.maximum_reviewers;
+  if (maximumReviewers !== undefined
+      && (!Number.isInteger(maximumReviewers) || maximumReviewers < 1 || maximumReviewers > 4)) {
+    throw new Error('review policy routing.maximum_reviewers must be an integer from 1 through 4');
+  }
+  const expansionWaves = policy.routing?.max_expansion_waves;
+  if (expansionWaves !== undefined
+      && (!Number.isInteger(expansionWaves) || expansionWaves < 0 || expansionWaves > 1)) {
+    throw new Error('review policy routing.max_expansion_waves must be 0 or 1');
+  }
+  const overrides = policy.classification?.overrides;
+  if (overrides !== undefined) {
+    if (!Array.isArray(overrides)) {
+      throw new Error('review policy classification.overrides must be an array');
+    }
+    for (const [index, override] of overrides.entries()) {
+      if (!override || typeof override !== 'object' || Array.isArray(override)
+          || Object.keys(override).some((key) => !['glob', 'kind'].includes(key))
+          || typeof override.glob !== 'string'
+          || override.glob.length === 0
+          || override.glob.length > 4096
+          || override.glob.includes('\0')
+          || typeof override.kind !== 'string'
+          || !isTargetKind(override.kind)
+          || override.kind === SCOPE_KIND_MIXED) {
+        throw new Error(`review policy classification.overrides[${index}] is invalid`);
+      }
+    }
+  }
+}
+
 export function parseReviewPolicy(source) {
   const policy = parseYamlSubset(source);
   if (policy.schema_version !== 2) throw new Error('review policy schema_version must be 2');
+  validateAdaptivePolicy(policy);
   return { policy, warnings: collectWarnings(policy) };
 }
 
@@ -213,7 +281,10 @@ function deepMerge(base, overlay) {
 
 export function mergeRoutingConfig({ defaults = {}, user = {}, project = {}, cli = {} } = {}) {
   const cliPolicy = cli.routing_policy === undefined ? {} : { routing: { policy: cli.routing_policy } };
-  const normalizedCli = deepMerge(cliPolicy, {
+  const cliStrategy = cli.reviewer_strategy === undefined
+    ? {}
+    : { routing: { reviewer_strategy: cli.reviewer_strategy } };
+  const normalizedCli = deepMerge(deepMerge(cliPolicy, cliStrategy), {
     routing: cli.allow_fallback === undefined ? {} : { allow_fallback: cli.allow_fallback },
     providers: cli.providers,
     reviewers: cli.reviewers,

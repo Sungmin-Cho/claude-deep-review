@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { rubricIdForRole } from './lib/assignment-rubrics.mjs';
+import { parseExecutionPlanDocument } from './lib/execution-plan.mjs';
+import { REVIEWER_IDS, REVIEWER_PROVIDERS } from './lib/reviewer-ids.mjs';
 
 const VERDICTS = new Set(['APPROVE', 'CONCERN', 'REQUEST_CHANGES']);
+const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 export function parseReviewerReport(output) {
   if (typeof output !== 'string' || output.length === 0) return null;
@@ -30,33 +35,54 @@ function fingerprintFailure(before, after) {
 }
 
 export function evaluateReviewerAttempt({
+  reviewer_id: reviewerId,
   role,
   output,
   beforeFingerprint,
   afterFingerprint,
 }) {
   if (typeof role !== 'string' || role.length === 0) throw new TypeError('role must be non-empty');
+  const outputDigest = typeof output === 'string'
+    ? createHash('sha256').update(output).digest('hex')
+    : null;
   const fingerprintExclusion = fingerprintFailure(beforeFingerprint, afterFingerprint);
   if (fingerprintExclusion) {
-    return { role, included: false, exclusion: fingerprintExclusion, verdict: null, issues: null };
+    return {
+      ...(reviewerId ? { reviewer_id: reviewerId } : {}),
+      role,
+      output_digest: outputDigest,
+      included: false,
+      exclusion: fingerprintExclusion,
+      verdict: null,
+      issues: null,
+    };
   }
   const parsed = parseReviewerReport(output);
   if (!parsed) {
     return {
+      ...(reviewerId ? { reviewer_id: reviewerId } : {}),
       role,
+      output_digest: outputDigest,
       included: false,
       exclusion: 'malformed_or_empty_result',
       verdict: null,
       issues: null,
     };
   }
-  return { role, included: true, exclusion: null, ...parsed };
+  return {
+    ...(reviewerId ? { reviewer_id: reviewerId } : {}),
+    role,
+    output_digest: outputDigest,
+    included: true,
+    exclusion: null,
+    ...parsed,
+  };
 }
 
 function consensusVerdict(consensus, included) {
   if (!consensus || typeof consensus !== 'object' || Array.isArray(consensus)
     || !Array.isArray(consensus.findings)) return null;
-  const roles = included.map((attempt) => attempt.role);
+  const roles = included.map(attemptReviewerId);
   if (roles.some((role) => typeof role !== 'string' || role.length === 0)
     || new Set(roles).size !== roles.length) return null;
   const admittedRoles = new Set(roles);
@@ -78,7 +104,7 @@ function consensusVerdict(consensus, included) {
   }
 
   for (const attempt of included) {
-    const expected = counts.get(attempt.role);
+    const expected = counts.get(attemptReviewerId(attempt));
     if (!attempt.issues || !Number.isSafeInteger(attempt.issues.critical)
       || !Number.isSafeInteger(attempt.issues.warning)
       || attempt.issues.critical < 0 || attempt.issues.warning < 0
@@ -104,6 +130,21 @@ export function synthesizeReviewAttempts(attempts, consensus) {
       verdict: null,
       phase6_allowed: false,
       exclusions,
+    };
+  }
+  const includedRoles = included.map((attempt) => attempt?.role);
+  const includedDigests = included.map((attempt) => attempt?.output_digest);
+  if (includedRoles.some((role) => !REVIEWER_IDS.includes(role))
+      || new Set(includedRoles).size !== includedRoles.length
+      || includedDigests.some((digest) => !SHA256_PATTERN.test(digest || ''))
+      || new Set(includedDigests).size !== includedDigests.length) {
+    return {
+      status: 'operational_failure',
+      n_actual: 0,
+      verdict: null,
+      phase6_allowed: false,
+      exclusions,
+      error: 'invalid_reviewer_identity',
     };
   }
   let verdict;
@@ -133,6 +174,393 @@ export function synthesizeReviewAttempts(attempts, consensus) {
   };
 }
 
+function canonicalReviewerIndex(reviewerId) {
+  const index = REVIEWER_IDS.indexOf(reviewerId);
+  return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+}
+
+function attemptReviewerId(attempt) {
+  return attempt?.reviewer_id || attempt?.role || null;
+}
+
+function providerForReviewer(routingPlan, reviewerId) {
+  const route = routingPlan.routes?.find((item) => item.reviewer_id === reviewerId);
+  if (route?.provider) return route.provider;
+  return routingPlan.candidate_reviewers
+    ?.find((item) => item.reviewer_id === reviewerId)?.provider ?? null;
+}
+
+function routingIdentityError(routingPlan) {
+  if (!Array.isArray(routingPlan.candidate_reviewers)
+      || !Array.isArray(routingPlan.routes)
+      || routingPlan.routes.length === 0) {
+    return true;
+  }
+  try {
+    for (const route of routingPlan.routes) {
+      parseExecutionPlanDocument(routingPlan, route?.reviewer_id);
+    }
+  } catch {
+    return true;
+  }
+  const candidateProviders = new Map();
+  for (const candidate of routingPlan.candidate_reviewers || []) {
+    const reviewerId = candidate?.reviewer_id;
+    if (!REVIEWER_IDS.includes(reviewerId)
+        || candidateProviders.has(reviewerId)
+        || candidate?.provider !== REVIEWER_PROVIDERS[reviewerId]) {
+      return true;
+    }
+    candidateProviders.set(reviewerId, candidate.provider);
+  }
+  const routeIds = new Set();
+  for (const route of routingPlan.routes || []) {
+    const reviewerId = route?.reviewer_id;
+    if (!REVIEWER_IDS.includes(reviewerId)
+        || routeIds.has(reviewerId)
+        || route?.provider !== REVIEWER_PROVIDERS[reviewerId]
+        || candidateProviders.get(reviewerId) !== route.provider
+        || !Number.isInteger(route?.wave)
+        || route.wave < 1
+        || route.wave > 2
+        || typeof route?.required !== 'boolean') {
+      return true;
+    }
+    routeIds.add(reviewerId);
+  }
+  return false;
+}
+
+function expansionReasons({ included, synthesis, routingPlan, readinessMismatch }) {
+  const reasons = [];
+  if (included.length < Number(routingPlan.minimum_reviewers || 0)) {
+    reasons.push('reviewer_minimum_broken');
+  }
+  const criticalVoices = included.filter((attempt) => Number(attempt?.issues?.critical || 0) > 0);
+  const securityVoices = included.filter((attempt) => {
+    const reviewerId = attemptReviewerId(attempt);
+    const route = routingPlan.routes?.find((item) => item.reviewer_id === reviewerId);
+    const blockingFindings = Number(attempt?.issues?.critical || 0)
+      + Number(attempt?.issues?.warning || 0);
+    return route?.assignment_role === 'security' && blockingFindings > 0;
+  });
+  if (criticalVoices.length === 1 || securityVoices.length === 1) {
+    reasons.push('single_critical_or_security');
+  }
+  if (synthesis.status === 'reviewed' && synthesis.verdict === 'CONCERN' && included.length > 1) {
+    reasons.push('split_concern');
+  }
+  if (readinessMismatch) reasons.push('readiness_mismatch');
+  return reasons;
+}
+
+function roleForExpansion(reasons) {
+  if (reasons.includes('readiness_mismatch')) return 'traceability';
+  if (reasons.includes('single_critical_or_security')) return 'security';
+  if (reasons.includes('split_concern')) return 'adversarial';
+  return 'standard';
+}
+
+function chooseExpansionAssignment({ attempts, routingPlan, reasons }) {
+  if ((routingPlan.routes?.length || 0) >= Number(routingPlan.maximum_reviewers || 0)) {
+    return null;
+  }
+  const attempted = new Set(attempts.map(attemptReviewerId).filter(Boolean));
+  const includedProviders = new Set(
+    attempts.filter((attempt) => attempt?.included === true)
+      .map((attempt) => providerForReviewer(routingPlan, attemptReviewerId(attempt)))
+      .filter(Boolean),
+  );
+  const preferredRole = roleForExpansion(reasons);
+  const candidates = (routingPlan.candidate_reviewers || [])
+    .filter((candidate) => !attempted.has(candidate.reviewer_id))
+    .map((candidate) => ({
+      ...candidate,
+      assignment_roles: Array.isArray(candidate.assignment_roles)
+        ? candidate.assignment_roles
+        : ['standard'],
+    }))
+    .map((candidate) => {
+      const assignmentRole = candidate.assignment_roles.includes(preferredRole)
+        ? preferredRole
+        : candidate.assignment_roles[0];
+      const template = candidate.expansion_route_templates
+        ?.find((route) => route.assignment_role === assignmentRole);
+      return { ...candidate, assignmentRole, template };
+    })
+    .filter((candidate) => candidate.assignment_roles.length > 0 && candidate.template)
+    .sort((left, right) => {
+      const leftSupports = left.assignment_roles.includes(preferredRole) ? 0 : 1;
+      const rightSupports = right.assignment_roles.includes(preferredRole) ? 0 : 1;
+      const leftDiversity = includedProviders.has(left.provider) ? 1 : 0;
+      const rightDiversity = includedProviders.has(right.provider) ? 1 : 0;
+      return leftSupports - rightSupports
+        || leftDiversity - rightDiversity
+        || canonicalReviewerIndex(left.reviewer_id) - canonicalReviewerIndex(right.reviewer_id);
+    });
+  const candidate = candidates[0];
+  if (!candidate) return null;
+  const { assignmentRole, template } = candidate;
+  return {
+    ...template,
+    assignment_role: assignmentRole,
+    rubric_id: rubricIdForRole(assignmentRole),
+    wave: 2,
+    required: false,
+    tier_adjustment: 1,
+    independent: true,
+    selection_reason: `same-round expansion for ${reasons.join(', ')}`,
+  };
+}
+
+function providerFamilyCount(attempts, routingPlan) {
+  return new Set(
+    attempts.filter((attempt) => attempt?.included === true)
+      .map((attempt) => providerForReviewer(routingPlan, attemptReviewerId(attempt)))
+      .filter(Boolean),
+  ).size;
+}
+
+/**
+ * Two-wave synthesis authority. Wave 1 may return `needs_expansion` without a
+ * verdict. The caller dispatches exactly `next_assignment` with the same
+ * original evidence and its canonical rubric, then calls this function again
+ * with every attempt and `expansionWavesUsed: 1`.
+ */
+export function synthesizeReviewRound({
+  attempts,
+  consensus,
+  routingPlan,
+  expansionWavesUsed = 0,
+  readinessMismatch = false,
+  deferredAcceptance = null,
+} = {}) {
+  if (!Array.isArray(attempts)) throw new TypeError('attempts must be an array');
+  if (!routingPlan || routingPlan.protocol_version !== '3.0') {
+    throw new Error('adaptive synthesis requires routing plan protocol 3.0');
+  }
+  if (!Number.isInteger(expansionWavesUsed) || expansionWavesUsed < 0) {
+    throw new Error('expansionWavesUsed must be a non-negative integer');
+  }
+  if (routingPlan.operational_failure === true) {
+    return {
+      status: 'operational_failure',
+      needs_expansion: false,
+      n_actual: 0,
+      verdict: null,
+      phase6_allowed: false,
+      exclusions: [],
+      error: 'routing_plan_operational_failure',
+      routing_shortfalls: Array.isArray(routingPlan.shortfalls)
+        ? [...routingPlan.shortfalls]
+        : [],
+    };
+  }
+  if (routingIdentityError(routingPlan)) {
+    return {
+      status: 'operational_failure',
+      needs_expansion: false,
+      n_actual: 0,
+      verdict: null,
+      phase6_allowed: false,
+      exclusions: [],
+      error: 'invalid_routing_plan_identity',
+    };
+  }
+  const hasMaterializedWave2 = (routingPlan.routes || []).some((route) => route.wave === 2);
+  if (expansionWavesUsed > 0 && !hasMaterializedWave2) {
+    return {
+      status: 'operational_failure',
+      needs_expansion: false,
+      n_actual: 0,
+      verdict: null,
+      phase6_allowed: false,
+      exclusions: [],
+      error: 'invalid_routing_plan_identity',
+    };
+  }
+  const effectiveExpansionWavesUsed = hasMaterializedWave2
+    ? Math.max(1, expansionWavesUsed)
+    : expansionWavesUsed;
+  if (deferredAcceptance !== null && (
+    !deferredAcceptance
+    || typeof deferredAcceptance !== 'object'
+    || Array.isArray(deferredAcceptance)
+    || typeof deferredAcceptance.complete !== 'boolean'
+    || !Array.isArray(deferredAcceptance.pending_finding_ids)
+    || deferredAcceptance.pending_finding_ids.some((id) => typeof id !== 'string' || id.length === 0)
+  )) {
+    throw new Error('deferredAcceptance is malformed');
+  }
+  const admittedIds = attempts
+    .filter((attempt) => attempt?.included === true)
+    .map(attemptReviewerId);
+  const attemptedIds = attempts.map(attemptReviewerId);
+  const selectedRouteIds = new Set(
+    (routingPlan.routes || []).map((route) => route.reviewer_id),
+  );
+  const admittedOutputDigests = attempts
+    .filter((attempt) => attempt?.included === true)
+    .map((attempt) => attempt.output_digest);
+  if (attemptedIds.some((id) => !REVIEWER_IDS.includes(id) || !selectedRouteIds.has(id))
+      || new Set(attemptedIds).size !== attemptedIds.length
+      || admittedOutputDigests.some((digest) => !SHA256_PATTERN.test(digest || ''))
+      || new Set(admittedOutputDigests).size !== admittedOutputDigests.length
+      || attempts.some((attempt) => (
+        typeof attempt?.reviewer_id !== 'string'
+        || attempt.role !== attempt.reviewer_id
+      ))) {
+    return {
+      status: 'operational_failure',
+      needs_expansion: false,
+      n_actual: new Set(admittedIds.filter((id) => REVIEWER_IDS.includes(id))).size,
+      verdict: null,
+      phase6_allowed: false,
+      exclusions: [],
+      error: 'invalid_reviewer_identity',
+    };
+  }
+  const shadowMode = routingPlan.shadow_mode === true;
+  const included = attempts.filter((attempt) => attempt?.included === true);
+  const synthesis = synthesizeReviewAttempts(attempts, consensus);
+  const includedIds = new Set(included.map(attemptReviewerId));
+  const missingSelectedRoutes = (routingPlan.routes || [])
+    .filter((route) => !includedIds.has(route.reviewer_id));
+  const missingRequiredRoutes = (routingPlan.routes || [])
+    .filter((route) => route.required === true && !includedIds.has(route.reviewer_id));
+  const missingExpansionRoutes = missingSelectedRoutes.filter((route) => route.wave === 2);
+  if (missingRequiredRoutes.length > 0 || missingExpansionRoutes.length > 0) {
+    const missingHardRoutes = missingRequiredRoutes.length > 0
+      ? missingRequiredRoutes
+      : missingExpansionRoutes;
+    return {
+      status: 'operational_failure',
+      needs_expansion: false,
+      n_actual: included.length,
+      verdict: null,
+      phase6_allowed: false,
+      exclusions: synthesis.exclusions || [],
+      error: 'required_reviewer_unavailable',
+      missing_required_reviewers: missingHardRoutes.map((route) => route.reviewer_id),
+    };
+  }
+  const reasons = shadowMode ? [] : expansionReasons({
+    included,
+    synthesis,
+    routingPlan,
+    readinessMismatch,
+  });
+  const maxExpansionWaves = Number.isInteger(routingPlan.max_expansion_waves)
+    ? routingPlan.max_expansion_waves
+    : 1;
+  let expansionRejected = null;
+  if (reasons.length > 0 && effectiveExpansionWavesUsed < maxExpansionWaves) {
+    const replaceableAdaptiveFloor = new Set(
+      reasons.includes('reviewer_minimum_broken')
+        ? missingSelectedRoutes
+          .filter((route) => route.required === false && route.wave === 1)
+          .map((route) => route.reviewer_id)
+        : [],
+    );
+    const replannedBase = replaceableAdaptiveFloor.size > 0
+      ? {
+        ...routingPlan,
+        routes: (routingPlan.routes || [])
+          .filter((route) => !replaceableAdaptiveFloor.has(route.reviewer_id)),
+        initial_reviewer_ids: (routingPlan.initial_reviewer_ids || [])
+          .filter((reviewerId) => !replaceableAdaptiveFloor.has(reviewerId)),
+        required_reviewer_ids: (routingPlan.required_reviewer_ids || [])
+          .filter((reviewerId) => !replaceableAdaptiveFloor.has(reviewerId)),
+      }
+      : routingPlan;
+    const nextAssignment = chooseExpansionAssignment({
+      attempts,
+      routingPlan: replannedBase,
+      reasons,
+    });
+    if (nextAssignment) {
+      const replacement = replaceableAdaptiveFloor.size > 0
+        ? {
+          ...nextAssignment,
+          required: true,
+          selection_reason: `${nextAssignment.selection_reason}; replaces unavailable adaptive floor route`,
+        }
+        : nextAssignment;
+      const expandedRoutingPlan = {
+        ...replannedBase,
+        routes: [...(replannedBase.routes || []), replacement],
+      };
+      return {
+        status: 'needs_expansion',
+        needs_expansion: true,
+        n_actual: included.length,
+        verdict: null,
+        phase6_allowed: false,
+        expansion_reasons: reasons,
+        next_assignment: replacement,
+        expanded_routing_plan: expandedRoutingPlan,
+        exclusions: synthesis.exclusions || [],
+      };
+    }
+    expansionRejected = 'no_unused_candidate';
+  } else if (reasons.length > 0) {
+    expansionRejected = 'maximum_expansion_waves_reached';
+  }
+
+  const providerFamilies = providerFamilyCount(attempts, routingPlan);
+  const criticalImplementation = routingPlan.artifact_phase === 'implementation'
+    && routingPlan.risk === 'critical';
+  if (criticalImplementation && (included.length < 3 || providerFamilies < 2)) {
+    return {
+      status: 'operational_failure',
+      needs_expansion: false,
+      n_actual: included.length,
+      verdict: null,
+      phase6_allowed: false,
+      exclusions: synthesis.exclusions || [],
+      error: 'critical_reviewer_floor',
+      ...(expansionRejected ? { expansion_rejected: expansionRejected } : {}),
+    };
+  }
+  if (synthesis.status !== 'reviewed') {
+    return {
+      ...synthesis,
+      needs_expansion: false,
+      ...(expansionRejected ? { expansion_rejected: expansionRejected } : {}),
+    };
+  }
+
+  const plannedReviewers = Number(routingPlan.planned_reviewers || routingPlan.minimum_reviewers || 0);
+  const providerMinimum = Number(routingPlan.provider_family_minimum || 1);
+  const floorBroken = !shadowMode && (included.length < plannedReviewers
+    || providerFamilies < providerMinimum
+    || routingPlan.confidence_floor === 'CONCERN');
+  const confidenceFloorApplied = floorBroken && synthesis.verdict === 'APPROVE';
+  const deferredAcceptanceFloor = routingPlan.artifact_phase === 'implementation'
+    && deferredAcceptance?.complete === false
+    && synthesis.verdict === 'APPROVE';
+  const verdict = confidenceFloorApplied || deferredAcceptanceFloor
+    ? 'CONCERN'
+    : synthesis.verdict;
+  const documentBlocked = routingPlan.artifact_phase === 'document'
+    && ['high', 'critical'].includes(routingPlan.risk)
+    && floorBroken;
+  return {
+    ...synthesis,
+    needs_expansion: false,
+    verdict,
+    confidence_floor_applied: confidenceFloorApplied,
+    deferred_acceptance_floor: deferredAcceptanceFloor,
+    provider_families: providerFamilies,
+    ...(shadowMode ? { shadow_mode: true, adaptive_plan_applied: false } : {}),
+    ...(deferredAcceptanceFloor
+      ? { pending_deferred_finding_ids: [...deferredAcceptance.pending_finding_ids] }
+      : {}),
+    ...(documentBlocked ? { document_blocked: true } : {}),
+    ...(expansionRejected ? { expansion_rejected: expansionRejected } : {}),
+  };
+}
+
 const invoked = process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url;
 if (invoked) {
   try {
@@ -141,13 +569,22 @@ if (invoked) {
     const input = JSON.parse(readFileSync(resolve(process.argv[inputIndex + 1]), 'utf8'));
     const attemptInput = Array.isArray(input) ? input : input?.attempts;
     if (!Array.isArray(attemptInput)) throw new TypeError('input must contain an attempt array');
-    const attempts = attemptInput.map((attempt) => (
-      Object.hasOwn(attempt || {}, 'output')
-        ? evaluateReviewerAttempt(attempt)
-        : attempt
-    ));
+    if (attemptInput.some((attempt) => !Object.hasOwn(attempt || {}, 'output'))) {
+      throw new Error('CLI attempts require raw output and fingerprint evidence');
+    }
+    const attempts = attemptInput.map((attempt) => evaluateReviewerAttempt(attempt));
     const consensus = Array.isArray(input) ? undefined : input.consensus;
-    process.stdout.write(`${JSON.stringify(synthesizeReviewAttempts(attempts, consensus))}\n`);
+    const result = !Array.isArray(input) && input.routing_plan
+      ? synthesizeReviewRound({
+        attempts,
+        consensus,
+        routingPlan: input.routing_plan,
+        expansionWavesUsed: input.expansion_waves_used || 0,
+        readinessMismatch: input.readiness_mismatch === true,
+        deferredAcceptance: input.deferred_acceptance || null,
+      })
+      : synthesizeReviewAttempts(attempts, consensus);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
     process.stderr.write(`${JSON.stringify({ status: 'error', error: error.message })}\n`);
     process.exitCode = 2;

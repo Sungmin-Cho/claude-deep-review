@@ -4,6 +4,33 @@
 
 deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)와 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
+## [2.0.0] — 2026-07-24
+
+### 추가
+
+- **Adaptive reviewer routing** — 단발 리뷰와 loop가 canonical reviewer identity를 유지하면서 `standard`, `feasibility`, `traceability`, `adversarial`, `security`, `confirmation` 역할을 결정적으로 선택합니다. Protocol `3.0` plan은 assignment rubric, wave, required 상태, model/effort, 사유, 전체 후보, reviewer floor, artifact phase, risk, progress를 결합합니다.
+- **Progressive expansion** — provisional synthesis가 minimum 미달, 단독 critical/security finding, split concern, readiness 불일치에서 미사용 독립 reviewer를 정확히 한 명 추가한 뒤 모든 trusted attempt로 최종 verdict를 한 번 발행합니다.
+- **Trusted synthesis boundary** — public synthesis CLI가 모든 attempt의 raw report와 fingerprint evidence를 다시 검증합니다. adaptive floor 실패는 한 번 원자적으로 대체하고, 명시적 required reviewer 실패는 operational error로 유지합니다.
+- **Content-addressed readiness authority** — receipt 파일명이 문서 scope와 전체 sealed authority를 함께 바인딩하므로, 파일 내부를 다시 봉인해 risk·reviewer evidence·deferred finding을 축소할 수 없습니다.
+- **Fail-closed plan admission** — synthesis는 이미 실패한 routing plan과 선택 route가 없는 voice를 거부하며, policy parser는 malformed/non-canonical classification override를 거부합니다.
+- **문서 readiness** — 순수 design/spec/plan/ADR/test-plan 리뷰는 verdict와 별도인 `READY_FOR_IMPLEMENTATION`을 사용하고 sealed content-addressed receipt를 생성하며, 문서 round cap에서 `DOCUMENT_BLOCKED`로 종료합니다.
+- **Receipt 연결 구현 리뷰** — `--readiness-receipt PATH`가 저장소/경로 containment와 현재 문서/리포트 hash를 검증하고, 모든 이월 acceptance item에 최신 구현 evidence가 생길 때까지 APPROVE를 막습니다.
+- **공유 loop routing 문법** — loop가 매 라운드 reviewer strategy, routing, model/effort, fallback/classifier, receipt flag를 받습니다. round-state schema 2와 session summary가 assignment, wave, 절약 call, readiness, receipt, stop reason을 기록합니다.
+
+### 변경
+
+- Adaptive reviewer routing과 automatic model routing이 기본 활성화됩니다. `--reviewer-strategy static`은 eligible reviewer set을 고정하고 `routing_shadow_mode: true`는 적용 없이 관찰합니다. 둘을 함께 쓰면 정확한 2.0 이전 dispatch 호환 동작입니다.
+- Risk는 `low|medium|high|critical`에서 단조롭게 유지됩니다. 순수 문서는 기본 2라운드(high/critical은 3), 구현은 명시적 `--max`가 없으면 5라운드를 유지합니다.
+- 구현 reviewer floor가 높아졌습니다. low/medium은 cross-provider 2역할, high는 전문 3역할을 계획하고 부족 시 confidence floor, critical은 trusted reviewer 3명과 provider family 2개 미달 시 verdict 없이 실패합니다.
+- Adaptive route가 실패해도 실제 reviewer/provider 최소값이 유지되면 문서화된 confidence floor를 적용하고, 명시적 reviewer/provider 요구만 identity-hard 제약으로 유지합니다.
+- 유일한 expansion wave에서 required replacement가 실패하면 identity-hard로 처리해 verdict와 Phase 6 없이 종료합니다.
+
+### 보안
+
+- Readiness receipt는 stale/tampered content, symlink, 저장소/경로 escape를 `ERROR_READINESS_RECEIPT_STALE`로 거부합니다. fingerprint mutation exclusion, `N_actual=0`, mutation ownership, Phase 6 gate는 계속 fail-closed입니다.
+- Capability cache 읽기·쓰기는 symlink 경로 구성 요소를 거부하며, companion 기반 Codex reviewer identity는 고정 invocation이 실제로 전달하는 assignment role만 노출합니다.
+- Privacy preflight는 adaptive 선택이 agy를 선택한 뒤에만 실행되며, 선택 후 거부된 agy route는 최대 한 번만 재계획됩니다.
+
 ## [1.15.0] — 2026-07-21
 
 ### 추가

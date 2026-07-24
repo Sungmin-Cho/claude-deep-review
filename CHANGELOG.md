@@ -4,6 +4,33 @@
 
 All notable changes to deep-review are documented here. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] — 2026-07-24
+
+### Added
+
+- **Adaptive reviewer routing** — single reviews and loops deterministically select role-fit `standard`, `feasibility`, `traceability`, `adversarial`, `security`, or `confirmation` assignments while preserving canonical reviewer identities. Protocol `3.0` plans bind assignment rubric, wave, required status, model/effort, reason, full candidates, reviewer floors, artifact phase, risk, and progress.
+- **Progressive expansion** — provisional synthesis may add exactly one unused independent reviewer for a failed minimum, lone critical/security finding, split concern, or readiness mismatch, then emits one final verdict from all trusted attempts.
+- **Trusted synthesis boundary** — the public synthesis CLI revalidates raw report and fingerprint evidence for every attempt; adaptive floor failures are atomically replaced once, while explicit required-reviewer failures remain operational errors.
+- **Content-addressed readiness authority** — receipt filenames bind both the document scope and full sealed authority, so in-place self-resealing cannot lower risk, remove reviewer evidence, or discard deferred findings.
+- **Fail-closed plan admission** — synthesis rejects pre-failed routing plans and voices without selected routes, while policy parsing rejects malformed or non-canonical classification overrides.
+- **Document readiness** — pure design/spec/plan/ADR/test-plan reviews use `READY_FOR_IMPLEMENTATION` independently of verdict, produce a sealed content-addressed receipt, and stop as `DOCUMENT_BLOCKED` at the document round cap.
+- **Receipt-linked implementation review** — `--readiness-receipt PATH` verifies repository/path containment and current document/report hashes, then prevents APPROVE until every deferred acceptance item has fresh implementation evidence.
+- **Shared loop routing grammar** — loop accepts reviewer strategy, routing, model/effort, fallback/classifier, and receipt flags on every round; round-state schema 2 and session summaries record assignments, waves, saved calls, readiness, receipt, and stop reason.
+
+### Changed
+
+- Adaptive reviewer and automatic model routing are enabled by default. `--reviewer-strategy static` fixes the eligible reviewer set, while `routing_shadow_mode: true` observes without applying; use both for exact pre-2.0 dispatch compatibility.
+- Risk is monotonic across `low|medium|high|critical`. Pure documents default to 2 rounds (3 for high/critical); implementation remains 5 unless explicit `--max` overrides it.
+- Implementation reviewer floors are higher: low/medium plans two cross-provider roles, high plans three specialized roles with a confidence floor on shortage, and critical requires three trusted reviewers across two provider families or fails without a verdict.
+- Adaptive route loss uses the documented confidence floor once actual reviewer/provider minima remain satisfied; only explicit reviewer/provider requirements remain identity-hard.
+- A required same-round replacement that fails after the sole expansion wave is identity-hard and terminates without a verdict or Phase 6.
+
+### Security
+
+- Readiness receipts reject stale/tampered content, symlinks, and repository/path escape with `ERROR_READINESS_RECEIPT_STALE`; fingerprint mutation exclusion, `N_actual=0`, mutation ownership, and Phase 6 gates remain fail-closed.
+- Capability cache reads and writes reject symlinked path components, and companion-backed Codex reviewer identities expose only the assignment roles their fixed invocations actually transport.
+- Privacy preflight runs only after adaptive selection chooses agy; a selected-but-declined agy route is replanned at most once.
+
 ## [1.15.0] — 2026-07-21
 
 ### Added

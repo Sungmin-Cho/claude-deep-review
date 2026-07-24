@@ -2,7 +2,7 @@
 name: deep-review
 description: Public cross-runtime entrypoint for independent review, initialization, and evidence-based review response.
 user-invocable: true
-argument-hint: "[init] [--contract [SLICE-NNN]] [--entropy] [--ultracode] [--codex|--no-codex] [--no-opus] [--no-agy] [--codex-only] [--dry-run] [--explain-routing] [--routing auto|fast|balanced|quality] [--model PROVIDER=MODEL] [--effort PROVIDER=EFFORT] [--reviewer-model REVIEWER=MODEL] [--reviewer-effort REVIEWER=EFFORT] [--allow-fallback] [--allow-classifier] [--respond (REPORT_PATH | --source=pr [--pr=NNN])]"
+argument-hint: "[init] [--contract [SLICE-NNN]] [--entropy] [--ultracode] [--codex|--no-codex] [--no-opus] [--no-agy] [--codex-only] [--reviewer-strategy adaptive|static] [--readiness-receipt PATH] [--dry-run] [--explain-routing] [--routing auto|fast|balanced|quality] [--model PROVIDER=MODEL] [--effort PROVIDER=EFFORT] [--reviewer-model REVIEWER=MODEL] [--reviewer-effort REVIEWER=EFFORT] [--allow-fallback] [--allow-classifier] [--respond (REPORT_PATH | --source=pr [--pr=NNN])]"
 ---
 
 # deep-review — public route
@@ -70,8 +70,9 @@ The runtime enforces this grammar:
   - Otherwise read the internal workflow skill and then
     `{plugin_root}/skills/deep-review-workflow/references/review-execution.md`;
     execute its routing preflight immediately before reviewer dispatch, then run
-    it once and 종료 with the resulting report path and verdict. Explicit override
-    preflight failure is terminal; shadow-only failure is a visible warning.
+    it once and 종료 with the resulting report path and verdict or document
+    readiness gate. Policy and explicit-constraint failures are terminal;
+    `routing_shadow_mode: true` records a non-applied observation plan.
 
 The internal workflow and receiving skills are implementation details and are
 not public marketplace prompts.
@@ -86,17 +87,33 @@ canonical reviewer overrides. `--allow-fallback` permits a visible downgrade
 when an explicit request cannot be applied. Model values are opaque and split
 only at the first `=`.
 
+Adaptive reviewer routing and automatic model routing are enabled by default.
+`--reviewer-strategy adaptive` selects only the role-fit reviewer floor and may
+expand once within the same round. `--reviewer-strategy static` fixes the
+eligible reviewer set for compatibility. `routing_shadow_mode: true` computes
+and records the adaptive plan but does not apply it. Use static strategy and
+shadow mode together when exact pre-2.0 dispatch behavior is required.
+
+The `--no-*`, `--codex`, `--codex-only`, and `--ultracode` flags are hard
+eligibility or required-assignment constraints. A reviewer-level model or
+effort override requires that canonical reviewer to be selected; a provider
+override applies only to selected reviewers from that provider and never adds a
+reviewer.
+
 `--allow-classifier` opts `--dry-run` or `--explain-routing` into semantic
 classification for ambiguous artifacts. Artifact content is untrusted data;
 the classifier receives bounded text through stdin, and secret-like content
 fails closed to deterministic classification without being sent externally.
 
-Without explicit overrides, routing is shadow-only by default: it records the
-plan and provenance while preserving the existing reviewer dispatch arguments.
-Automatic application requires project policy to enable
-`automatic_model_routing` and disable `routing_shadow_mode`. A team may commit
-`.deep-review/review-policy.yaml`; because Git cannot re-include a file below an
-ignored directory, replace a `.deep-review/` ignore with both rules below:
+`--readiness-receipt PATH` is implementation-review-only linkage to an earlier
+document gate. The runtime verifies repository and path containment, rejects
+symlinks, and rehashes every document and reviewer report before dispatch.
+Stale or tampered input terminates with `ERROR_READINESS_RECEIPT_STALE`;
+unverified deferred acceptance items prevent `APPROVE`.
+
+A team may commit `.deep-review/review-policy.yaml`; because Git cannot
+re-include a file below an ignored directory, replace a `.deep-review/` ignore
+with both rules below:
 
 ```gitignore
 .deep-review/*

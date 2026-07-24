@@ -25,7 +25,13 @@ function workspace() {
 }
 
 function processResult(overrides = {}) {
-  return { code: 0, timedOut: false, stdout: Buffer.from('review ok\n'), stderr: Buffer.alloc(0), ...overrides };
+  return {
+    code: 0,
+    timedOut: false,
+    stdout: Buffer.from('# Deep Review Report — 2026-07-24\n\n## Summary\n\n- **Verdict**: APPROVE\n- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건\n\n## Code Review\n\n### 🔴 Critical\n\nNone.\n\n### 🟡 Warning\n\nNone.\n\n### ℹ️ Info\n\nNone.\n\n### 🟢 Passed\n\n- Contract valid.\n'),
+    stderr: Buffer.alloc(0),
+    ...overrides,
+  };
 }
 
 test('routing plan leaf validates protocol and maps only its canonical reviewer route', async () => {
@@ -44,6 +50,145 @@ test('routing plan leaf validates protocol and maps only its canonical reviewer 
   assert.equal(plan.source, 'cli-reviewer');
   assert.throws(() => parseExecutionPlanDocument({ ...document, protocol_version: '1.0' }, 'claude-opus'), /protocol_version/);
   assert.throws(() => parseExecutionPlanDocument(document, 'agy'), /reviewer.*agy/i);
+});
+
+test('routing plan leaf reads both legacy 2.0 and assignment-aware 3.0 documents', async () => {
+  const { parseExecutionPlanDocument } = await import(planUrl);
+  const legacy = {
+    protocol_version: '2.0',
+    routes: [{
+      reviewer_id: 'claude-opus',
+      resolved: { model: 'opus', effort: 'high' },
+    }],
+  };
+  const legacyPlan = parseExecutionPlanDocument(legacy, 'claude-opus');
+  assert.equal(legacyPlan.assignmentRole, 'standard');
+  assert.equal(legacyPlan.rubricId, 'standard-v1');
+
+  const current = {
+    protocol_version: '3.0',
+    reviewer_strategy: 'adaptive',
+    shadow_mode: false,
+    artifact_phase: 'document',
+    risk: 'high',
+    progress: 'initial',
+    minimum_reviewers: 1,
+    maximum_reviewers: 4,
+    provider_family_minimum: 1,
+    planned_reviewers: 1,
+    max_expansion_waves: 1,
+    initial_reviewer_ids: ['claude-opus'],
+    required_reviewer_ids: ['claude-opus'],
+    candidate_reviewers: [{
+      reviewer_id: 'claude-opus',
+      provider: 'claude',
+      adapter_id: 'claude-cli',
+      assignment_roles: ['feasibility'],
+      last_status: 'unknown',
+    }],
+    routes: [{
+      reviewer_id: 'claude-opus',
+      provider: 'claude',
+      adapter_id: 'claude-cli',
+      assignment_role: 'feasibility',
+      rubric_id: 'feasibility-v1',
+      wave: 1,
+      required: true,
+      selection_reason: 'role fit and provider diversity',
+      resolved: { model: 'opus', effort: 'xhigh' },
+    }],
+  };
+  const currentPlan = parseExecutionPlanDocument(current, 'claude-opus');
+  assert.equal(currentPlan.assignmentRole, 'feasibility');
+  assert.equal(currentPlan.rubricId, 'feasibility-v1');
+  assert.equal(currentPlan.wave, 1);
+  assert.equal(currentPlan.required, true);
+
+  assert.throws(() => parseExecutionPlanDocument({
+    ...current,
+    routes: [...current.routes, { ...current.routes[0] }],
+  }, 'claude-opus'), /duplicate reviewer route/);
+  assert.throws(() => parseExecutionPlanDocument({
+    ...current,
+    routes: [{ ...current.routes[0], assignment_role: 'invented' }],
+  }, 'claude-opus'), /assignment role/);
+});
+
+test('routing plan protocol 3.0 rejects malformed global, candidate, and route metadata', async () => {
+  const { parseExecutionPlanDocument } = await import(planUrl);
+  const current = {
+    protocol_version: '3.0',
+    reviewer_strategy: 'adaptive',
+    shadow_mode: false,
+    artifact_phase: 'implementation',
+    risk: 'critical',
+    progress: 'regression',
+    minimum_reviewers: 3,
+    maximum_reviewers: 4,
+    provider_family_minimum: 2,
+    planned_reviewers: 3,
+    max_expansion_waves: 1,
+    initial_reviewer_ids: ['claude-opus'],
+    required_reviewer_ids: ['claude-opus'],
+    candidate_reviewers: [{
+      reviewer_id: 'claude-opus',
+      provider: 'claude',
+      adapter_id: 'claude-cli',
+      assignment_roles: ['standard', 'security'],
+      last_status: 'success',
+    }],
+    routes: [{
+      reviewer_id: 'claude-opus',
+      provider: 'claude',
+      adapter_id: 'claude-cli',
+      assignment_role: 'security',
+      rubric_id: 'security-v1',
+      wave: 1,
+      required: true,
+      selection_reason: 'critical security floor',
+      resolved: { model: 'opus', effort: 'xhigh' },
+    }],
+  };
+
+  assert.throws(() => parseExecutionPlanDocument({
+    ...current, artifact_phase: 'mixed',
+  }, 'claude-opus'), /artifact_phase/);
+  assert.throws(() => parseExecutionPlanDocument({
+    ...current, risk: 'severe',
+  }, 'claude-opus'), /risk/);
+  assert.throws(() => parseExecutionPlanDocument({
+    ...current, planned_reviewers: 5,
+  }, 'claude-opus'), /planned_reviewers/);
+  assert.throws(() => parseExecutionPlanDocument({
+    ...current,
+    candidate_reviewers: [{ ...current.candidate_reviewers[0], assignment_roles: ['security', 'security'] }],
+  }, 'claude-opus'), /duplicate assignment roles/);
+  assert.throws(() => parseExecutionPlanDocument({
+    ...current,
+    candidate_reviewers: [{ ...current.candidate_reviewers[0], provider: 'agy' }],
+    routes: [{ ...current.routes[0], provider: 'agy' }],
+  }, 'claude-opus'), /provider is not canonical/);
+  assert.throws(() => parseExecutionPlanDocument({
+    ...current,
+    routes: [{ ...current.routes[0], selection_reason: '' }],
+  }, 'claude-opus'), /selection_reason/);
+  assert.throws(() => parseExecutionPlanDocument({
+    ...current,
+    max_expansion_waves: 0,
+    routes: [{ ...current.routes[0], wave: 2 }],
+  }, 'claude-opus'), /expansion wave is disabled/);
+  assert.throws(() => parseExecutionPlanDocument({
+    ...current,
+    routes: [{ ...current.routes[0], required: false }],
+  }, 'claude-opus'), /hard-required reviewer set/);
+  assert.throws(() => parseExecutionPlanDocument({
+    ...current,
+    routes: [{ ...current.routes[0], wave: 2 }],
+  }, 'claude-opus'), /initial reviewer set/);
+  assert.throws(() => parseExecutionPlanDocument({
+    ...current,
+    routes: [],
+  }, 'claude-opus'), /reviewer without a route/);
 });
 
 test('Claude execution plan forwards verified effort transport and normalizes unreported application', async () => {

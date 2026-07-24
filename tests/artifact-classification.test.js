@@ -1129,6 +1129,47 @@ test('H7: a successful probe still writes the capability cache', async (t) => {
   assert.ok(fs.existsSync(cachePath), 'a fully successful probe must still write the capability cache');
 });
 
+test('H7: a symlinked cache directory is neither read nor written outside the repository', async (t) => {
+  if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script and symlink'); return; }
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-h7-cache-symlink-');
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+  const safeOutput = path.join(repo, 'safe-output');
+  fs.mkdirSync(safeOutput);
+
+  const outsideRoot = temporaryDirectory('deep-review-h7-cache-outside-');
+  const outsideCache = path.join(outsideRoot, 'capability-cache.json');
+  fs.writeFileSync(outsideCache, 'outside sentinel');
+  fs.mkdirSync(path.join(repo, '.deep-review'));
+  fs.symlinkSync(outsideRoot, path.join(repo, '.deep-review', 'tmp'));
+
+  const binDir = temporaryDirectory('deep-review-h7-cache-bin-');
+  const probeLog = path.join(binDir, 'probe-calls.log');
+  writeFakeClaudeBinary(binDir, probeLog);
+  const env = { PATH: `${binDir}${path.delimiter}${R2I1_SAFE_SYSTEM_PATH}`, PROBE_LOG: probeLog };
+
+  const result = await runClassifyArtifactsCli([
+    '--repo', repo,
+    '--files-from0', files,
+    '--emit-routing-plan',
+    '--out', path.join(safeOutput, 'artifact-classification.json'),
+    '--routing-plan-out', path.join(safeOutput, 'routing-plan.json'),
+  ], env, {});
+
+  assert.ok(result.routing_plan.routes.some((route) => route.reviewer_id === 'claude-opus'));
+  assert.ok(
+    fs.readFileSync(probeLog, 'utf8').trim().length > 0,
+    'the external sentinel must not be treated as a cache hit; fresh probes must run',
+  );
+  assert.equal(
+    fs.readFileSync(outsideCache, 'utf8'),
+    'outside sentinel',
+    'best-effort cache persistence must never follow the symlink outside the repository',
+  );
+});
+
 // ---------------------------------------------------------------------------
 // H8: codex-companion availability must be rebuilt fresh from this run's
 // detected.codex_plugin on every cache hit, never reused from a stale
@@ -1165,8 +1206,9 @@ test('H8: a cache written when the companion was absent still yields an availabl
 
   const presentEnv = codexCompanionEnv(binDir, probeLog, companionPath);
   const second = await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], presentEnv, {});
-  assert.equal(second.routing_plan.routes.some((route) => route.reviewer_id === 'codex-review' && route.adapter_id === 'codex-companion'), true,
-    'a cache hit must still rebuild codex-companion fresh and route to it once detected.codex_plugin is true');
+  assert.equal(second.routing_plan.candidate_reviewers.some((candidate) => (
+    candidate.reviewer_id === 'codex-review' && candidate.adapter_id === 'codex-companion'
+  )), true, 'a cache hit must still rebuild codex-companion fresh and make it eligible once detected.codex_plugin is true');
 });
 
 test('H8: a cache written when the companion was present no longer yields codex-companion once detected.codex_plugin is false', async (t) => {
@@ -1187,11 +1229,13 @@ test('H8: a cache written when the companion was present no longer yields codex-
   const presentEnv = codexCompanionEnv(binDir, probeLog, companionPath);
   const first = await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], presentEnv, {});
   assert.ok(fs.existsSync(cachePath), 'the first (companion-present) run must write the cache');
-  assert.equal(first.routing_plan.routes.some((route) => route.reviewer_id === 'codex-review' && route.adapter_id === 'codex-companion'), true);
+  assert.equal(first.routing_plan.candidate_reviewers.some((candidate) => (
+    candidate.reviewer_id === 'codex-review' && candidate.adapter_id === 'codex-companion'
+  )), true);
 
   const absentEnv = codexCompanionEnv(binDir, probeLog, null);
   const second = await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], absentEnv, {});
-  assert.equal(second.routing_plan.routes.some((route) => route.reviewer_id === 'codex-review'), false,
+  assert.equal(second.routing_plan.candidate_reviewers.some((candidate) => candidate.reviewer_id === 'codex-review'), false,
     'a cache hit must never reuse a stale companion-available entry once detected.codex_plugin is false');
 });
 
@@ -1344,6 +1388,20 @@ test('J2: writeContainedFile refuses a symlinked .deep-review/tmp ancestor direc
     fs.existsSync(path.join(outsideRoot, 'artifact-classification.json')),
     false,
     'no file must be written through the symlinked directory to the outside target',
+  );
+});
+
+test('J2: readContainedFile refuses a symlinked ancestor directory that escapes the repo', async () => {
+  const { readContainedFile } = await import(runtimeContextUrl);
+  const repo = temporaryDirectory('deep-review-j2-read-dir-symlink-');
+  const outsideRoot = temporaryDirectory('deep-review-j2-read-outside-');
+  fs.writeFileSync(path.join(outsideRoot, 'capability-cache.json'), '{"outside":true}\n');
+  fs.mkdirSync(path.join(repo, '.deep-review'), { recursive: true });
+  fs.symlinkSync(outsideRoot, path.join(repo, '.deep-review', 'tmp'));
+
+  assert.throws(
+    () => readContainedFile(repo, path.join(repo, '.deep-review', 'tmp', 'capability-cache.json')),
+    /symlink/,
   );
 });
 

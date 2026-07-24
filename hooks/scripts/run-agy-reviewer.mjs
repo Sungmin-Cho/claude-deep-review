@@ -30,6 +30,34 @@ them. Any workspace mutation invalidates this review.
 The review request follows below.
 ============================================================
 
+OUTPUT CONTRACT - REQUIRED
+============================================================
+Your entire response MUST use the canonical outer report contract below.
+Do not use an alternative title, security-audit title, or free-form verdict.
+
+# Deep Review Report — YYYY-MM-DD
+
+## Summary
+
+- **Verdict**: APPROVE | CONCERN | REQUEST_CHANGES
+- **Review Mode**: 1-way (agy only)
+- **Issues**: 🔴 N건, 🟡 N건, ℹ️ N건
+
+## Code Review
+
+### 🔴 Critical
+### 🟡 Warning
+### ℹ️ Info
+### 🟢 Passed
+
+Use REQUEST_CHANGES when any Critical exists, CONCERN when only Warnings exist,
+and APPROVE only when both Critical and Warning counts are zero. The issue
+counts MUST equal the findings in the sections. Missing or malformed contract
+fields cause this reviewer output to be excluded.
+For an empty severity section, write exactly \`없음.\`, \`None.\`, or
+\`(없음)\`; do not invent another placeholder.
+============================================================
+
 `;
 const AUTH_PATTERN = /Reauthentication required|do not currently have an active account|OAuth token expired|Please run.*agy.*login|Not signed in|Authentication failed/iu;
 const UNSUPPORTED_MODEL_PATTERN = /unsupported[^\n]*(?:model|--model)|unknown[^\n]*(?:model|--model)|invalid[^\n]*model|unrecognized[^\n]*--model/iu;
@@ -56,6 +84,42 @@ function terminalStatus({ mutation, truncated, processResult }) {
   if (processResult.code !== 0 && AUTH_PATTERN.test(stderr)) return 'not_authenticated';
   if (processResult.code !== 0 || processResult.stdout.length === 0) return 'failed';
   return 'success';
+}
+
+function sectionFindingCount(output, heading) {
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  const match = new RegExp(
+    `^### ${escaped}[ \\t]*\\r?\\n([\\s\\S]*?)(?=^### |^## |(?![\\s\\S]))`,
+    'mu',
+  ).exec(output);
+  if (!match) return null;
+  const body = match[1].trim();
+  if (/^(?:None\.|없음\.|\(None\)|\(없음\)|- N\/A|- None\.)$/iu.test(body)) return 0;
+  const subheadings = [...body.matchAll(/^####\s+\S.*$/gmu)].length;
+  if (subheadings > 0) return subheadings;
+  const listItems = [...body.matchAll(/^(?:[-*]\s+|[0-9]+\.\s+)\S.*$/gmu)].length;
+  return listItems > 0 ? listItems : null;
+}
+
+export function normalizeAgyReport(output) {
+  if (typeof output !== 'string' || output.length === 0) return null;
+  const headings = [...output.matchAll(/^# Deep Review Report — [0-9]{4}-[0-9]{2}-[0-9]{2}$/gmu)];
+  if (headings.length !== 1 || !/^## Summary$/mu.test(output) || !/^## Code Review$/mu.test(output)) return null;
+  const verdict = /^- \*\*Verdict\*\*:\s*(APPROVE|CONCERN|REQUEST_CHANGES)\s*$/mu.exec(output)?.[1];
+  const issues = /^- \*\*Issues\*\*:\s*[^\n]*?🔴\s*([0-9]+)[^\n]*?🟡\s*([0-9]+)[^\n]*?ℹ(?:️)?\s*([0-9]+)[^\n]*$/mu.exec(output);
+  if (!verdict || !issues) return null;
+  const declared = issues.slice(1).map(Number);
+  const actual = [
+    sectionFindingCount(output, '🔴 Critical'),
+    sectionFindingCount(output, '🟡 Warning'),
+    sectionFindingCount(output, 'ℹ️ Info'),
+  ];
+  if (actual.some((count) => count === null)
+      || actual.some((count, index) => count !== declared[index])) return null;
+  const expectedVerdict = declared[0] > 0
+    ? 'REQUEST_CHANGES'
+    : declared[1] > 0 ? 'CONCERN' : 'APPROVE';
+  return verdict === expectedVerdict ? output : null;
 }
 
 function publishTerminalFiles(outputFile, processResult, status, warnings, mutationReason) {
@@ -351,15 +415,22 @@ export async function runAgyReviewer(options = {}) {
   const after = await fingerprintCapturer({ repo: projectRoot, pluginRoot, mode });
   if (after.warning && after.warning !== before.warning) warnings.push(after.warning);
   const mutation = fingerprintChanged(before, after);
-  const status = terminalStatus({ mutation: mutation.changed, truncated, processResult });
-  publishTerminalFiles(outputFile, processResult, status, warnings, mutation.reason);
+  let status = terminalStatus({ mutation: mutation.changed, truncated, processResult });
+  const rawStdout = processResult.stdout.toString('utf8');
+  const normalized = status === 'success' ? normalizeAgyReport(rawStdout) : null;
+  if (status === 'success' && normalized === null) status = 'failed';
+  const publishedResult = normalized === null
+    ? processResult
+    : { ...processResult, stdout: Buffer.from(normalized, 'utf8') };
+  publishTerminalFiles(outputFile, publishedResult, status, warnings, mutation.reason);
   return {
     status,
     attempted: true,
     privacyOutcome: terminalPrivacy.outcome,
     code: processResult.code,
     timedOut: processResult.timedOut,
-    stdout: processResult.stdout.toString('utf8'),
+    stdout: publishedResult.stdout.toString('utf8'),
+    raw_stdout: rawStdout,
     stderr: processResult.stderr.toString('utf8'),
     mutation: mutation.changed,
     mutationReason: mutation.reason,

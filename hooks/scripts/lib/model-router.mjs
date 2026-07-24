@@ -1,15 +1,26 @@
 import { EFFORT_ALIASES, EFFORT_LEVELS, MODEL_TIERS } from './target-taxonomy.mjs';
+import {
+  maximumRisk,
+  planReviewerAssignments,
+} from './adaptive-review-routing.mjs';
+import { isAssignmentRole, rubricIdForRole } from './assignment-rubrics.mjs';
 
-export const ROUTING_PROTOCOL_VERSION = '2.0';
+export const ROUTING_PROTOCOL_VERSION = '3.0';
 
 const HIGH_RISK = Object.freeze([
   /\bauthentication\b/iu, /\bauthori[sz]ation\b/iu, /\bpayments?\b/iu, /\bbilling\b/iu,
   /\bsecrets?\b/iu, /\bcryptograph/iu, /\b(?:schema\s+)?migration\b/iu,
-  /\bdestructive\b/iu, /\bconcurrenc/iu, /\brace condition\b/iu,
+  /\bconcurrenc/iu, /\brace condition\b/iu,
   /\b(?:retry|idempotenc)/iu, /\bdistributed lock\b/iu, /\bdeploy/iu,
   /\binfrastructure\b/iu, /\bpublic api\b/iu, /\bbackward incompat/iu,
-  /\birreversible\b/iu, /\b(?:rollback|recovery)\b/iu, /\buser data (?:export|delete)\b/iu,
-  /\bpermission boundary\b/iu, /(?:^|[/\\])auth(?:[/\\]|$)/iu,
+  /\b(?:rollback|recovery)\b/iu, /(?:^|[/\\])auth(?:[/\\]|$)/iu,
+]);
+const CRITICAL_RISK = Object.freeze([
+  /\bdestructive\b/iu,
+  /\birreversible\b/iu,
+  /\buser data\b/iu,
+  /\bsecurity boundary\b/iu,
+  /\bpermission boundary\b/iu,
 ]);
 const SIZE_NAMES = Object.freeze(['tiny', 'small', 'medium', 'large']);
 const EFFORT_ORDER = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
@@ -18,12 +29,34 @@ const DEFAULT_SIZE_THRESHOLDS = Object.freeze({
   document: Object.freeze([10 * 1024, 30 * 1024, 100 * 1024]),
 });
 
-export function assessRisk(artifacts = []) {
-  if (artifacts.some((artifact) => artifact.content_risk === 'high')) return 'high';
+export function assessRisk(artifacts = [], options = {}) {
+  if (!Array.isArray(artifacts)) throw new TypeError('artifacts must be an array');
   const text = artifacts.map((artifact) => [
     artifact.path, artifact.diff, artifact.content, artifact.signal_summary,
   ].filter(Boolean).join('\n')).join('\n');
-  return HIGH_RISK.some((pattern) => pattern.test(text)) ? 'high' : 'low';
+  const highSignal = artifacts.some((artifact) => ['high', 'critical'].includes(artifact.content_risk))
+    || HIGH_RISK.some((pattern) => pattern.test(text));
+  const criticalSignal = artifacts.some((artifact) => artifact.content_risk === 'critical')
+    || CRITICAL_RISK.some((pattern) => pattern.test(text));
+  const uncertain = artifacts.some((artifact) => (
+    (Number.isFinite(artifact?.confidence) && artifact.confidence < 0.55)
+    || artifact?.semantic_status === 'failed'
+    || (artifact?.needs_semantic === true && artifact?.semantic_status === 'deferred')
+  ));
+  const targetKinds = new Set(artifacts.map((artifact) => artifact?.target_kind).filter(Boolean));
+  const mixed = targetKinds.has('mixed') || targetKinds.size > 1;
+  let assessed = highSignal && criticalSignal
+    ? 'critical'
+    : highSignal || criticalSignal ? 'high'
+      : uncertain || mixed ? 'medium' : 'low';
+  assessed = maximumRisk(
+    assessed,
+    options.riskFloor,
+    options.priorRisk,
+    options.receiptRisk,
+    options.policyRisk,
+  );
+  return assessed;
 }
 
 function sizeThresholds(value, name) {
@@ -114,6 +147,20 @@ function applyRoutingPolicy(profile, routingPolicy, risk) {
   return profile;
 }
 
+function adjustedProfile(profile, adjustment = 0) {
+  if (!Number.isInteger(adjustment) || adjustment === 0) return profile;
+  const move = (value, order) => {
+    const index = order.indexOf(value);
+    if (index < 0) return value;
+    return order[Math.max(0, Math.min(order.length - 1, index + adjustment))];
+  };
+  return {
+    ...profile,
+    model_tier: move(profile.model_tier, MODEL_TIERS),
+    effort: move(profile.effort, EFFORT_ORDER),
+  };
+}
+
 function capabilityFor(reviewer, capabilities) {
   return capabilities.find((item) => item.adapter_id === reviewer.adapter_id)
     || capabilities.find((item) => item.provider === reviewer.provider && item.roles?.includes(reviewer.role));
@@ -195,7 +242,11 @@ export function routeReviewer({ unit, reviewer, risk = 'low', size = 'small', po
   const capability = capabilityFor(reviewer, capabilities);
   if (!capability || capability.available === false) throw new Error(`ERROR_PROVIDER_UNAVAILABLE: ${reviewer.provider}`);
   const routingPolicy = overrides.routing_policy || policy.routing?.policy || 'auto';
-  const profile = applyRoutingPolicy(matrixProfile(unit.target_kind, risk, size, reviewer.role), routingPolicy, risk);
+  const assignmentRole = reviewer.assignment_role || reviewer.role;
+  const profile = adjustedProfile(
+    applyRoutingPolicy(matrixProfile(unit.target_kind, risk, size, assignmentRole), routingPolicy, risk),
+    reviewer.tier_adjustment || 0,
+  );
   const selected = sourceSelection({ profile, reviewer, policy, overrides });
   const tierResolution = resolveTier(profile.model_tier, reviewer, policy, capability);
   const requested = {
@@ -263,6 +314,11 @@ export function routeReviewer({ unit, reviewer, risk = 'low', size = 'small', po
     reviewer_id: reviewer.id,
     provider: reviewer.provider,
     adapter_id: capability.adapter_id,
+    assignment_role: assignmentRole,
+    rubric_id: reviewer.rubric_id || `${assignmentRole}-v1`,
+    wave: reviewer.wave || 1,
+    required: Boolean(reviewer.required),
+    selection_reason: reviewer.selection_reason || 'legacy direct route',
     transports: {
       model: capability.model_selection?.transport ?? 'unknown',
       effort: capability.effort_selection?.transport ?? 'unknown',
@@ -270,7 +326,7 @@ export function routeReviewer({ unit, reviewer, risk = 'low', size = 'small', po
     requested,
     resolved,
     fallback,
-    route_explanation: `${unit.target_kind}/${risk}/${size}/${reviewer.role} -> ${profile.model_tier}/${profile.effort}; reviewer plan: ${profile.reviewer_plan}`,
+    route_explanation: `${unit.target_kind}/${risk}/${size}/${assignmentRole} -> ${profile.model_tier}/${profile.effort}; reviewer plan: ${profile.reviewer_plan}`,
   };
 }
 
@@ -279,27 +335,148 @@ function maxClass(values, order) {
 }
 
 export function buildRoutingPlan({
-  artifacts = [], reviewers = [], policy = {}, overrides = {}, capabilities = [], riskFloor,
+  artifacts = [],
+  reviewers = [],
+  policy = {},
+  overrides = {},
+  capabilities = [],
+  riskFloor,
+  priorRisk,
+  receiptRisk,
+  progress,
 } = {}) {
   // H3: riskFloor is an optional additive override — when the caller has
   // independently derived 'high' risk from the actual change patch (removed
   // high-risk content, a deleted high-risk file), it wins over the
   // per-artifact assessment without weakening it. Leaving riskFloor
   // undefined preserves every existing caller's behavior exactly.
-  const risk = riskFloor === 'high' ? 'high' : assessRisk(artifacts);
   const sizes = artifacts.map((artifact) => assessSize(artifact, policy.classification?.size_thresholds));
   const size = sizes.length ? maxClass(sizes, SIZE_NAMES) : 'tiny';
+  const risk = maximumRisk(
+    assessRisk(artifacts, {
+      riskFloor,
+      priorRisk,
+      receiptRisk,
+    }),
+    ['medium', 'large'].includes(size) ? 'medium' : 'low',
+  );
   const unit = artifacts.length === 1 ? artifacts[0] : { target_kind: artifacts.length ? 'mixed' : 'unknown' };
+  const reviewerStrategy = overrides.reviewer_strategy
+    || (policy.features?.adaptive_reviewer_routing === false
+      ? 'static'
+      : policy.routing?.reviewer_strategy || 'adaptive');
+  const candidates = reviewers.map((reviewer) => {
+    const capability = capabilityFor(reviewer, capabilities);
+    const assignmentRoles = (
+      reviewer.assignment_roles
+      || capability?.assignment_roles
+      || capability?.roles
+      || [reviewer.role]
+    )
+      .filter(isAssignmentRole);
+    return {
+      ...reviewer,
+      assignment_roles: assignmentRoles.length > 0 ? assignmentRoles : [reviewer.role],
+      last_status: reviewer.last_status,
+    };
+  });
+  const requiredReviewers = [
+    ...new Set([
+      ...(overrides.required_reviewers || []),
+      ...Object.keys(overrides.reviewers || {}),
+    ]),
+  ];
+  const assignmentPlan = planReviewerAssignments({
+    artifacts,
+    risk,
+    candidates,
+    reviewerStrategy,
+    maximumReviewers: policy.routing?.maximum_reviewers ?? 4,
+    progress,
+    requiredReviewers,
+    requiredProviders: overrides.required_providers || [],
+    providerOverrides: overrides.providers || {},
+  });
+  const reviewerById = new Map(reviewers.map((reviewer) => [reviewer.id, reviewer]));
+  const routedAssignment = (assignment) => {
+    const reviewer = reviewerById.get(assignment.reviewer_id);
+    return routeReviewer({
+      unit,
+      reviewer: {
+        ...reviewer,
+        ...assignment,
+        role: assignment.assignment_role,
+      },
+      risk,
+      size,
+      policy,
+      overrides,
+      capabilities,
+    });
+  };
+  const routes = assignmentPlan.assignments.map(routedAssignment);
+  const selectedIds = new Set(routes.map((route) => route.reviewer_id));
+  const candidateReviewers = assignmentPlan.candidate_reviewers.map((candidate) => {
+    if (selectedIds.has(candidate.reviewer_id)) return candidate;
+    const expansionRouteTemplates = [];
+    const expansionRouteErrors = [];
+    for (const assignmentRole of candidate.assignment_roles) {
+      try {
+        expansionRouteTemplates.push(routedAssignment({
+          reviewer_id: candidate.reviewer_id,
+          provider: candidate.provider,
+          adapter_id: candidate.adapter_id,
+          assignment_role: assignmentRole,
+          rubric_id: rubricIdForRole(assignmentRole),
+          wave: 2,
+          required: false,
+          tier_adjustment: 1,
+          selection_reason: 'same-round expansion route template',
+        }));
+      } catch (error) {
+        expansionRouteErrors.push({
+          assignment_role: assignmentRole,
+          error: error.message,
+        });
+      }
+    }
+    return {
+      ...candidate,
+      expansion_route_templates: expansionRouteTemplates,
+      ...(expansionRouteErrors.length > 0
+        ? { expansion_route_errors: expansionRouteErrors }
+        : {}),
+    };
+  });
   return {
     protocol_version: ROUTING_PROTOCOL_VERSION,
     routing_policy: overrides.routing_policy || policy.routing?.policy || 'auto',
-    shadow_mode: policy.features?.routing_shadow_mode !== false,
-    routes: reviewers.map((reviewer) => routeReviewer({ unit, reviewer, risk, size, policy, overrides, capabilities })),
+    reviewer_strategy: reviewerStrategy,
+    shadow_mode: policy.features?.routing_shadow_mode === true,
+    artifact_phase: assignmentPlan.artifact_phase,
+    risk,
+    size,
+    progress: assignmentPlan.progress,
+    candidate_reviewers: candidateReviewers,
+    minimum_reviewers: assignmentPlan.minimum_reviewers,
+    maximum_reviewers: assignmentPlan.maximum_reviewers,
+    provider_family_minimum: assignmentPlan.provider_family_minimum,
+    planned_reviewers: assignmentPlan.planned_reviewers,
+    initial_reviewer_ids: assignmentPlan.initial_reviewer_ids,
+    required_reviewer_ids: assignmentPlan.required_reviewer_ids,
+    shortfalls: assignmentPlan.shortfalls,
+    confidence_floor: assignmentPlan.confidence_floor,
+    operational_failure: assignmentPlan.operational_failure,
+    max_expansion_waves: policy.routing?.max_expansion_waves ?? 1,
+    routes,
   };
 }
 
 export function renderRoutingExplanation(plan) {
-  const lines = [`Routing policy: ${plan.routing_policy}${plan.shadow_mode ? ' (shadow)' : ''}`];
+  const lines = [
+    `Routing policy: ${plan.routing_policy}${plan.shadow_mode ? ' (shadow)' : ''}`,
+    `Reviewer strategy: ${plan.reviewer_strategy || 'static'}; phase=${plan.artifact_phase || 'unknown'}; risk=${plan.risk || 'unknown'}`,
+  ];
   for (const route of plan.routes) {
     lines.push(`${route.reviewer_id}: model=${route.resolved.model ?? 'provider-default'}, effort=${route.resolved.effort ?? 'provider-default'}`);
     lines.push(`  ${route.route_explanation}`);

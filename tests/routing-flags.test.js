@@ -38,6 +38,7 @@ test('review routing flags normalize repeated provider and canonical reviewer ov
       'codex-adversarial': { effort: 'max' },
       agy: { model: 'agy-fast' },
     },
+    required_reviewers: ['agy', 'claude-opus', 'codex-adversarial', 'codex-review'],
   });
 });
 
@@ -65,10 +66,60 @@ test('F9: reviewer-level overrides conflicting with a disabled provider are reje
   assert.equal(parse(['--no-agy', '--reviewer-model', 'claude-opus=opus']).ok, true);
 });
 
-test('loop grammar continues to reject all new review routing flags', async () => {
+test('loop grammar accepts and transports review routing flags on every round', async () => {
   const { parsePublicRoute } = await import(routeUrl);
-  for (const argv of [['--routing', 'auto'], ['--model', 'claude=x'], ['--allow-fallback'], ['--allow-classifier']]) {
-    assert.equal(parsePublicRoute({ entry: 'loop', host: 'codex', argv }).ok, false);
+  const result = parsePublicRoute({
+    entry: 'loop',
+    host: 'claude',
+    cwd: process.cwd(),
+    argv: [
+      '--max=3',
+      '--routing', 'quality',
+      '--reviewer-strategy', 'static',
+      '--model', 'claude=opus',
+      '--effort', 'codex=xhigh',
+      '--reviewer-model', 'agy=gemini',
+      '--reviewer-effort', 'codex-review=high',
+      '--allow-fallback',
+      '--allow-classifier',
+    ],
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.overrides.routing_policy, 'quality');
+  assert.equal(result.overrides.reviewer_strategy, 'static');
+  assert.equal(result.overrides.providers.claude.model, 'opus');
+  assert.equal(result.overrides.providers.codex.effort, 'xhigh');
+  assert.equal(result.overrides.reviewers.agy.model, 'gemini');
+  assert.equal(result.overrides.reviewers['codex-review'].effort, 'high');
+  assert.equal(result.overrides.allow_fallback, true);
+  assert.equal(result.overrides.allow_classifier, true);
+  assert.equal(result.max, 3);
+  assert.equal(result.maxExplicit, true);
+});
+
+test('reviewer strategy and readiness receipt are validated without ambiguous duplicates', async () => {
+  const { parsePublicRoute } = await import(routeUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-readiness-route-'));
+  const receipt = path.join(repo, 'receipt.json');
+  fs.writeFileSync(receipt, '{}');
+
+  const adaptive = parsePublicRoute({
+    entry: 'review', host: 'codex', cwd: repo,
+    argv: ['--reviewer-strategy', 'adaptive', '--readiness-receipt', receipt],
+  });
+  assert.equal(adaptive.ok, true);
+  assert.equal(adaptive.overrides.reviewer_strategy, 'adaptive');
+  assert.equal(adaptive.readinessReceipt, receipt);
+
+  for (const argv of [
+    ['--reviewer-strategy', 'adaptive', '--reviewer-strategy', 'static'],
+    ['--routing', 'fast', '--routing', 'quality'],
+    ['--readiness-receipt', receipt, '--readiness-receipt', receipt],
+    ['--reviewer-strategy', 'random'],
+    ['--readiness-receipt', path.join(repo, 'missing.json')],
+  ]) {
+    const result = parsePublicRoute({ entry: 'review', host: 'codex', cwd: repo, argv });
+    assert.equal(result.ok, false, argv.join(' '));
   }
 });
 
@@ -267,7 +318,7 @@ test('G2: --codex-only yields disabled_providers [agy, claude] and a codex-only 
   assert.deepEqual(result.routing_plan.routes.map((r) => r.reviewer_id), ['codex-review'], 'only the codex reviewer must remain routable under --codex-only');
 });
 
-test('G2: no disable flags at all keeps today\'s byte-identical plan (every eligible reviewer routed)', async () => {
+test('G2: no flags use adaptive defaults while explicit static + shadow preserves every eligible reviewer', async () => {
   const { parsePublicRoute } = await import(routeUrl);
   const { runClassifyArtifactsCli } = await import(classifyUrl);
   const route = parsePublicRoute({ entry: 'review', host: 'claude', cwd: root, argv: [] });
@@ -283,7 +334,28 @@ test('G2: no disable flags at all keeps today\'s byte-identical plan (every elig
     {},
     { capabilities: g2Capabilities(), reviewers: g2Reviewers },
   );
-  assert.deepEqual(result.routing_plan.routes.map((r) => r.reviewer_id).sort(), ['agy', 'claude-opus', 'codex-review']);
+  assert.deepEqual(result.routing_plan.routes.map((r) => r.reviewer_id).sort(), ['claude-opus', 'codex-review']);
+  assert.deepEqual(
+    result.routing_plan.candidate_reviewers.map((r) => r.reviewer_id).sort(),
+    ['agy', 'claude-opus', 'codex-review'],
+  );
+  assert.equal(result.routing_plan.shadow_mode, false);
+
+  const staticRoute = parsePublicRoute({
+    entry: 'review', host: 'claude', cwd: root,
+    argv: ['--reviewer-strategy', 'static'],
+  });
+  const staticResult = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', files, '--overrides-json', JSON.stringify(staticRoute.overrides), '--emit-routing-plan'],
+    {},
+    {
+      capabilities: g2Capabilities(),
+      reviewers: g2Reviewers,
+      projectPolicy: { features: { routing_shadow_mode: true } },
+    },
+  );
+  assert.deepEqual(staticResult.routing_plan.routes.map((r) => r.reviewer_id).sort(), ['agy', 'claude-opus', 'codex-review']);
+  assert.equal(staticResult.routing_plan.shadow_mode, true);
 });
 
 // ---------------------------------------------------------------------------

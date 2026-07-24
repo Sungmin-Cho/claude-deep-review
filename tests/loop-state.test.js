@@ -159,13 +159,140 @@ test('recordRound mints a loop_id on round 1 and echoes {loop_id, state_file}', 
   assert.equal(result.state_file, resolve(tmpDir, `loop-${result.loop_id}-round-1.state.json`));
 
   const persisted = JSON.parse(readFileSync(result.state_file, 'utf8'));
-  assert.equal(persisted.schema_version, 1);
+  assert.equal(persisted.schema_version, 2);
   assert.equal(persisted.source, 'report-parse');
   assert.equal(persisted.loop_id, result.loop_id);
   assert.equal(persisted.round_number, 1);
   assert.equal(persisted.base_commit, 'deadbeef');
   assert.equal(persisted.verdict, 'REQUEST_CHANGES');
   assert.deepEqual(persisted.counts, { critical: 1, warning: 2, info: 3 });
+  assert.equal(persisted.artifact_phase, null);
+  assert.equal(persisted.risk, null);
+  assert.deepEqual(persisted.assignments, []);
+});
+
+test('round-state schema 2 records adaptive routing, response, expansion, and readiness evidence', async () => {
+  const { recordRound } = await loadLoopState();
+  const root = temporaryDirectory();
+  const { reviewPath, responsePath, tmpDir } = writeFixtures(root);
+  const receiptPath = join(root, '.deep-review', 'receipts', 'document-readiness', `${'b'.repeat(64)}.json`);
+  const result = recordRound({
+    roundNumber: 1,
+    reviewReport: reviewPath,
+    responseReport: responsePath,
+    baseCommit: 'deadbeef',
+    stateDir: tmpDir,
+    routingMetadata: {
+      artifact_phase: 'document',
+      risk: 'high',
+      routing_plan_digest: 'a'.repeat(64),
+      planned_reviewers: ['claude-opus', 'codex-review'],
+      actual_reviewers: ['claude-opus', 'codex-review'],
+      wave: 2,
+      expansion: true,
+      reviewer_calls_saved: 2,
+      readiness: 'READY_FOR_IMPLEMENTATION',
+      receipt_path: receiptPath,
+      assignments: [
+        {
+          reviewer_id: 'claude-opus',
+          assignment_role: 'feasibility',
+          model: 'claude-opus-4-6',
+          effort: 'high',
+          wave: 1,
+        },
+        {
+          reviewer_id: 'codex-review',
+          assignment_role: 'traceability',
+          model: 'gpt-5.4',
+          effort: 'high',
+          wave: 2,
+        },
+      ],
+    },
+  });
+  const persisted = JSON.parse(readFileSync(result.state_file, 'utf8'));
+  assert.equal(persisted.schema_version, 2);
+  assert.equal(persisted.artifact_phase, 'document');
+  assert.equal(persisted.risk, 'high');
+  assert.equal(persisted.routing_plan_digest, 'a'.repeat(64));
+  assert.deepEqual(persisted.planned_reviewers, ['claude-opus', 'codex-review']);
+  assert.deepEqual(persisted.actual_reviewers, ['claude-opus', 'codex-review']);
+  assert.equal(persisted.wave, 2);
+  assert.equal(persisted.expansion, true);
+  assert.equal(persisted.response_metrics.accepted_count, 1);
+  assert.equal(persisted.response_metrics.implemented_count, 1);
+  assert.equal(persisted.readiness, 'READY_FOR_IMPLEMENTATION');
+  assert.equal(persisted.receipt_path, resolve(receiptPath));
+  assert.equal(persisted.assignments[1].assignment_role, 'traceability');
+});
+
+test('round-state schema 2 records provider-default model and effort as null', async () => {
+  const { recordRound } = await loadLoopState();
+  const root = temporaryDirectory();
+  const { reviewPath, responsePath, tmpDir } = writeFixtures(root);
+  const result = recordRound({
+    roundNumber: 1,
+    reviewReport: reviewPath,
+    responseReport: responsePath,
+    baseCommit: 'deadbeef',
+    stateDir: tmpDir,
+    routingMetadata: {
+      artifact_phase: 'implementation',
+      risk: 'low',
+      routing_plan_digest: 'a'.repeat(64),
+      planned_reviewers: ['codex-review'],
+      actual_reviewers: ['codex-review'],
+      wave: 1,
+      expansion: false,
+      reviewer_calls_saved: 0,
+      readiness: null,
+      receipt_path: null,
+      assignments: [{
+        reviewer_id: 'codex-review',
+        assignment_role: 'standard',
+        model: null,
+        effort: null,
+        wave: 1,
+      }],
+    },
+  });
+  const state = JSON.parse(readFileSync(result.state_file, 'utf8'));
+  assert.equal(state.assignments[0].model, null);
+  assert.equal(state.assignments[0].effort, null);
+});
+
+test('schema 1 round state remains readable but contributes no inferred adaptive metadata', async () => {
+  const { recordRound, renderPriorContext } = await loadLoopState();
+  const root = temporaryDirectory();
+  const { reviewPath, tmpDir } = writeFixtures(root);
+  const result = recordRound({
+    roundNumber: 1,
+    reviewReport: reviewPath,
+    baseCommit: 'deadbeef',
+    stateDir: tmpDir,
+  });
+  const legacy = JSON.parse(readFileSync(result.state_file, 'utf8'));
+  legacy.schema_version = 1;
+  for (const key of [
+    'artifact_phase',
+    'risk',
+    'routing_plan_digest',
+    'planned_reviewers',
+    'actual_reviewers',
+    'wave',
+    'expansion',
+    'reviewer_calls_saved',
+    'response_metrics',
+    'readiness',
+    'receipt_path',
+    'assignments',
+  ]) delete legacy[key];
+  writeFileSync(result.state_file, `${JSON.stringify(legacy)}\n`);
+  const output = join(tmpDir, 'legacy.prior.md');
+  const rendered = renderPriorContext({ stateFile: result.state_file, output });
+  assert.equal(rendered.round_number, 1);
+  assert.match(readFileSync(output, 'utf8'), /PRIOR-CONTEXT v1/u);
 });
 
 test('recordRound reuses an explicit loopId on round 2 instead of minting a new one', async () => {
@@ -478,6 +605,62 @@ test('compare-rounds reports repeated/resolved/added and a >=0.5 repeat_ratio as
   assert.ok(Math.abs(compared.json.repeat_ratio - 2 / 3) < 1e-9);
   assert.equal(compared.json.stalled, true);
   assert.equal(compared.json.progressed, true);
+  assert.equal(compared.json.progress, 'regression');
+});
+
+test('progress classification is code-owned with regression > confirmation > stalled > changed priority', async () => {
+  const { classifyRoundProgress } = await loadLoopState();
+  assert.equal(classifyRoundProgress({
+    added_count: 1, resolved_count: 3, stalled: true,
+  }), 'regression');
+  assert.equal(classifyRoundProgress({
+    added_count: 0, resolved_count: 1, stalled: true,
+  }), 'confirmation');
+  assert.equal(classifyRoundProgress({
+    added_count: 0, resolved_count: 0, stalled: true,
+  }), 'stalled');
+  assert.equal(classifyRoundProgress({
+    added_count: 0, resolved_count: 0, stalled: false,
+  }), 'changed');
+});
+
+test('loop round policy uses document risk caps, explicit --max override, and implementation default 5', async () => {
+  const { resolveLoopRoundPolicy, evaluateLoopTermination } = await loadLoopState();
+  assert.deepEqual(resolveLoopRoundPolicy({
+    artifactPhase: 'document', risk: 'low',
+  }), { artifact_phase: 'document', risk: 'low', round_limit: 2, max_explicit: false });
+  assert.equal(resolveLoopRoundPolicy({
+    artifactPhase: 'document', risk: 'critical',
+  }).round_limit, 3);
+  assert.equal(resolveLoopRoundPolicy({
+    artifactPhase: 'implementation', risk: 'critical',
+  }).round_limit, 5);
+  assert.equal(resolveLoopRoundPolicy({
+    artifactPhase: 'document', risk: 'high', max: 7, maxExplicit: true,
+  }).round_limit, 7);
+
+  assert.deepEqual(evaluateLoopTermination({
+    roundNumber: 1,
+    roundLimit: 2,
+    artifactPhase: 'document',
+    readiness: 'READY_FOR_IMPLEMENTATION',
+  }), {
+    should_stop: true,
+    stop_reason: 'READY_FOR_IMPLEMENTATION',
+    start_another_review: false,
+    run_respond: false,
+  });
+  assert.deepEqual(evaluateLoopTermination({
+    roundNumber: 2,
+    roundLimit: 2,
+    artifactPhase: 'document',
+    readiness: 'DOCUMENT_BLOCKED',
+  }), {
+    should_stop: true,
+    stop_reason: 'DOCUMENT_BLOCKED',
+    start_another_review: false,
+    run_respond: false,
+  });
 });
 
 test('compare-rounds rejects a loop_id mismatch as STALE_STATE', () => {
@@ -1048,7 +1231,9 @@ function makeSessionFixtures(root) {
   return { reportsDir, responsesDir, tmpDir };
 }
 
-function recordSessionRound(dirs, { round, loopId, review, response }) {
+function recordSessionRound(dirs, {
+  round, loopId, review, response, routingMetadata,
+}) {
   const reviewPath = join(dirs.reportsDir, `2026-07-19-09${String(round).padStart(2, '0')}00-review.md`);
   writeFileSync(reviewPath, review);
   let responsePath;
@@ -1061,6 +1246,11 @@ function recordSessionRound(dirs, { round, loopId, review, response }) {
     '--loop-id', loopId, '--base-commit', 'deadbeef', '--state-dir', dirs.tmpDir,
   ];
   if (responsePath) args.push('--response-report', responsePath);
+  if (routingMetadata) {
+    const metadataPath = join(dirs.tmpDir, `routing-metadata-${round}.json`);
+    writeFileSync(metadataPath, JSON.stringify(routingMetadata));
+    args.push('--routing-metadata-file', metadataPath);
+  }
   const result = runCli(args);
   assert.equal(result.status, 0, result.stderr);
   return { reviewPath, responsePath, stateFile: result.json.state_file };
@@ -1140,6 +1330,58 @@ test('render-session-doc renders latest verdict, per-round history, and round re
   // Round 1's absolute review path from state must not leak as an absolute link.
   assert.equal(body.includes(r1.reviewPath), false);
   assert.equal(body.includes(r2.stateFile), false);
+});
+
+test('render-session-doc records per-round adaptive assignments, expansion, readiness, receipt, and saved calls', async () => {
+  const { renderSessionDoc } = await loadLoopState();
+  const root = temporaryDirectory();
+  const dirs = makeSessionFixtures(root);
+  const receiptPath = join(root, '.deep-review', 'receipts', 'document-readiness', `${'c'.repeat(64)}.json`);
+  recordSessionRound(dirs, {
+    round: 1,
+    loopId: 'sess-routing',
+    review: ROUND1_REVIEW,
+    response: SD_RESPONSE,
+    routingMetadata: {
+      artifact_phase: 'document',
+      risk: 'high',
+      routing_plan_digest: 'd'.repeat(64),
+      planned_reviewers: ['claude-opus', 'codex-review'],
+      actual_reviewers: ['claude-opus', 'codex-review'],
+      wave: 2,
+      expansion: true,
+      reviewer_calls_saved: 2,
+      readiness: 'READY_FOR_IMPLEMENTATION',
+      receipt_path: receiptPath,
+      assignments: [
+        {
+          reviewer_id: 'claude-opus',
+          assignment_role: 'feasibility',
+          model: 'claude-opus-4-6',
+          effort: 'high',
+          wave: 1,
+        },
+        {
+          reviewer_id: 'codex-review',
+          assignment_role: 'traceability',
+          model: 'gpt-5.4',
+          effort: 'high',
+          wave: 2,
+        },
+      ],
+    },
+  });
+  const output = join(dirs.reportsDir, 'loop-sess-routing-review.md');
+  renderSessionDoc({
+    loopId: 'sess-routing', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output,
+  });
+  const body = readFileSync(output, 'utf8');
+  assert.match(body, /## Adaptive routing/u);
+  assert.match(body, /claude-opus \(feasibility; claude-opus-4-6\/high; wave 1\)/u);
+  assert.match(body, /codex-review \(traceability; gpt-5\.4\/high; wave 2\)/u);
+  assert.match(body, /READY_FOR_IMPLEMENTATION/u);
+  assert.match(body, /document-readiness/u);
+  assert.match(body, /\| yes \| 2 \|/u);
 });
 
 test('render-session-doc open vs resolved rollup reuses matchFindings (B resolved, A repeated, D added)', async () => {
@@ -1254,7 +1496,7 @@ test('render-session-doc resolved rollup tracks non-transitive line drift: a sti
   assert.match(body, /## Resolved \(cumulative\) — 1/u);
 });
 
-test('render-session-doc Progress cell labels a changed-but-neither-progressed-nor-stalled round as "changed (+N)"', async () => {
+test('render-session-doc Progress cell labels any added finding as regression before other states', async () => {
   const { renderSessionDoc } = await loadLoopState();
   const root = temporaryDirectory();
   const dirs = makeSessionFixtures(root);
@@ -1264,11 +1506,11 @@ test('render-session-doc Progress cell labels a changed-but-neither-progressed-n
   const output = join(dirs.reportsDir, 'loop-sess-chg-review.md');
   renderSessionDoc({ loopId: 'sess-chg', tmpDir: dirs.tmpDir, reportsDir: dirs.reportsDir, output });
   const body = readFileSync(output, 'utf8');
-  assert.match(body, /changed \(\+2\)/u);
-  // The round-2 history row must NOT be mislabeled "no change".
+  assert.match(body, /regression \(\+2\)/u);
+  // The round-2 history row must not use a lower-priority progress label.
   const round2Row = body.split('\n').find((line) => /^\| 2 \|/u.test(line));
   assert.ok(round2Row, 'round 2 history row present');
-  assert.equal(round2Row.includes('no change'), false);
+  assert.equal(round2Row.includes('confirmation'), false);
 });
 
 test('render-session-doc appends a Final summary section only when a final-summary file is given (additive, prefix byte-identical)', async () => {
@@ -1287,7 +1529,10 @@ test('render-session-doc appends a Final summary section only when a final-summa
   writeFileSync(finalSummaryFile, JSON.stringify({
     stop_reason: 'APPROVE with zero blocking issues',
     rounds_saved: 3,
+    reviewer_calls_saved: 4,
     implemented_total: 4,
+    readiness: 'READY_FOR_IMPLEMENTATION',
+    receipt_path: '.deep-review/receipts/document-readiness/example.json',
     remaining_work: ['manual: bump version at release', 'external: confirm CI green'],
   }));
   renderSessionDoc({
@@ -1299,7 +1544,10 @@ test('render-session-doc appends a Final summary section only when a final-summa
   assert.match(withFinal, /## Final summary/u);
   assert.match(withFinal, /\*\*Stop reason\*\*: APPROVE with zero blocking issues/u);
   assert.match(withFinal, /\*\*Rounds saved\*\*: 3/u);
+  assert.match(withFinal, /\*\*Reviewer calls saved\*\*: 4/u);
   assert.match(withFinal, /\*\*Total implemented\*\*: 4/u);
+  assert.match(withFinal, /\*\*Readiness\*\*: READY_FOR_IMPLEMENTATION/u);
+  assert.match(withFinal, /\*\*Readiness receipt\*\*: \.deep-review\/receipts/u);
   assert.match(withFinal, /manual: bump version at release/u);
   assert.match(withFinal, /external: confirm CI green/u);
 });

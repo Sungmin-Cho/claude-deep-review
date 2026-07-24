@@ -15,6 +15,7 @@ const REVIEW_FLAGS = new Set([
 ]);
 
 const ROUTING_POLICIES = new Set(['auto', 'fast', 'balanced', 'quality']);
+const REVIEWER_STRATEGIES = new Set(['adaptive', 'static']);
 const PROVIDERS = new Set(['claude', 'codex', 'agy']);
 
 function routeError(message) {
@@ -116,6 +117,9 @@ function parseReview(argv, host, cwd) {
   let dryRun = false;
   let explainRouting = false;
   let hasOverrides = false;
+  let reviewerStrategySeen = false;
+  let routingPolicySeen = false;
+  let readinessReceipt = null;
   // G3: routing_policy and allow_fallback stay absent unless the caller
   // actually passes --routing/--allow-fallback, so an unrelated flag (e.g.
   // --allow-classifier or --model) never serializes an implicit 'auto'/false
@@ -173,10 +177,40 @@ function parseReview(argv, host, cwd) {
       hasOverrides = true;
       continue;
     }
+    if (token === '--reviewer-strategy') {
+      if (reviewerStrategySeen) return { ...routeError('duplicate --reviewer-strategy'), host, argv: expanded };
+      const value = expanded[index + 1];
+      if (!REVIEWER_STRATEGIES.has(value)) {
+        return { ...routeError('--reviewer-strategy must be adaptive or static'), host, argv: expanded };
+      }
+      overrides.reviewer_strategy = value;
+      reviewerStrategySeen = true;
+      hasOverrides = true;
+      index += 1;
+      continue;
+    }
+    if (token === '--readiness-receipt') {
+      if (readinessReceipt !== null) return { ...routeError('duplicate --readiness-receipt'), host, argv: expanded };
+      const value = expanded[index + 1];
+      if (value === undefined || value.startsWith('-')) {
+        return { ...routeError('--readiness-receipt requires a path'), host, argv: expanded };
+      }
+      const candidate = resolve(cwd, value);
+      if (!existingFile(candidate)) {
+        return { ...routeError(`readiness receipt path must name an existing file: ${value}`), host, argv: expanded };
+      }
+      readinessReceipt = candidate;
+      overrides.readiness_receipt = candidate;
+      hasOverrides = true;
+      index += 1;
+      continue;
+    }
     if (token === '--routing') {
+      if (routingPolicySeen) return { ...routeError('duplicate --routing'), host, argv: expanded };
       const value = expanded[index + 1];
       if (!ROUTING_POLICIES.has(value)) return { ...routeError('--routing must be auto, fast, balanced, or quality'), host, argv: expanded };
       overrides.routing_policy = value;
+      routingPolicySeen = true;
       hasOverrides = true;
       index += 1;
       continue;
@@ -219,6 +253,18 @@ function parseReview(argv, host, cwd) {
       return { ...routeError(`ERROR_CONFLICTING_REVIEWER_SELECTION: reviewer override ${reviewerId} conflicts with --no-agy`), host, argv: expanded };
     }
   }
+  const requiredReviewers = new Set(Object.keys(overrides.reviewers));
+  const requiredProviders = new Set();
+  if (expanded.includes('--ultracode')) requiredReviewers.add('claude-opus');
+  if (expanded.includes('--codex')) requiredProviders.add('codex');
+  if (requiredReviewers.size > 0) {
+    overrides.required_reviewers = [...requiredReviewers].sort();
+    hasOverrides = true;
+  }
+  if (requiredProviders.size > 0) {
+    overrides.required_providers = [...requiredProviders].sort();
+    hasOverrides = true;
+  }
   // G2: transport the public --no-opus/--no-codex/--no-agy disables (including
   // --codex-only's expansion) to the preflight so disabled providers are
   // excluded from eligibility checks and the emitted routing plan.
@@ -233,11 +279,12 @@ function parseReview(argv, host, cwd) {
   const route = { ok: true, route: 'review', host, argv: expanded };
   if (dryRun) route.dryRun = true;
   if (explainRouting) route.explainRouting = true;
+  if (readinessReceipt !== null) route.readinessReceipt = readinessReceipt;
   if (hasOverrides) route.overrides = overrides;
   return route;
 }
 
-function parseLoop(argv, host) {
+function parseLoop(argv, host, cwd) {
   const expanded = expandCodexOnly(argv);
   for (const forbidden of ['init', '--respond', '--qa']) {
     if (expanded.includes(forbidden)) {
@@ -246,21 +293,57 @@ function parseLoop(argv, host) {
   }
   const conflict = validateReviewerFlags(expanded);
   if (conflict) return { ...routeError(conflict), host, argv: expanded };
+  let max = 5;
+  let maxExplicit = false;
+  const reviewArgs = [];
   for (let index = 0; index < expanded.length; index += 1) {
     const token = expanded[index];
-    if (REVIEW_FLAGS.has(token)) continue;
-    if (/^--max=[1-9][0-9]*$/u.test(token)) continue;
-    if (token === '--contract') {
-      if (/^SLICE-[0-9]+$/u.test(expanded[index + 1] || '')) index += 1;
+    if (/^--max=[1-9][0-9]*$/u.test(token)) {
+      if (maxExplicit) return { ...routeError('duplicate --max'), host, argv: expanded };
+      max = Number(token.slice('--max='.length));
+      maxExplicit = true;
       continue;
     }
     // Opt-in per-session single review document. Loop-only (default OFF keeps
     // today's byte-identical behavior); the terminal review/respond routes keep
     // rejecting it. Value-less boolean flag.
     if (token === '--session-doc') continue;
-    return { ...routeError(`unknown loop argument: ${token}`), host, argv: expanded };
+    if (token === '--dry-run' || token === '--explain-routing' || token.startsWith('--prior-rounds-file=')) {
+      return { ...routeError(`unknown loop argument: ${token}`), host, argv: expanded };
+    }
+    reviewArgs.push(token);
+    if ([
+      '--routing',
+      '--reviewer-strategy',
+      '--readiness-receipt',
+      '--model',
+      '--effort',
+      '--reviewer-model',
+      '--reviewer-effort',
+    ].includes(token)) {
+      if (expanded[index + 1] !== undefined) {
+        reviewArgs.push(expanded[index + 1]);
+        index += 1;
+      }
+    } else if (token === '--contract' && /^SLICE-[0-9]+$/u.test(expanded[index + 1] || '')) {
+      reviewArgs.push(expanded[index + 1]);
+      index += 1;
+    }
   }
-  return { ok: true, route: 'loop', host, argv: expanded };
+  const reviewRoute = parseReview(reviewArgs, host, cwd);
+  if (!reviewRoute.ok || reviewRoute.route !== 'review') {
+    return { ...routeError(reviewRoute.error || 'invalid loop review arguments'), host, argv: expanded };
+  }
+  return {
+    ok: true,
+    route: 'loop',
+    host,
+    argv: expanded,
+    max,
+    maxExplicit,
+    ...(reviewRoute.overrides ? { overrides: reviewRoute.overrides } : {}),
+    ...(reviewRoute.readinessReceipt ? { readinessReceipt: reviewRoute.readinessReceipt } : {}),
+  };
 }
 
 export function parsePublicRoute({ entry = 'review', argv = [], host, cwd = process.cwd() }) {
@@ -270,7 +353,7 @@ export function parsePublicRoute({ entry = 'review', argv = [], host, cwd = proc
   }
   if (typeof cwd !== 'string' || cwd.length === 0) throw new TypeError('cwd must be non-empty');
   if (entry === 'review') return parseReview(argv, normalizedHost, cwd);
-  if (entry === 'loop') return parseLoop(argv, normalizedHost);
+  if (entry === 'loop') return parseLoop(argv, normalizedHost, cwd);
   throw new TypeError('entry must be review or loop');
 }
 
