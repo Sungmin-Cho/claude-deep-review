@@ -323,7 +323,11 @@ test('Claude bridge preserves argv, stdin, Unicode paths, cwd, and arbitrary mod
     env: { ...process.env, FAKE_LOG: log },
   });
 
-  assert.equal(result.status, 'success');
+  assert.equal(
+    result.status,
+    'success',
+    `unexpected Codex bridge result: ${JSON.stringify(result)}`,
+  );
   assert.equal(result.code, 0);
   assert.equal(readFileSync(output, 'utf8'), 'review ok Ω\n');
   assert.equal(readFileSync(`${output}.status`, 'utf8'), 'success\n');
