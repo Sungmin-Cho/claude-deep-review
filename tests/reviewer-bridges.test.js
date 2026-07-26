@@ -251,7 +251,10 @@ process.stdout.write(
   chmodSync(script, 0o700);
   if (process.platform !== 'win32') return script;
   const wrapper = join(root, 'codex-fake.cmd');
-  writeFileSync(wrapper, `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`);
+  writeFileSync(
+    wrapper,
+    `@echo off\r\n"${process.execPath}" "%~dp0codex-fake.mjs" %*\r\n`,
+  );
   return wrapper;
 }
 
