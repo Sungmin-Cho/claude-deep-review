@@ -365,21 +365,23 @@ export function buildRoutingPlan({
     || (policy.features?.adaptive_reviewer_routing === false
       ? 'static'
       : policy.routing?.reviewer_strategy || 'adaptive');
-  const candidates = reviewers.map((reviewer) => {
-    const capability = capabilityFor(reviewer, capabilities);
-    const assignmentRoles = (
-      reviewer.assignment_roles
-      || capability?.assignment_roles
-      || capability?.roles
-      || [reviewer.role]
-    )
-      .filter(isAssignmentRole);
-    return {
-      ...reviewer,
-      assignment_roles: assignmentRoles.length > 0 ? assignmentRoles : [reviewer.role],
-      last_status: reviewer.last_status,
-    };
-  });
+  const candidates = reviewers
+    .filter((reviewer) => reviewer.adapter_id !== 'codex-companion')
+    .map((reviewer) => {
+      const capability = capabilityFor(reviewer, capabilities);
+      const assignmentRoles = (
+        reviewer.assignment_roles
+        || capability?.assignment_roles
+        || capability?.roles
+        || [reviewer.role]
+      )
+        .filter(isAssignmentRole);
+      return {
+        ...reviewer,
+        assignment_roles: assignmentRoles.length > 0 ? assignmentRoles : [reviewer.role],
+        last_status: reviewer.last_status,
+      };
+    });
   const requiredReviewers = [
     ...new Set([
       ...(overrides.required_reviewers || []),
@@ -396,6 +398,7 @@ export function buildRoutingPlan({
     requiredReviewers,
     requiredProviders: overrides.required_providers || [],
     providerOverrides: overrides.providers || {},
+    codexOnly: overrides.codex_only === true,
   });
   const reviewerById = new Map(reviewers.map((reviewer) => [reviewer.id, reviewer]));
   const routedAssignment = (assignment) => {
@@ -450,6 +453,7 @@ export function buildRoutingPlan({
   });
   return {
     protocol_version: ROUTING_PROTOCOL_VERSION,
+    codex_only: overrides.codex_only === true,
     routing_policy: overrides.routing_policy || policy.routing?.policy || 'auto',
     reviewer_strategy: reviewerStrategy,
     shadow_mode: policy.features?.routing_shadow_mode === true,

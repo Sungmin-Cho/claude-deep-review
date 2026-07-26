@@ -98,22 +98,26 @@ AGY="$ROOT/skills/deep-review-workflow/references/agy-integration.md"
 REPORT="$ROOT/skills/deep-review-workflow/references/report-format.md"
 
 assert_success "grep -q 'build-change-files.mjs' \"$REVEXEC\"" "review execution uses native change manifest"
-assert_success "grep -q 'build-reviewer-payload.mjs' \"$REVEXEC\"" "review execution uses native shared payload builder"
+assert_success "grep -q 'build-reviewer-payload.mjs' \"$REVEXEC\"" "review execution uses native route-specific payload builder"
 assert_success "grep -q 'sole doctrine injector' \"$REVEXEC\"" "Node builder is the sole supported doctrine injector"
 assert_success "grep -q 'builder warning in the final report' \"$REVEXEC\"" "builder warnings remain visible"
 assert_failure "grep -Eq 'extract-fp-doctrine.sh|build-change-files.sh|build-reviewer-payload.sh' \"$REVEXEC\"" "supported review path rejects shell-era helpers"
 assert_success "grep -q 'extract-fp-doctrine.sh.*Unix parity oracle' \"$REAL\"" "criteria labels the shell extractor parity-only"
-assert_success "grep -q 'build-reviewer-payload.mjs' \"$WFSK\"" "workflow pipeline names the shared Node builder"
+assert_success "grep -q 'build-reviewer-payload.mjs' \"$WFSK\"" "workflow pipeline names the route-specific Node builder"
 
-builder_line=$(grep -n 'Build one shared reviewer payload with.*build-reviewer-payload.mjs' "$WFSK" | head -1 | cut -d: -f1)
-dispatch_line=$(grep -n 'Enumerate independent roles' "$WFSK" | head -1 | cut -d: -f1)
-assert_success "[ -n \"$builder_line\" ] && [ -n \"$dispatch_line\" ] && [ \"$builder_line\" -lt \"$dispatch_line\" ]" "shared payload is built before reviewer enumeration"
+assert_success "awk '
+  /Build one route-specific reviewer payload per selected canonical reviewer/ { builder = NR }
+  /Enumerate independent roles from/ { enumeration = NR }
+  END { exit !(builder && enumeration && builder < enumeration) }
+' \"$WFSK\"" "route-specific payload construction precedes dispatch-role enumeration in the pipeline map"
 
-assert_success "grep -q 'shared payload file built by.*build-reviewer-payload.mjs' \"$CODEX\"" "Codex generic role consumes shared Node payload"
-assert_success "grep -q 'Operate in read-only mode' \"$CODEX\"" "Codex generic role retains read-only guard"
+assert_success "grep -q 'route-specific payload' \"$CODEX\"" "Codex generic roles consume route-specific payloads"
+assert_success "grep -q 'read-only instruction' \"$CODEX\" && grep -q 'post-fingerprint' \"$CODEX\"" "Codex native leaves pair read-only instruction with fingerprint trust checks"
+assert_success "grep -q 'omits false-positive suppression' \"$REVEXEC\" && grep -q 'codex-review.*codex-adversarial.*preserving' \"$REVEXEC\"" "Codex routes intentionally omit doctrine through the sole builder"
+assert_success "grep -q 'trusted assignment, verified readiness receipt, changed files, project' \"$REVEXEC\" && grep -q 'context, prior rounds, and diff' \"$REVEXEC\"" "Codex doctrine omission preserves every other payload field"
 assert_failure "grep -Eq 'extract-fp-doctrine|fp-doctrine:start' \"$CODEX\"" "Codex adversarial focus does not receive doctrine injection"
 assert_success "grep -q 'identical doctrine' \"$ULTRA\"" "ultracode lenses receive identical doctrine"
-assert_success "grep -q 'bridge uses the shared payload' \"$AGY\"" "agy consumes the shared payload"
+assert_success "grep -q -- '--prompt-file PAYLOAD_FILE' \"$AGY\"" "agy consumes its selected route payload"
 assert_success "grep -q 'Warnings' \"$REPORT\"" "report format preserves operational warnings"
 
 # Decisive mutants: shell-helper restoration and loss of sole-injector wording

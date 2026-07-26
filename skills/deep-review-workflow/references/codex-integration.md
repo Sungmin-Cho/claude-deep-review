@@ -5,45 +5,72 @@ cross-model synthesis after the public route has resolved `plugin_root`.
 
 ## Roles
 
-- `codex-review` is the standard OpenAI voice. On Codex it is one fresh generic
-  subagent. On a host without that capability, an installed companion may fill
-  it through `run-codex-reviewer.mjs --kind review`.
-- `codex-adversarial` is optional and requires a detected companion. It runs
-  through `run-codex-reviewer.mjs --kind adversarial`.
-- A native generic role replaces the standard companion role; never count both
-  for the same review. `--no-codex` disables both Codex roles.
-- Companion availability never controls native generic availability and never
-  controls the independent `claude-opus` bridge.
+- `codex-review` is the standard OpenAI voice.
+- `codex-adversarial` is the adversarial OpenAI voice.
+- `--no-codex` disables both roles.
+- On Claude Code, each role runs through a separate generic Codex exec bridge
+  invocation.
+- On Codex, each role runs in its own fresh native generic subagent. The two
+  roles have different subagent IDs and each counts at most once in `N_actual`.
 
-## Native generic prompt
+## Native generic dispatch
 
-Pass absolute paths as data. The first instructions, in order, are:
-
-1. Read `{plugin_root}/agents/code-reviewer.md` in full.
-2. Read the shared payload file built by `build-reviewer-payload.mjs`.
-3. Operate in read-only mode; never edit, create, stage, or commit.
-4. Inspect relevant target files and return the shared report contract as text.
-
-Capture the repository fingerprint before and after `spawn_agent`. Mark any
-changed result `untrusted` and exclude it from synthesis. Identify the voice as
-`codex-review`, not as a Claude model.
-
-## Companion bridge
-
-Use direct argv invocation and the exact target selected in Stage 1:
+For each selected Codex route, capture a pre-fingerprint with the shared
+`lib/fingerprint.mjs` API, then invoke a route-specific leaf. Native
+`spawn_agent` has no enforceable tool allowlist, so the read-only instruction
+does not guarantee that writes cannot happen:
 
 ```text
-node {plugin_root}/hooks/scripts/run-codex-reviewer.mjs --project-root PROJECT_ROOT --companion COMPANION_FILE --kind review --scope working-tree --output OUTPUT_FILE --timeout-seconds 900
-node {plugin_root}/hooks/scripts/run-codex-reviewer.mjs --project-root PROJECT_ROOT --companion COMPANION_FILE --kind adversarial --base REVIEW_BASE --focus-file FOCUS_FILE --output OUTPUT_FILE --timeout-seconds 900
+const codexReviewOptions = {
+  task_name: `codex-review-round-${roundNumber}-${invocationNonce}`,
+  fork_turns: "none",
+  message: "Read agents/code-reviewer.md, then the codex-review route-specific payload; stay read-only and return report-format.md"
+}
+if (codexReviewRoute.resolved.model !== null) codexReviewOptions.model = codexReviewRoute.resolved.model
+if (codexReviewRoute.resolved.effort !== null) codexReviewOptions.reasoning_effort = codexReviewRoute.resolved.effort
+spawn_agent(codexReviewOptions)
+
+const codexAdversarialOptions = {
+  task_name: `codex-adversarial-round-${roundNumber}-${invocationNonce}`,
+  fork_turns: "none",
+  message: "Read agents/code-reviewer.md, then the codex-adversarial route-specific payload; stay read-only and return report-format.md"
+}
+if (codexAdversarialRoute.resolved.model !== null) codexAdversarialOptions.model = codexAdversarialRoute.resolved.model
+if (codexAdversarialRoute.resolved.effort !== null) codexAdversarialOptions.reasoning_effort = codexAdversarialRoute.resolved.effort
+spawn_agent(codexAdversarialOptions)
 ```
 
-Swap `--scope working-tree` and `--base REVIEW_BASE` according to dirty versus
-committed target state. The Node bridge owns timeout, focus transport, result
-sidecars, and cleanup.
+`fork_turns: "none"` is mandatory: neither leaf receives generator history.
+Every attempt, role, and round uses an invocation-unique `task_name`. The
+canonical reviewer IDs remain `codex-review` and `codex-adversarial` in routing
+and report provenance; task identity never replaces reviewer identity. Never
+use `followup_task` or reuse a prior subagent or its history. A retry creates a
+fresh subagent with another unique task name and `fork_turns: "none"`.
 
-Run `mutation-protocol.mjs` only when the selected companion needs ignored
-paths exposed. Native generic review reads the allowed paths directly and does
-not alter the index.
+After a leaf returns, capture the post-fingerprint with the same fingerprint
+API and identical options. A mutation invalidates the result and makes it
+untrusted. Stop the round before launching the sibling reviewer and before any
+response or commit action; record the invalid attempt and do not synthesize it.
+
+When an explicit model or effort is rejected as unsupported, and only when
+`--allow-fallback` authorized fallback, retry that leaf once with only the
+rejected dimension omitted. If both explicit dimensions are clearly rejected,
+omit both in the single retry. Do not retry authentication, authorization,
+timeout, empty-output, or generic failures. The retry is a new history-free
+subagent invocation, not a continuation.
+
+## Claude Code bridge
+
+Claude Code routes both roles through the generic Codex exec adapter with
+separate payloads and the same routing plan:
+
+```text
+node {plugin_root}/hooks/scripts/run-codex-reviewer.mjs --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PROMPT_FILE --routing-plan ROUTING_PLAN --reviewer-id codex-review --output OUTPUT_FILE --timeout-seconds 900
+node {plugin_root}/hooks/scripts/run-codex-reviewer.mjs --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PROMPT_FILE --routing-plan ROUTING_PLAN --reviewer-id codex-adversarial --output OUTPUT_FILE --timeout-seconds 900
+```
+
+The bridge applies the same model/effort, fallback, report-sidecar, and
+read-only fingerprint contract as the native leaves.
 
 ## Synthesis
 

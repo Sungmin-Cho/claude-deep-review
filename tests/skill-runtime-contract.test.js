@@ -92,6 +92,28 @@ test('production route and synthesis helpers own parsing and fail-closed reviewe
   assert.match(review, /operational_failure.{0,160}no later response or Phase 6 commit/is);
 });
 
+test('reviewer admission separates raw-output binding from independent reviewer identity', () => {
+  const review = read('skills/deep-review-workflow/references/review-execution.md');
+
+  assert.match(review, /SHA-256.{0,120}raw output.{0,160}each\s+attempt/is);
+  assert.match(
+    review,
+    /independence.{0,240}unique canonical reviewer IDs.{0,240}fresh route-specific dispatch.{0,240}provenance.{0,160}fingerprints/is,
+  );
+  assert.match(
+    review,
+    /byte-identical canonical reports.{0,200}distinct\s+identities.{0,160}allowed.{0,160}not.{0,120}operational identity\s+failure/is,
+  );
+  assert.match(
+    review,
+    /duplicate `reviewer_id`.{0,200}missing or invalid provenance.{0,160}operational failure/is,
+  );
+  assert.doesNotMatch(
+    review,
+    /reusing one identical output under two canonical voice identities is an operational identity failure/is,
+  );
+});
+
 test('Codex manifest exposes only the two public entrypoints and keeps hooks/MCP empty', () => {
   const manifest = JSON.parse(read('.codex-plugin/plugin.json'));
   assert.deepEqual(manifest.interface.defaultPrompt, [
@@ -135,8 +157,8 @@ test('runtime dispatch SSOT is capability-based and defines the exact role matri
     ['public review/respond entry', '/deep-review', '$deep-review:deep-review'],
     ['loop entry', '/deep-review-loop', '$deep-review:deep-review-loop'],
     ['independent Claude reviewer', 'Agent(code-reviewer)', 'Node Claude bridge when CLI exists'],
-    ['Codex standard reviewer', 'Node Codex bridge', 'generic subagent'],
-    ['Codex adversarial reviewer', 'Node Codex bridge', 'Node Codex bridge'],
+    ['Codex standard reviewer', 'Node Codex exec bridge', 'generic subagent'],
+    ['Codex adversarial reviewer', 'Node Codex exec bridge', 'generic subagent'],
     ['agy reviewer', 'Node agy bridge', 'Node agy bridge'],
   ];
   for (const row of rows) {
@@ -152,6 +174,95 @@ test('runtime dispatch SSOT is capability-based and defines the exact role matri
   assert.match(dispatch, /untrusted.{0,80}excluded/is);
   assert.match(dispatch, /capability-registry\.mjs/u);
   assert.match(dispatch, /executable capability contract.{0,120}authoritative/isu);
+  assert.doesNotMatch(dispatch, /companion/iu);
+});
+
+test('Codex native dispatch uses two history-free route-specific leaves with transport and trust controls', () => {
+  const workflow = read('skills/deep-review-workflow/SKILL.md');
+  const dispatch = read('skills/deep-review-workflow/references/runtime-dispatch.md');
+  const integration = read('skills/deep-review-workflow/references/codex-integration.md');
+  const execution = read('skills/deep-review-workflow/references/review-execution.md');
+  const agent = read('agents/code-reviewer.md');
+  const combined = [workflow, dispatch, integration, execution, agent].join('\n');
+
+  for (const reviewerId of ['codex-review', 'codex-adversarial']) {
+    assert.match(
+      combined,
+      new RegExp(`${reviewerId}.{0,500}fork_turns:\\s*["'\`]none["'\`]`, 'isu'),
+      `${reviewerId} must use a history-free leaf`,
+    );
+    assert.match(
+      combined,
+      new RegExp(`${reviewerId}.{0,700}(?:resolved\\.)?model.{0,160}(?:resolved\\.)?effort`, 'isu'),
+      `${reviewerId} must receive its resolved model and effort`,
+    );
+  }
+  assert.match(combined, /two.{0,100}(?:separate|distinct|independent).{0,160}subagents/is);
+  assert.match(combined, /different subagent (?:IDs|identities)/i);
+  assert.match(combined, /invocation-unique.{0,100}task_name/is);
+  assert.match(combined, /canonical reviewer IDs.{0,160}(?:routing|report) provenance/is);
+  assert.match(combined, /never.{0,100}(?:reuse|followup_task).{0,160}(?:subagent|history)/is);
+  assert.match(combined, /route-specific payload/i);
+  assert.match(combined, /generator history.{0,100}(?:not|never|without|없)/is);
+  assert.match(combined, /same.{0,80}fingerprint API/is);
+  assert.match(combined, /explicit.{0,120}(?:model|effort).{0,160}(?:unsupported|rejected).{0,160}(?:single|one).{0,80}retry/is);
+  assert.match(combined, /--allow-fallback/);
+  assert.match(agent, /both.{0,40}`codex-review` and `codex-adversarial`/s);
+  assert.doesNotMatch(combined, /companion/iu);
+
+  for (const dimension of ['model', 'effort']) {
+    assert.match(
+      combined,
+      new RegExp(`resolved\\.${dimension}\\s*!==\\s*null`, 'u'),
+      `native dispatch must omit a null ${dimension} field`,
+    );
+  }
+  assert.doesNotMatch(
+    combined,
+    /spawn_agent\(\{[^}\n]*model:\s*codexReviewRoute\.resolved\.model/u,
+    'native dispatch examples must not unconditionally pass null model/effort fields',
+  );
+  assert.match(combined, /spawn_agent.{0,500}no enforceable (?:tool )?allowlist/is);
+  assert.match(
+    execution,
+    /strictly serial.{0,240}pre-review fingerprint.{0,240}one leaf.{0,240}post-review fingerprint.{0,240}trust decision.{0,240}next leaf/is,
+    'native reviewer dispatch must serialize each leaf behind its fingerprint trust decision',
+  );
+  assert.doesNotMatch(
+    execution,
+    /launch every (?:selected|eligible) route in a fresh background context/is,
+  );
+  assert.match(
+    combined,
+    /mutation.{0,160}(?:invalidates|untrusted).{0,240}stop.{0,120}round.{0,200}sibling.{0,160}commit/is,
+  );
+  assert.doesNotMatch(combined, /mutation.{0,100}(?:prevented|cannot occur)/is);
+});
+
+test('Codex bridge and host assertions route both roles without companion fallback', () => {
+  const execution = read('skills/deep-review-workflow/references/review-execution.md');
+  const integration = read('skills/deep-review-workflow/references/codex-integration.md');
+  const combined = [execution, integration].join('\n');
+
+  assert.match(
+    execution,
+    /"claudeNativeAgent":true,"codexExecReviewer":true,"codexNativeGeneric":false/u,
+  );
+  assert.match(
+    execution,
+    /"claudeNativeAgent":false,"codexExecReviewer":false,"codexNativeGeneric":true/u,
+  );
+  for (const reviewerId of ['codex-review', 'codex-adversarial']) {
+    assert.match(
+      combined,
+      new RegExp(
+        `run-codex-reviewer\\.mjs[^\\n]*--prompt-file PROMPT_FILE[^\\n]*--routing-plan ROUTING_PLAN[^\\n]*--reviewer-id ${reviewerId}`,
+        'u',
+      ),
+      `${reviewerId} must use the generic Codex exec bridge`,
+    );
+  }
+  assert.doesNotMatch(combined, /--kind|--companion|--focus-file|index exposure/iu);
 });
 
 test('public review skill documents every Phase 2 routing override', () => {
@@ -311,11 +422,11 @@ test('model and reviewer dispatch documentation preserves aliases and Codex gene
   assert.doesNotMatch(combined, /opus\s*\|\s*sonnet/i);
   assert.match(combined, /Agent\(code-reviewer\)/);
   assert.match(combined, /spawn_agent/);
-  assert.match(combined, /absolute.{0,80}agents\/code-reviewer\.md.{0,160}shared payload/is);
+  assert.match(combined, /absolute.{0,80}agents\/code-reviewer\.md.{0,160}route-specific payload/is);
   assert.match(combined, /read-only/i);
   assert.match(combined, /report contract/i);
-  assert.match(combined, /codex-review.{0,160}replace.{0,120}(?:companion|standard)/is);
-  assert.match(combined, /generic subagent.{0,180}(?:without|없어도).{0,100}companion/is);
+  assert.match(combined, /codex-review.{0,200}codex-adversarial.{0,240}(?:separate|distinct|independent)/is);
+  assert.match(combined, /fork_turns:\s*["'`]none["'`]/);
 });
 
 test('agy route resolves flags before preflight and no-agy/codex-only are mutation-free', () => {

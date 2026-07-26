@@ -271,14 +271,14 @@ const VALUE_FLAGS = {
 // availability) that the JS runtime object cannot carry across the
 // classify-artifacts.mjs subprocess boundary. Not part of the public review
 // grammar; the workflow composes this flag itself.
-const HOST_ASSERTION_KEYS = ['claudeNativeAgent', 'codexNativeGeneric'];
+const HOST_ASSERTION_KEYS = ['claudeNativeAgent', 'codexExecReviewer', 'codexNativeGeneric'];
 
 function validateHostAssertions(value) {
   const invalid = !value || typeof value !== 'object' || Array.isArray(value)
     || Object.keys(value).some((key) => !HOST_ASSERTION_KEYS.includes(key))
     || Object.values(value).some((entry) => typeof entry !== 'boolean');
   if (invalid) {
-    throw new Error('--host-assertions-json keys must be claudeNativeAgent/codexNativeGeneric with boolean values');
+    throw new Error('--host-assertions-json keys must be claudeNativeAgent/codexExecReviewer/codexNativeGeneric with boolean values');
   }
   return value;
 }
@@ -328,6 +328,9 @@ function validateOverrides(value) {
   }
   if (value.reviewer_strategy !== undefined && !['adaptive', 'static'].includes(value.reviewer_strategy)) {
     throw new Error('--overrides-json reviewer_strategy is invalid');
+  }
+  if (value.codex_only !== undefined && typeof value.codex_only !== 'boolean') {
+    throw new Error('--overrides-json codex_only must be boolean');
   }
   if (value.readiness_receipt !== undefined && typeof value.readiness_receipt !== 'string') {
     throw new Error('--overrides-json readiness_receipt must be a string');
@@ -409,21 +412,6 @@ function capabilityCacheFilePath(repo) {
   return resolve(repo, '.deep-review', 'tmp', 'capability-cache.json');
 }
 
-// Native host-assertion entries (claude-native-agent, codex-native-generic)
-// and codex-companion (H8: a pure detection derivative keyed off a different
-// file than the invalidation keys below) are never persisted to the
-// capability cache — they must be rebuilt fresh on every run from this run's
-// hostAssertions/detected data. `fresh` here is a buildCapabilities() call
-// with the correct canonical adapter ordering and this run's
-// hostAssertions/detected data but no probe data; its native-adapter and
-// codex-companion entries are kept as-is (absent from `cached` since
-// saveCapabilityCache excludes them), and the remaining (probe-derived)
-// claude-cli/agy-cli entries are taken from the cached array.
-function mergeCachedCapabilities(fresh, cached) {
-  const cachedById = new Map(cached.map((item) => [item.adapter_id, item]));
-  return fresh.map((item) => cachedById.get(item.adapter_id) || item);
-}
-
 // J3: an explicit effort override that targets the claude provider (or the
 // claude-opus reviewer directly) cannot be transported by claude-native-agent
 // (its effort_selection.supported is always false). Absent this check,
@@ -452,28 +440,21 @@ function defaultReviewers(capabilities, overrides) {
       reviewers.push({ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-native-agent' });
     }
   } else if (has('claude-cli')) reviewers.push({ id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' });
-  if (has('codex-native-generic')) reviewers.push({ id: 'codex-review', provider: 'codex', role: 'standard', adapter_id: 'codex-native-generic' });
-  else if (has('codex-companion')) reviewers.push({
-    id: 'codex-review',
-    provider: 'codex',
-    role: 'standard',
-    adapter_id: 'codex-companion',
-    assignment_roles: ['standard'],
-  });
-  if (has('codex-companion')) reviewers.push({
-    id: 'codex-adversarial',
-    provider: 'codex',
-    role: 'adversarial',
-    adapter_id: 'codex-companion',
-    assignment_roles: ['adversarial'],
-  });
+  const codexAdapter = has('codex-native-generic')
+    ? 'codex-native-generic'
+    : has('codex-exec') ? 'codex-exec' : null;
+  if (codexAdapter) {
+    reviewers.push({ id: 'codex-review', provider: 'codex', role: 'standard', adapter_id: codexAdapter });
+    reviewers.push({ id: 'codex-adversarial', provider: 'codex', role: 'adversarial', adapter_id: codexAdapter });
+  }
   if (has('agy-cli')) reviewers.push({ id: 'agy', provider: 'agy', role: 'standard', adapter_id: 'agy-cli' });
   return reviewers;
 }
 
 function hasExecutionOverride(overrides) {
   return Boolean(overrides && (
-    Object.values(overrides.providers || {}).some((value) => value.model !== undefined || value.effort !== undefined)
+    overrides.codex_only === true
+    || Object.values(overrides.providers || {}).some((value) => value.model !== undefined || value.effort !== undefined)
     || Object.values(overrides.reviewers || {}).some((value) => value.model !== undefined || value.effort !== undefined)
     || (overrides.routing_policy !== undefined && overrides.routing_policy !== 'auto')
   ));
@@ -531,16 +512,13 @@ async function routingInputs(repo, env, runtime, knownEnvironment, overrides) {
   // before probing (to check the cache) and after probing (to save it).
   // Any cache IO failure must fail OPEN to a fresh probe, never a hard error.
   const invalidationKeys = capabilityCacheKeys(detected, {});
-  let cached = null;
   try {
-    cached = loadCapabilityCache(repo, capabilityCacheFilePath(repo), invalidationKeys);
+    // Repository-owned cache data is non-authoritative. Parsing it validates
+    // containment/schema for diagnostics, but never skips the current probe
+    // or supplies capability/availability/transport fields.
+    loadCapabilityCache(repo, capabilityCacheFilePath(repo), invalidationKeys);
   } catch {
-    cached = null;
-  }
-  if (cached) {
-    const nativeShaped = buildCapabilities({ detected, hostAssertions: runtime.hostAssertions, probes: {} });
-    const capabilities = mergeCachedCapabilities(nativeShaped, cached);
-    return { capabilities, reviewers: runtime.reviewers || defaultReviewers(capabilities, overrides), detected };
+    // Cache IO never blocks a fresh authoritative probe.
   }
 
   const probes = await probeCapabilities({ detected, cwd: repo, env });
@@ -559,7 +537,7 @@ async function routingInputs(repo, env, runtime, knownEnvironment, overrides) {
     || (detected.codex_cli && probes.codex?.ok !== true);
   if (!probeFailed) {
     try {
-      saveCapabilityCache(repo, capabilityCacheFilePath(repo), capabilities, invalidationKeys);
+      saveCapabilityCache(repo, capabilityCacheFilePath(repo), probes, invalidationKeys);
     } catch {
       // Best-effort persistence: a cache write failure must never affect this run's result.
     }

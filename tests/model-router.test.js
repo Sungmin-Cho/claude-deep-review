@@ -260,27 +260,35 @@ test('tier resolution follows project > user > adapter aliases and none aliases 
 function codexNativeGenericCapability() {
   return {
     protocol_version: '2.0', adapter_id: 'codex-native-generic', provider: 'codex', available: true,
-    roles: ['standard', 'adversarial'], read_only_enforcement: 'agent-tool-allowlist',
-    model_selection: { supported: false, aliases: [], catalog_complete: false, transport: 'none' },
-    effort_selection: { supported: 'unknown', levels: ['minimal', 'low', 'medium', 'high', 'xhigh'], transport: 'unknown' },
+    roles: ['standard', 'adversarial'], assignment_roles: ['standard', 'feasibility', 'traceability', 'adversarial', 'security', 'confirmation'],
+    read_only_enforcement: 'agent-tool-allowlist',
+    model_selection: { supported: true, aliases: [], catalog_complete: false, transport: 'agent-parameter:model' },
+    effort_selection: { supported: true, levels: ['minimal', 'low', 'medium', 'high', 'xhigh'], transport: 'agent-parameter:reasoning_effort' },
   };
 }
 
-test('F4: an explicit model override targeting codex-native-generic fails closed; automatic routing is unaffected', async () => {
+test('explicit Codex model and effort reach the leaf unchanged without pre-runtime fallback', async () => {
   const { routeReviewer } = await import(routerUrl);
   const reviewer = { id: 'codex-review', provider: 'codex', role: 'standard', adapter_id: 'codex-native-generic' };
   const explicit = request({
     unit: { target_kind: 'code-change' }, reviewer,
-    overrides: { protocol_version: '2.0', routing_policy: 'auto', allow_fallback: false, providers: { codex: { model: 'gpt-explicit' } }, reviewers: {} },
+    overrides: {
+      protocol_version: '2.0',
+      routing_policy: 'auto',
+      allow_fallback: true,
+      providers: { codex: { model: 'gpt-explicit', effort: 'xhigh' } },
+      reviewers: {},
+    },
     capabilities: [codexNativeGenericCapability()],
   });
-  assert.throws(() => routeReviewer(explicit), /ERROR_UNSUPPORTED_MODEL/);
-
-  // No adapter-alias or tier-map substitute is known for this adapter, so
-  // allow_fallback cannot silently swap in an unverified model either.
-  const withFallback = structuredClone(explicit);
-  withFallback.overrides.allow_fallback = true;
-  assert.throws(() => routeReviewer(withFallback), /ERROR_UNSUPPORTED_MODEL/);
+  const result = routeReviewer(explicit);
+  assert.deepEqual(result.resolved, { model: 'gpt-explicit', effort: 'xhigh' });
+  assert.equal(result.fallback.allowed, true);
+  assert.equal(result.fallback.occurred, false);
+  assert.deepEqual(result.transports, {
+    model: 'agent-parameter:model',
+    effort: 'agent-parameter:reasoning_effort',
+  });
 
   const automatic = request({
     unit: { target_kind: 'code-change' }, reviewer,
@@ -289,6 +297,7 @@ test('F4: an explicit model override targeting codex-native-generic fails closed
   });
   const automaticResult = routeReviewer(automatic);
   assert.equal(automaticResult.resolved.model, null);
+  assert.equal(automaticResult.fallback.occurred, false);
 });
 
 // I2: buildRoutingPlan already reads policy.classification?.size_thresholds;
@@ -392,7 +401,7 @@ test('buildRoutingPlan emits protocol 3.0 with adaptive assignments and full can
   assert.match(renderRoutingExplanation(plan), /claude-opus/);
 });
 
-test('reviewer-specific assignment roles narrow a shared companion capability', async () => {
+test('legacy codex-companion capability never creates reviewer candidates or routes', async () => {
   const { buildRoutingPlan } = await import(routerUrl);
   const companion = capability({
     adapter_id: 'codex-companion',
@@ -430,17 +439,73 @@ test('reviewer-specific assignment roles narrow a shared companion capability', 
     capabilities: [companion],
   });
 
-  const byId = new Map(plan.candidate_reviewers.map((candidate) => [candidate.reviewer_id, candidate]));
-  assert.deepEqual(byId.get('codex-review').assignment_roles, ['standard']);
-  assert.deepEqual(byId.get('codex-adversarial').assignment_roles, ['adversarial']);
-  const allRoutedAssignments = [
-    ...plan.routes,
-    ...[...byId.values()].flatMap((candidate) => candidate.expansion_route_templates || []),
+  assert.deepEqual(plan.candidate_reviewers, []);
+  assert.deepEqual(plan.routes, []);
+});
+
+test('codex_only clamps only the non-critical static provider-family floor and records provenance', async () => {
+  const { buildRoutingPlan } = await import(routerUrl);
+  const reviewers = [
+    { id: 'codex-review', provider: 'codex', role: 'standard', adapter_id: 'codex-native-generic' },
+    { id: 'codex-adversarial', provider: 'codex', role: 'adversarial', adapter_id: 'codex-native-generic' },
   ];
-  assert.ok(
-    allRoutedAssignments.every((route) => ['standard', 'adversarial'].includes(route.assignment_role)),
-    'the shared adapter must not advertise feasibility, traceability, security, or confirmation routes',
-  );
+  const base = {
+    artifacts: [{ target_kind: 'code-change', path: 'src/a.js', changed_lines: 1 }],
+    reviewers,
+    policy: { routing: { policy: 'auto', reviewer_strategy: 'static', maximum_reviewers: 4 } },
+    capabilities: [codexNativeGenericCapability()],
+  };
+  const ordinary = buildRoutingPlan({
+    ...base,
+    overrides: {
+      protocol_version: '2.0',
+      routing_policy: 'auto',
+      reviewer_strategy: 'static',
+      allow_fallback: false,
+      providers: {},
+      reviewers: {},
+    },
+  });
+  assert.equal(ordinary.provider_family_minimum, 2);
+  assert.equal(ordinary.confidence_floor, 'CONCERN');
+
+  const codexOnly = buildRoutingPlan({
+    ...base,
+    overrides: {
+      protocol_version: '2.0',
+      routing_policy: 'auto',
+      reviewer_strategy: 'static',
+      codex_only: true,
+      allow_fallback: false,
+      providers: {},
+      reviewers: {},
+    },
+  });
+  assert.equal(codexOnly.codex_only, true);
+  assert.equal(codexOnly.provider_family_minimum, 1);
+  assert.equal(codexOnly.minimum_reviewers, 2);
+  assert.equal(codexOnly.confidence_floor, null);
+  assert.deepEqual(codexOnly.routes.map((route) => route.reviewer_id), [
+    'codex-review',
+    'codex-adversarial',
+  ]);
+
+  const critical = buildRoutingPlan({
+    ...base,
+    artifacts: [{ target_kind: 'code-change', path: 'src/auth.js', content_risk: 'critical', changed_lines: 1 }],
+    overrides: {
+      protocol_version: '2.0',
+      routing_policy: 'auto',
+      reviewer_strategy: 'static',
+      codex_only: true,
+      allow_fallback: false,
+      providers: {},
+      reviewers: {},
+    },
+  });
+  assert.equal(critical.provider_family_minimum, 2);
+  assert.equal(critical.minimum_reviewers, 3);
+  assert.equal(critical.operational_failure, true);
 });
 
 test('maximum_reviewers below the ideal floor still emits a leaf-valid bounded plan', async () => {

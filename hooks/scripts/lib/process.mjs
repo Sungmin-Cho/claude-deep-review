@@ -107,7 +107,7 @@ function escapeCmdArgument(value, nestedBatchLayer = true) {
 
 function buildWindowsBatchCommand(command, args) {
   const shellCommand = [
-    caretEscapeCmdSyntax(command),
+    escapeCmdArgument(command, false),
     ...args.map((argument) => escapeCmdArgument(argument, false)),
   ].join(' ');
   return `"${shellCommand}"`;
@@ -175,14 +175,14 @@ function prepareSpawn(command, args, env) {
   };
 }
 
-function terminateWindowsProcessTree(child, env, stderr) {
+function terminateWindowsProcessTree(child, env, appendStderr) {
   if (child.pid) {
     const taskkill = resolveExecutable('taskkill.exe', env) || 'taskkill.exe';
     let fallbackIssued = false;
     const fallback = () => {
       if (fallbackIssued) return;
       fallbackIssued = true;
-      stderr.push(Buffer.from(WINDOWS_TASKKILL_FALLBACK_DIAGNOSTIC));
+      appendStderr(Buffer.from(WINDOWS_TASKKILL_FALLBACK_DIAGNOSTIC));
       try {
         child.kill('SIGKILL');
       } catch {
@@ -241,6 +241,27 @@ export function runProcess(command, args = [], options = {}) {
   if (!Array.isArray(args)) {
     return Promise.reject(new TypeError('args must be an array'));
   }
+  const captureLimit = (value, name) => {
+    if (value === undefined) return Number.POSITIVE_INFINITY;
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new TypeError(`${name} must be a non-negative safe integer`);
+    }
+    return value;
+  };
+  let maxCaptureBytesPerStream;
+  let maxCaptureBytesTotal;
+  try {
+    maxCaptureBytesPerStream = captureLimit(
+      options.maxCaptureBytesPerStream,
+      'maxCaptureBytesPerStream',
+    );
+    maxCaptureBytesTotal = captureLimit(
+      options.maxCaptureBytesTotal,
+      'maxCaptureBytesTotal',
+    );
+  } catch (error) {
+    return Promise.reject(error);
+  }
 
   const env = options.env ?? process.env;
   const prepared = prepareSpawn(command, args.map(String), env);
@@ -251,17 +272,43 @@ export function runProcess(command, args = [], options = {}) {
       timedOut: false,
       stdout: Buffer.alloc(0),
       stderr: Buffer.from(prepared.rejectedReason),
+      captureOverflow: false,
     });
   }
   return new Promise((resolveResult) => {
     const stdout = [];
     const stderr = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let totalBytes = 0;
+    let captureOverflow = false;
     let timedOut = false;
     let spawnError;
     let stdinError;
     let settled = false;
     let closeCode;
     let closeSignal;
+
+    const appendCaptured = (chunks, value, streamBytes) => {
+      const chunk = Buffer.from(value);
+      const allowed = Math.max(0, Math.min(
+        chunk.length,
+        maxCaptureBytesPerStream - streamBytes,
+        maxCaptureBytesTotal - totalBytes,
+      ));
+      if (allowed < chunk.length) captureOverflow = true;
+      if (allowed > 0) {
+        chunks.push(Buffer.from(chunk.subarray(0, allowed)));
+        totalBytes += allowed;
+      }
+      return streamBytes + allowed;
+    };
+    const appendStdout = (chunk) => {
+      stdoutBytes = appendCaptured(stdout, chunk, stdoutBytes);
+    };
+    const appendStderr = (chunk) => {
+      stderrBytes = appendCaptured(stderr, chunk, stderrBytes);
+    };
 
     const child = spawn(prepared.command, prepared.args, {
       cwd: options.cwd,
@@ -273,8 +320,8 @@ export function runProcess(command, args = [], options = {}) {
       detached: !IS_WINDOWS,
     });
 
-    child.stdout.on('data', (chunk) => stdout.push(Buffer.from(chunk)));
-    child.stderr.on('data', (chunk) => stderr.push(Buffer.from(chunk)));
+    child.stdout.on('data', appendStdout);
+    child.stderr.on('data', appendStderr);
     child.once('error', (error) => {
       spawnError = error;
       timedOut = false;
@@ -295,21 +342,22 @@ export function runProcess(command, args = [], options = {}) {
       if (timeout) clearTimeout(timeout);
       if (escalation) clearTimeout(escalation);
       if (groupExitWait) clearTimeout(groupExitWait);
-      if (spawnError) stderr.push(Buffer.from(`${spawnError.message}\n`));
-      if (stdinError) stderr.push(Buffer.from(`stdin error: ${stdinError.code || 'UNKNOWN'}\n`));
+      if (spawnError) appendStderr(Buffer.from(`${spawnError.message}\n`));
+      if (stdinError) appendStderr(Buffer.from(`stdin error: ${stdinError.code || 'UNKNOWN'}\n`));
       resolveResult({
         code: spawnError ? 127 : (timedOut ? 124 : (code ?? 127)),
         signal,
         timedOut,
         stdout: Buffer.concat(stdout),
         stderr: Buffer.concat(stderr),
+        captureOverflow,
       });
     };
 
     const waitForPosixProcessGroupExit = () => {
       const processGroupId = child.pid;
       if (!processGroupId) {
-        stderr.push(Buffer.from(POSIX_GROUP_EXIT_UNCONFIRMED_DIAGNOSTIC));
+        appendStderr(Buffer.from(POSIX_GROUP_EXIT_UNCONFIRMED_DIAGNOSTIC));
         finish(closeCode, closeSignal);
         return;
       }
@@ -323,7 +371,7 @@ export function runProcess(command, args = [], options = {}) {
 
         const remainingMs = deadline - Date.now();
         if (remainingMs <= 0) {
-          stderr.push(Buffer.from(POSIX_GROUP_EXIT_UNCONFIRMED_DIAGNOSTIC));
+          appendStderr(Buffer.from(POSIX_GROUP_EXIT_UNCONFIRMED_DIAGNOSTIC));
           finish(closeCode, closeSignal);
           return;
         }
@@ -341,7 +389,7 @@ export function runProcess(command, args = [], options = {}) {
       timeout = setTimeout(() => {
         timedOut = true;
         if (IS_WINDOWS) {
-          terminateWindowsProcessTree(child, env, stderr);
+          terminateWindowsProcessTree(child, env, appendStderr);
           return;
         }
 

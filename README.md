@@ -8,7 +8,7 @@
 
 An independent Evaluator plugin for AI coding agents — cross-model code review with Codex integration and Sprint Contract support.
 
-AI coding agents have a structural blind spot: they review their own work. The agent that wrote the code also judges it, so self-approval bias is built in. deep-review runs a **separate reviewer context** that sees the shared review payload — not the reasoning, intentions, or assumptions behind the code — for a structurally independent evaluation. Claude Code can use an Opus named agent, while Codex can use its native generic subagent; optional Codex companion and `agy` roles extend this into parallel cross-model verification.
+AI coding agents have a structural blind spot: they review their own work. The agent that wrote the code also judges it, so self-approval bias is built in. deep-review runs a **separate reviewer context** that sees the shared review payload — not the reasoning, intentions, or assumptions behind the code — for a structurally independent evaluation. Claude Code invokes both Codex reviewer roles through isolated `codex exec` sessions, while Codex invokes both roles as history-free native subagents; optional Claude and `agy` roles broaden cross-model verification.
 
 ## Role in deep-suite
 
@@ -90,7 +90,7 @@ Claude Code slash commands and Codex skills are distinct host entrypoints for th
 - `--session-doc` (loop-only, opt-in) keeps one consolidated session document keyed by the loop id — current verdict, per-round history, open-vs-resolved rollup, and a final post-stop summary — while per-round reports and their fail-closed accounting stay untouched.
 - `--dry-run` / `--explain-routing` (review-only) print the artifact classification, capability-aware routing plan, and provenance, then stop before any reviewer.
 - `--routing <auto|fast|balanced|quality>` selects a routing policy. Repeated `--model <provider>=<model>` / `--effort <provider>=<effort>` set provider overrides; repeated `--reviewer-model <reviewer>=<model>` / `--reviewer-effort <reviewer>=<effort>` set canonical reviewer overrides.
-- `--allow-fallback` permits a visible fallback when an explicit model or effort cannot be applied. Without it, explicit unsupported requests fail closed before dispatch.
+- `--allow-fallback` permits one visible retry when a leaf runtime explicitly rejects the requested model or effort. Authentication failures, timeouts, empty output, ambiguous errors, and generic failures never retry; without authorization, explicit rejection fails closed.
 - `--allow-classifier` lets dry-run/explain use semantic classification for ambiguous artifacts. Bounded artifact content is treated as untrusted data and sent through stdin; secret-like content is never sent and falls back to deterministic classification.
 - `--no-*`, `--codex`, `--codex-only`, and `--ultracode` are hard
   eligibility/required-assignment constraints. Reviewer-level overrides require
@@ -154,7 +154,7 @@ Each criterion is verified against the actual code changes.
 
 ### Stage 3: Deep Review
 
-Claude Code uses an independent named `code-reviewer` agent when that capability is available and otherwise uses the native Node Claude bridge. Codex uses a generic subagent for its standard `codex-review` role and may use the Node Claude bridge for a separate Claude-family role when the Claude CLI is installed. Before dispatch, you are told which reviewers will run. Every reviewer receives only the shared payload — never the originating session context — and evaluates 6 criteria:
+Claude Code uses an independent named `code-reviewer` agent when that capability is available and otherwise uses the native Node Claude bridge. Its `codex-review` and `codex-adversarial` roles run through generic `codex exec` with an ephemeral session, a read-only sandbox, isolated configuration, and route-specific model/effort. On Codex, both roles run as separate history-free native subagents with the same route-specific inputs. A detected Claude CLI may supply a separate Claude-family voice. Before dispatch, you are told which reviewers will run. Every reviewer receives only the shared payload — never the originating session context — and evaluates 6 criteria:
 
 | # | Criterion | Checks |
 |---|---|---|
@@ -168,7 +168,7 @@ Claude Code uses an independent named `code-reviewer` agent when that capability
 The shared reviewer payload — used by the Opus reviewer, ultracode shards, and agy — includes:
 
 - **`change_files` manifest** — a NUL-safe, capped cross-file manifest (rename/copy detection, dirty-state untracked union) so reviewers see the whole changeset, not just one diff; the diff itself is ordered last for instruction-attention. It honors the same Stage 1 exclusions as the diff.
-- **FP-suppression doctrine** — a false-positive-suppression doctrine plus a conservative-balance counterweight, single-sourced from `review-criteria.md` and injected into the Opus prompt, ultracode shards, and the agy payload. The standard `codex review` and Codex adversarial passes are intentionally excluded, preserving their aggression.
+- **FP-suppression doctrine** — a false-positive-suppression doctrine plus a conservative-balance counterweight, single-sourced from `review-criteria.md` and injected into the Opus prompt, ultracode shards, and the agy payload. Both Codex reviewer payloads are intentionally excluded, preserving their aggression.
 
 ### Stage 4: Verdict
 
@@ -181,22 +181,16 @@ The shared reviewer payload — used by the Opus reviewer, ultracode shards, and
 
 The report is saved to `.deep-review/reports/{YYYY-MM-DD}-{HHmmss}-review.md`.
 
-### Codex auto-exposure protocol
-
-When an eligible companion process needs gitignored review inputs, `/deep-review` detects those paths, requests approval, and temporarily exposes only the approved set through the persisted Node mutation protocol. The protocol owns an opaque cross-process token, restores the exact index state, and auto-recovers interrupted operations. Native Codex generic subagents read allowed paths directly and never trigger index mutation merely because Codex is the host. Sensitive patterns (`.env*`, credentials, SSH keys, GCP service accounts, `.pgpass`, `.netrc`, `wrangler.toml`, JWT, and more) are scanned case-insensitively and fail closed.
-
 ## Cross-model verification
 
-When multiple reviewer roles are available, review runs in parallel and synthesizes trusted results by confidence level:
+When multiple reviewer roles are available, deep-review synthesizes their trusted results by confidence level. Native Codex reviewer dispatch is serial and trust-gated: capture the pre-review fingerprint, run one reviewer, capture the post-review fingerprint, make the trust decision, and only then run the next reviewer. A mutation stops the round before any sibling reviewer, response, or commit:
 
 ```
-              ┌──────────────────┼──────────────────┐
-              ▼                  ▼                  ▼
-     Claude Opus           codex:review      codex:adversarial
-    (Independent           (Standard         (Adversarial
-     subagent)              review)           review)
-              │                  │                  │
-              └──────────────────┼──────────────────┘
+     Claude Opus     →     codex:review     →     codex:adversarial
+    (Independent)          (Standard)              (Adversarial)
+          │                     │                        │
+          └──── fingerprint + trust gate after each ─────┘
+                                 │
                                  ▼
                     ┌────────────────────────┐
                     │   Synthesis by         │
@@ -209,7 +203,7 @@ When multiple reviewer roles are available, review runs in parallel and synthesi
                     └────────────────────────┘
 ```
 
-The `agy` (Google Antigravity) CLI joins as a 4th, cross-vendor-family reviewer when detected. If no Codex reviewer role is available, deep-review notifies once and continues with the available roles. If a reviewer fails (auth error, timeout), it falls back gracefully and marks that reviewer as "not performed."
+The `agy` (Google Antigravity) CLI joins as a 4th, cross-vendor-family reviewer when detected. If no Codex reviewer role is available, deep-review notifies once and continues with the available roles unless Codex was explicitly required. A failed or unavailable required role is fail-closed; an ordinary failed reviewer is recorded as not performed and excluded from `N_actual`, never silently replaced by the legacy companion.
 
 For `staged`, `unstaged`, and `mixed` states, deep-review offers to create a WIP commit so cross-model verification can run against a real commit base. The prompt previews the file list, warns about sensitive patterns, and never uses `git add -A`; undo with `git reset --soft HEAD~1`. Shallow clones are detected with a `git fetch --unshallow` recommendation.
 

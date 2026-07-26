@@ -7,9 +7,14 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { detectRuntimeHost, resolvePluginRoot } from './lib/runtime-context.mjs';
 import { resolveExecutable, runProcess } from './lib/process.mjs';
+import {
+  PROBE_MAX_CAPTURE_BYTES_PER_STREAM,
+  PROBE_MAX_CAPTURE_BYTES_TOTAL,
+} from './lib/probe-limits.mjs';
 import { git, parsePorcelainV1Z } from './lib/git.mjs';
 
 const AGY_VERSION_TIMEOUT_MS = 3000;
+const AGY_VERSION_MAX_CHARS = 256;
 const EMPTY_GIT_FIELDS = Object.freeze({
   staged: 0,
   unstaged: 0,
@@ -22,6 +27,12 @@ const EMPTY_GIT_FIELDS = Object.freeze({
 
 function firstLine(buffer) {
   return buffer.toString('utf8').split(/\r?\n/, 1)[0].trim();
+}
+
+function boundedProbeVersion(buffer) {
+  return firstLine(buffer)
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/gu, '')
+    .slice(0, AGY_VERSION_MAX_CHARS);
 }
 
 function isRegularFile(filePath) {
@@ -93,19 +104,24 @@ function findCodexCompanion(env) {
   return candidates.at(-1)?.path || '';
 }
 
-async function detectAvailability(cwd, env) {
+async function detectAvailability(cwd, env, processRunner) {
   const claudePath = resolveExecutable('claude', env) || '';
   const codexPath = resolveExecutable('codex', env) || '';
-  const agyPath = resolveExecutable('agy', env) || '';
+  let agyPath = resolveExecutable('agy', env) || '';
   const companionPath = findCodexCompanion(env);
   let agyVersion = '';
   if (agyPath) {
-    const version = await runProcess(agyPath, ['--version'], {
+    const version = await processRunner(agyPath, ['--version'], {
       cwd,
       env,
       timeoutMs: AGY_VERSION_TIMEOUT_MS,
+      maxCaptureBytesPerStream: PROBE_MAX_CAPTURE_BYTES_PER_STREAM,
+      maxCaptureBytesTotal: PROBE_MAX_CAPTURE_BYTES_TOTAL,
     });
-    if (version.code === 0 && !version.timedOut) agyVersion = firstLine(version.stdout);
+    if (version.code === 0 && !version.timedOut && version.captureOverflow !== true) {
+      agyVersion = boundedProbeVersion(version.stdout);
+    }
+    if (version.captureOverflow === true) agyPath = '';
   }
   return {
     node_available: true,
@@ -196,12 +212,16 @@ async function detectShallow(cwd, env) {
   return shallowPath.code === 0 && value.length > 0 && existsSync(resolve(cwd, value));
 }
 
-export async function detectEnvironment({ cwd = process.cwd(), env = process.env } = {}) {
+export async function detectEnvironment({
+  cwd = process.cwd(),
+  env = process.env,
+  processRunner = runProcess,
+} = {}) {
   const workingDirectory = resolve(cwd);
   const common = {
     runtime_host: detectRuntimeHost(env),
     plugin_root: resolvePluginRoot({ env }),
-    ...(await detectAvailability(workingDirectory, env)),
+    ...(await detectAvailability(workingDirectory, env, processRunner)),
   };
 
   if (!(await hasGitWorktree(workingDirectory, env))) {

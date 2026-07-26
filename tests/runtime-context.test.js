@@ -282,6 +282,7 @@ test('process runner preserves one Unicode argument and classifies timeout as 12
   );
   assert.equal(probe.code, 0);
   assert.equal(probe.stdout.toString(), '공백 Ω');
+  assert.equal(probe.captureOverflow, false);
 
   const timed = await runProcess(
     process.execPath,
@@ -290,6 +291,40 @@ test('process runner preserves one Unicode argument and classifies timeout as 12
   );
   assert.equal(timed.timedOut, true);
   assert.equal(timed.code, 124);
+});
+
+test('process runner caps each captured stream while continuing to drain noisy children', async () => {
+  const { runProcess } = await import(processUrl);
+  const result = await runProcess(
+    process.execPath,
+    ['-e', 'process.stdout.write("o".repeat(4096)); process.stderr.write("e".repeat(4096));'],
+    {
+      maxCaptureBytesPerStream: 32,
+      maxCaptureBytesTotal: 128,
+    },
+  );
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout.equals(Buffer.alloc(32, 'o')), true);
+  assert.equal(result.stderr.equals(Buffer.alloc(32, 'e')), true);
+  assert.equal(result.captureOverflow, true);
+});
+
+test('process runner enforces the total capture ceiling without accumulating discarded bytes', async () => {
+  const { runProcess } = await import(processUrl);
+  const result = await runProcess(
+    process.execPath,
+    ['-e', 'process.stdout.write("x".repeat(4096));'],
+    {
+      maxCaptureBytesPerStream: 4096,
+      maxCaptureBytesTotal: 17,
+    },
+  );
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout.equals(Buffer.alloc(17, 'x')), true);
+  assert.equal(result.stderr.length, 0);
+  assert.equal(result.captureOverflow, true);
 });
 
 test('process runner normalizes every ENOENT spawn result to code 127', async () => {
@@ -625,6 +660,34 @@ test('Windows batch preparation defers literal percent through one expansion pas
   assert.equal(expandedOnce.includes('%PATH%'), true);
   assert.equal(expandedOnce.includes('EXPANDED-INJECTION'), false);
   assert.equal(expandedOnce.includes('EXPANDED-PATH'), false);
+});
+
+test('Windows batch transport independently quotes a Unicode executable path containing spaces', async () => {
+  const source = readFileSync(new URL(processUrl), 'utf8');
+  const forcedWindowsSource = source.replace(
+    "const IS_WINDOWS = process.platform === 'win32';",
+    'const IS_WINDOWS = true;',
+  );
+  assert.notEqual(forcedWindowsSource, source, 'the platform seam must remain testable');
+  const instrumented = `${forcedWindowsSource}\nexport { prepareSpawn as __prepareSpawnForTest };\n`;
+  const module = await import(`data:text/javascript;base64,${Buffer.from(instrumented).toString('base64')}`);
+  const command = 'C:\\Program Files\\검토 Ω\\codex.cmd';
+  const env = {
+    ...process.env,
+    ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+  };
+
+  const prepared = module.__prepareSpawnForTest(
+    command,
+    ['exec', '--model', 'gpt-route Ω'],
+    env,
+  );
+
+  assert.equal(prepared.command, env.ComSpec);
+  assert.equal(
+    prepared.args.at(-1),
+    '"^"C:\\Program^ Files\\검토^ Ω\\codex.cmd^" ^"exec^" ^"--model^" ^"gpt-route^ Ω^""',
+  );
 });
 
 test('Windows raw batch transport rejects quotes and line breaks without a shim', async () => {

@@ -8,7 +8,7 @@
 
 AI 코딩 에이전트를 위한 독립 Evaluator 플러그인 — Codex 연동 교차 모델 코드 리뷰와 Sprint Contract 지원.
 
-AI 코딩 에이전트에는 구조적 맹점이 있습니다: 자신이 작성한 코드를 스스로 리뷰합니다. 코드를 작성한 에이전트가 그것을 판단하므로 자기 승인 편향이 구조적으로 내재합니다. deep-review는 원본 세션의 추론·의도·가정이 아니라 공유 리뷰 페이로드만 보는 **별도의 reviewer context**로 구조적으로 독립된 평가를 수행합니다. Claude Code는 Opus named agent를, Codex는 네이티브 generic 서브에이전트를 사용할 수 있으며, 선택적 Codex companion과 `agy` 역할이 병렬 교차 모델 검증을 확장합니다.
+AI 코딩 에이전트에는 구조적 맹점이 있습니다: 자신이 작성한 코드를 스스로 리뷰합니다. 코드를 작성한 에이전트가 그것을 판단하므로 자기 승인 편향이 구조적으로 내재합니다. deep-review는 원본 세션의 추론·의도·가정이 아니라 공유 리뷰 페이로드만 보는 **별도의 reviewer context**로 구조적으로 독립된 평가를 수행합니다. Claude Code는 격리된 `codex exec` 세션으로 두 Codex reviewer 역할을 호출하고, Codex는 history-free 네이티브 서브에이전트로 두 역할을 호출합니다. 선택적 Claude와 `agy` 역할은 교차 모델 검증 범위를 넓힙니다.
 
 ## deep-suite에서의 역할
 
@@ -90,7 +90,7 @@ Claude Code 슬래시 커맨드와 Codex 스킬은 동일한 라우트 문법을
 - `--session-doc`(루프 전용, opt-in)은 loop id로 키잉된 통합 세션 문서 하나를 유지합니다 — 현재 verdict, 라운드별 히스토리, open-vs-resolved 롤업, 종료 후 최종 요약 — 라운드별 리포트와 그 fail-closed 계상은 그대로 유지됩니다.
 - `--dry-run` / `--explain-routing`(리뷰 전용)은 artifact 분류, capability-aware 라우팅 계획, provenance를 출력하고 리뷰어 실행 전에 정지합니다.
 - `--routing <auto|fast|balanced|quality>`은 라우팅 정책을 선택합니다. 반복 가능한 `--model <provider>=<model>` / `--effort <provider>=<effort>`은 provider override를, `--reviewer-model <reviewer>=<model>` / `--reviewer-effort <reviewer>=<effort>`은 canonical reviewer override를 설정합니다.
-- `--allow-fallback`은 명시한 model 또는 effort를 적용할 수 없을 때 보이는 fallback을 허용합니다. 이 플래그가 없으면 지원되지 않는 명시 요청은 dispatch 전에 fail-closed합니다.
+- `--allow-fallback`은 leaf runtime이 요청 model 또는 effort를 명시적으로 거부할 때 한 번의 visible retry를 허용합니다. 인증 실패, timeout, 빈 출력, 모호한 오류, 일반 실패는 retry하지 않으며, 승인 없이는 명시적 거부를 fail-closed합니다.
 - `--allow-classifier`는 dry-run/explain에서 모호한 artifact에 semantic 분류를 사용할 수 있게 합니다. 제한된 artifact 내용은 untrusted data로 취급해 stdin으로만 전달하며, secret-like 내용은 외부로 보내지 않고 결정적 분류로 fallback합니다.
 - `--no-*`, `--codex`, `--codex-only`, `--ultracode`는 hard
   eligibility/required-assignment 제약입니다. reviewer-level override는 해당
@@ -154,7 +154,7 @@ diff 제외 대상: 바이너리, `vendor/`, `node_modules/`, `dist/`, `build/`,
 
 ### Stage 3: Deep Review (심층 리뷰)
 
-Claude Code는 capability가 있으면 독립 named `code-reviewer` 에이전트를 사용하고, 없으면 네이티브 Node Claude 브리지를 사용합니다. Codex는 표준 `codex-review` 역할에 generic 서브에이전트를 사용하며, Claude CLI가 설치된 경우 별도의 Claude-family 역할에 Node Claude 브리지를 사용할 수 있습니다. 디스패치 전에 실행될 리뷰어 구성을 고지합니다. 모든 리뷰어는 원본 세션 컨텍스트가 아닌 공유 페이로드만 받고 6가지 관점을 평가합니다:
+Claude Code는 capability가 있으면 독립 named `code-reviewer` 에이전트를 사용하고, 없으면 네이티브 Node Claude 브리지를 사용합니다. `codex-review`와 `codex-adversarial` 역할은 ephemeral session, read-only sandbox, 격리 config, route별 model/effort가 적용된 generic `codex exec`로 실행합니다. Codex에서는 두 역할을 같은 route별 입력을 가진 별도의 history-free 네이티브 서브에이전트로 실행합니다. Claude CLI가 감지되면 별도의 Claude-family voice를 제공할 수 있습니다. 디스패치 전에 실행될 리뷰어 구성을 고지합니다. 모든 리뷰어는 원본 세션 컨텍스트가 아닌 공유 페이로드만 받고 6가지 관점을 평가합니다:
 
 | # | 관점 | 검사 내용 |
 |---|---|---|
@@ -168,7 +168,7 @@ Claude Code는 capability가 있으면 독립 named `code-reviewer` 에이전트
 공유 리뷰어 페이로드(Opus 리뷰어, ultracode 샤드, agy가 사용)는 다음을 포함합니다:
 
 - **`change_files` 매니페스트** — NUL-safe, capped 교차 파일 매니페스트(이름 변경/복사 감지, dirty 상태 untracked 유니온)로 리뷰어가 diff 하나가 아닌 전체 변경 집합을 봅니다. diff 자체는 instruction-attention을 위해 마지막에 배치되며, 위 Stage 1 제외 목록을 동일하게 따릅니다.
-- **FP-억제 독트린** — false-positive 억제 독트린과 conservative-balance 반대 가중치를 `review-criteria.md` 단일 출처에서 Opus 프롬프트, ultracode 샤드, agy 페이로드에 주입합니다. 표준 `codex review`와 Codex adversarial 패스는 공격성 보존을 위해 의도적으로 제외됩니다.
+- **FP-억제 독트린** — false-positive 억제 독트린과 conservative-balance 반대 가중치를 `review-criteria.md` 단일 출처에서 Opus 프롬프트, ultracode 샤드, agy 페이로드에 주입합니다. 두 Codex reviewer 페이로드는 공격성 보존을 위해 의도적으로 제외됩니다.
 
 ### Stage 4: Verdict (판정)
 
@@ -181,21 +181,16 @@ Claude Code는 capability가 있으면 독립 named `code-reviewer` 에이전트
 
 리포트는 `.deep-review/reports/{YYYY-MM-DD}-{HHmmss}-review.md`에 저장됩니다.
 
-### Codex 자동 노출 프로토콜
-
-eligible companion 프로세스가 gitignored 리뷰 입력을 필요로 할 때 `/deep-review`는 해당 경로를 감지하고 승인을 받은 뒤, 지속되는 Node 뮤테이션 프로토콜로 승인된 집합만 임시 노출합니다. 프로토콜은 불투명한 프로세스 간 토큰을 소유하고 정확한 인덱스 상태를 복원하며 중단된 작업을 자동 복구합니다. 네이티브 Codex generic 서브에이전트는 허용된 경로를 직접 읽으므로 Codex 호스트라는 이유만으로 인덱스 뮤테이션을 실행하지 않습니다. 민감 패턴(`.env*`, credentials, SSH 키, GCP 서비스 계정, `.pgpass`, `.netrc`, `wrangler.toml`, JWT 등)은 대소문자 불문으로 스캔하며 fail-closed 처리합니다.
-
 ## 교차 모델 검증
 
-여러 reviewer 역할을 사용할 수 있으면 리뷰가 병렬로 실행되고 신뢰할 수 있는 결과를 신뢰도 수준에 따라 합성합니다:
+여러 reviewer 역할을 사용할 수 있으면 deep-review는 신뢰할 수 있는 결과를 신뢰도 수준에 따라 합성합니다. 네이티브 Codex reviewer dispatch는 직렬이며 신뢰 게이트를 통과해야 합니다: 리뷰 전 fingerprint를 캡처하고, 한 reviewer를 실행하고, 리뷰 후 fingerprint를 캡처하고, 신뢰 판정을 내린 뒤에만 다음 reviewer를 실행합니다. mutation이 발생하면 sibling reviewer, response, commit 전에 해당 round를 중단합니다:
 
 ```
-              ┌──────────────────┼──────────────────┐
-              ▼                  ▼                  ▼
-     Claude Opus           codex:review      codex:adversarial
-    (독립 서브에이전트)      (표준 리뷰)        (적대적 리뷰)
-              │                  │                  │
-              └──────────────────┼──────────────────┘
+     Claude Opus     →     codex:review     →     codex:adversarial
+      (독립 리뷰)            (표준 리뷰)              (적대적 리뷰)
+          │                     │                        │
+          └──── 각 reviewer 뒤 fingerprint + 신뢰 게이트 ────┘
+                                 │
                                  ▼
                     ┌────────────────────────┐
                     │   신뢰도 기준 합성      │
@@ -207,7 +202,7 @@ eligible companion 프로세스가 gitignored 리뷰 입력을 필요로 할 때
                     └────────────────────────┘
 ```
 
-`agy`(Google Antigravity) CLI가 감지되면 cross-vendor-family 4번째 리뷰어로 합류합니다. Codex 리뷰어 역할을 사용할 수 없으면 deep-review는 1회 알림 후 사용 가능한 역할로 계속 진행합니다. 리뷰어가 실패하면(인증 오류, 타임아웃) graceful하게 fallback하고 해당 리뷰어를 "미수행"으로 표시합니다.
+`agy`(Google Antigravity) CLI가 감지되면 cross-vendor-family 4번째 리뷰어로 합류합니다. Codex 리뷰어 역할을 사용할 수 없으면 deep-review는 1회 알림 후, Codex가 명시적으로 요구되지 않은 경우에만 사용 가능한 역할로 계속 진행합니다. 명시적으로 required인 역할의 실패·부재는 fail-closed하며, 일반 reviewer 실패는 "미수행"으로 기록하고 `N_actual`에서 제외하되 legacy companion으로 조용히 대체하지 않습니다.
 
 `staged`, `unstaged`, `mixed` 상태에서는 교차 모델 검증이 실제 커밋 베이스에 대해 실행되도록 WIP 커밋 생성을 제안합니다. 제안은 파일 목록을 미리 보여주고 민감 패턴을 경고하며 `git add -A`를 사용하지 않습니다; `git reset --soft HEAD~1`로 원복합니다. shallow clone은 감지되어 `git fetch --unshallow` 권장이 표시됩니다.
 

@@ -81,13 +81,22 @@ is deferred to verifiable implementation evidence.
 
 ## Code Review
 ### 🔴 Critical
-{구체적 이슈, 파일:라인, 수정 제안}
+- {구체적 이슈, 파일:라인, 수정 제안}
 
 ### 🟡 Warning
-{구체적 이슈, 파일:라인, 수정 제안}
+- {구체적 이슈, 파일:라인, 수정 제안}
+
+### ℹ️ Info
+- {정보성 관찰, 파일:라인}
 
 ### 🟢 Passed
-{통과한 관점 목록}
+- {통과한 관점 목록}
+
+Each Critical, Warning, and Info finding is exactly one `- ` bullet on one line.
+A zero-count severity section contains exactly `None.` and no bullets. The
+Critical, Warning, and Info bullet counts must equal the corresponding Summary
+Issues counts. Passed also uses one `- ` bullet per item, or exactly `None.`
+when no checks passed.
 
 ## Entropy Scan (--entropy 사용 시)
 {중복 코드, 패턴 불일치, ad-hoc 헬퍼 목록}

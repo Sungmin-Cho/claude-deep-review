@@ -21,9 +21,11 @@ tools:
 ## Cross-runtime identity and trust contract
 
 - Claude Code may invoke this definition as the named `Agent(code-reviewer)`.
-- Codex uses one fresh generic subagent for the `codex-review` role. That
-  subagent must first read this file from its absolute plugin path and then read
-  the shared reviewer payload. It is a Codex reviewer, never an Opus reviewer.
+- Codex uses two separate fresh generic subagents, one each for both
+  `codex-review` and `codex-adversarial`. Each subagent has
+  `fork_turns: "none"`, receives only its route-specific payload plus this
+  trusted definition, and never receives generator history. Each is a Codex
+  reviewer, never an Opus reviewer.
 - Every invocation is read-only. Capture the repository fingerprint before and
   after the review; any mutation makes the output untrusted and excludes it
   from synthesis.

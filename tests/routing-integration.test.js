@@ -12,6 +12,13 @@ const classifyUrl = pathToFileURL(path.join(root, 'hooks/scripts/classify-artifa
 const routeUrl = pathToFileURL(path.join(root, 'hooks/scripts/public-route.mjs')).href;
 const claudeUrl = pathToFileURL(path.join(root, 'hooks/scripts/run-claude-reviewer.mjs')).href;
 const modelRouterUrl = pathToFileURL(path.join(root, 'hooks/scripts/lib/model-router.mjs')).href;
+const capabilityRegistryUrl = pathToFileURL(
+  path.join(root, 'hooks/scripts/lib/capability-registry.mjs'),
+).href;
+const CODEX_EXEC_HELP = [
+  '--ephemeral', '--sandbox', '--ignore-user-config', '--ignore-rules', '--cd',
+  '--skip-git-repo-check', '--output-last-message', '--color', '--model', '-c',
+].join(' ');
 
 function claudeCapability() {
   return {
@@ -72,6 +79,83 @@ test('public override → emit-routing-plan → leaf argv applies explicit model
   assert.deepEqual(argv.slice(argv.indexOf('--model'), argv.indexOf('--model') + 4), ['--model', 'vendor=model 품질', '--effort', 'xhigh']);
 });
 
+test('explicit max reaches every Codex adapter and canonical role leaf unchanged', async (t) => {
+  const { parsePublicRoute } = await import(routeUrl);
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const { buildCapabilities } = await import(capabilityRegistryUrl);
+  const cases = [
+    {
+      adapterId: 'codex-exec',
+      reviewerId: 'codex-review',
+      hostAssertions: { codexExecReviewer: true, codexNativeGeneric: false },
+    },
+    {
+      adapterId: 'codex-exec',
+      reviewerId: 'codex-adversarial',
+      hostAssertions: { codexExecReviewer: true, codexNativeGeneric: false },
+    },
+    {
+      adapterId: 'codex-native-generic',
+      reviewerId: 'codex-review',
+      hostAssertions: { codexExecReviewer: false, codexNativeGeneric: true },
+    },
+    {
+      adapterId: 'codex-native-generic',
+      reviewerId: 'codex-adversarial',
+      hostAssertions: { codexExecReviewer: false, codexNativeGeneric: true },
+    },
+  ];
+
+  for (const testCase of cases) {
+    await t.test(`${testCase.adapterId} ${testCase.reviewerId}`, async () => {
+      const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-codex-max-'));
+      t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+      fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+      const files = path.join(repo, 'targets.z');
+      fs.writeFileSync(files, 'notes.md\0');
+      const publicRoute = parsePublicRoute({
+        entry: 'review',
+        host: 'codex',
+        cwd: repo,
+        argv: [
+          '--reviewer-effort', `${testCase.reviewerId}=max`,
+          '--allow-fallback',
+        ],
+      });
+      assert.equal(publicRoute.ok, true);
+      const capabilities = buildCapabilities({
+        detected: {
+          codex_cli: true,
+          codex_cli_path: '/tools/codex',
+          codex_plugin: false,
+        },
+        hostAssertions: testCase.hostAssertions,
+        probes: { codex: { ok: true, version: 'codex-cli 9.9.9', help: CODEX_EXEC_HELP } },
+      });
+
+      const result = await runClassifyArtifactsCli(
+        [
+          '--repo', repo,
+          '--change-state', 'non-git',
+          '--files-from0', files,
+          '--overrides-json', JSON.stringify(publicRoute.overrides),
+          '--emit-routing-plan',
+        ],
+        {},
+        { capabilities },
+      );
+      const leaf = result.routing_plan.routes.find(
+        (item) => item.reviewer_id === testCase.reviewerId,
+      );
+      assert.ok(leaf, `${testCase.reviewerId} leaf must be selected`);
+      assert.equal(leaf.adapter_id, testCase.adapterId);
+      assert.equal(leaf.requested.effort, 'max');
+      assert.equal(leaf.resolved.effort, 'max');
+      assert.equal(leaf.fallback.occurred, false);
+    });
+  }
+});
+
 // I4: --host-assertions-json is the internal preflight argv transport for
 // native host tool assertions. These tests deliberately omit
 // runtime.capabilities (it takes full precedence and would bypass the flag
@@ -95,6 +179,60 @@ test('I4: --host-assertions-json threads native Claude agent availability into t
   const claudeRoute = result.routing_plan.routes.find((route) => route.reviewer_id === 'claude-opus');
   assert.ok(claudeRoute, 'claude-opus route must exist once the native agent host assertion is true');
   assert.equal(claudeRoute.adapter_id, 'claude-native-agent');
+});
+
+test('I4: codexExecReviewer assertion plus detected and successfully probed CLI selects both Codex reviewers', async (t) => {
+  if (process.platform === 'win32') { t.skip('POSIX-only fake executable'); return; }
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-host-assertions-codex-exec-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-host-assertions-codex-bin-'));
+  const codex = path.join(binDir, 'codex');
+  fs.writeFileSync(codex, '#!/bin/sh\nexit 0\n');
+  fs.chmodSync(codex, 0o755);
+
+  const result = await runClassifyArtifactsCli(
+    [
+      '--repo', repo,
+      '--files-from0', files,
+      '--host-assertions-json', '{"codexExecReviewer":true,"codexNativeGeneric":false}',
+    ],
+    { PATH: `${binDir}${path.delimiter}${SAFE_SYSTEM_PATH}` },
+    {
+      probes: {
+        claude: { ok: false },
+        codex: { ok: true, version: 'codex-cli 9.9.9', help: CODEX_EXEC_HELP },
+      },
+    },
+  );
+  assert.deepEqual(
+    result.routing_plan.candidate_reviewers.map((candidate) => [candidate.reviewer_id, candidate.adapter_id]),
+    [['codex-review', 'codex-exec'], ['codex-adversarial', 'codex-exec']],
+  );
+});
+
+test('I4: codexNativeGeneric selects both canonical Codex reviewers without CLI detection', async () => {
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-host-assertions-codex-native-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const result = await runClassifyArtifactsCli(
+    [
+      '--repo', repo,
+      '--files-from0', files,
+      '--host-assertions-json', '{"codexExecReviewer":false,"codexNativeGeneric":true}',
+    ],
+    { PATH: SAFE_SYSTEM_PATH },
+    { probes: { claude: { ok: false }, codex: { ok: false } } },
+  );
+  assert.deepEqual(
+    result.routing_plan.candidate_reviewers.map((candidate) => [candidate.reviewer_id, candidate.adapter_id]),
+    [['codex-review', 'codex-native-generic'], ['codex-adversarial', 'codex-native-generic']],
+  );
 });
 
 test('I4: omitting --host-assertions-json leaves adapter selection unchanged (claude-cli chosen when only the CLI capability is available)', async () => {
@@ -256,6 +394,9 @@ test('workflow/report contracts wire adaptive-default routing and assignment/rea
   assert.match(report, /## Artifact Gate/);
   assert.match(report, /## Provenance/);
   assert.match(report, /requested-but-unverified/);
+  assert.match(report, /### ℹ️ Info/u);
+  assert.match(report, /Each Critical, Warning, and Info finding is exactly one `- ` bullet/u);
+  assert.match(report, /A zero-count severity section contains exactly `None\.`/u);
 });
 
 // F3: risk assessment must see artifact content evidence even though the

@@ -97,6 +97,19 @@ test('loop grammar accepts and transports review routing flags on every round', 
   assert.equal(result.maxExplicit, true);
 });
 
+test('loop grammar preserves literal codex-only provenance after expansion', async () => {
+  const { parsePublicRoute } = await import(routeUrl);
+  const result = parsePublicRoute({
+    entry: 'loop',
+    host: 'codex',
+    cwd: root,
+    argv: ['--codex-only', '--reviewer-strategy', 'static', '--max=3'],
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.overrides.codex_only, true);
+  assert.deepEqual(result.overrides.disabled_providers, ['agy', 'claude']);
+});
+
 test('reviewer strategy and readiness receipt are validated without ambiguous duplicates', async () => {
   const { parsePublicRoute } = await import(routeUrl);
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-readiness-route-'));
@@ -161,11 +174,11 @@ test('classify CLI --host-assertions-json rejects malformed JSON, non-object val
     runtime,
   );
   await assert.rejects(run('{'), /--host-assertions-json must contain valid JSON/);
-  await assert.rejects(run('null'), /claudeNativeAgent\/codexNativeGeneric/);
-  await assert.rejects(run('[]'), /claudeNativeAgent\/codexNativeGeneric/);
-  await assert.rejects(run('"x"'), /claudeNativeAgent\/codexNativeGeneric/);
-  await assert.rejects(run('{"unknownKey":true}'), /claudeNativeAgent\/codexNativeGeneric/);
-  await assert.rejects(run('{"claudeNativeAgent":"yes"}'), /claudeNativeAgent\/codexNativeGeneric/);
+  await assert.rejects(run('null'), /claudeNativeAgent\/codexExecReviewer\/codexNativeGeneric/);
+  await assert.rejects(run('[]'), /claudeNativeAgent\/codexExecReviewer\/codexNativeGeneric/);
+  await assert.rejects(run('"x"'), /claudeNativeAgent\/codexExecReviewer\/codexNativeGeneric/);
+  await assert.rejects(run('{"unknownKey":true}'), /claudeNativeAgent\/codexExecReviewer\/codexNativeGeneric/);
+  await assert.rejects(run('{"codexExecReviewer":"yes"}'), /claudeNativeAgent\/codexExecReviewer\/codexNativeGeneric/);
 });
 
 test('public skill forwards normalized routing overrides as one compact JSON argv value', () => {
@@ -259,10 +272,11 @@ function g2Capabilities() {
       structured_output: true, read_only_enforcement: 'process-contract',
     },
     {
-      protocol_version: '2.0', adapter_id: 'codex-companion', provider: 'codex', available: true, roles: ['standard', 'adversarial'],
+      protocol_version: '2.0', adapter_id: 'codex-exec', provider: 'codex', available: true, roles: ['standard', 'adversarial'],
+      assignment_roles: ['standard', 'feasibility', 'traceability', 'adversarial', 'security', 'confirmation'],
       model_selection: { supported: true, aliases: ['fast'], catalog_complete: false, transport: 'flag:--model' },
-      effort_selection: { supported: true, levels: ['low', 'medium'], transport: 'flag:--effort' },
-      structured_output: true, read_only_enforcement: 'agent-tool-allowlist',
+      effort_selection: { supported: true, levels: ['minimal', 'low', 'medium', 'high', 'xhigh'], transport: 'config:model_reasoning_effort' },
+      structured_output: true, read_only_enforcement: 'process-contract',
     },
     {
       protocol_version: '2.0', adapter_id: 'agy-cli', provider: 'agy', available: true, roles: ['standard'],
@@ -275,7 +289,8 @@ function g2Capabilities() {
 
 const g2Reviewers = [
   { id: 'claude-opus', provider: 'claude', role: 'standard', adapter_id: 'claude-cli' },
-  { id: 'codex-review', provider: 'codex', role: 'standard', adapter_id: 'codex-companion' },
+  { id: 'codex-review', provider: 'codex', role: 'standard', adapter_id: 'codex-exec' },
+  { id: 'codex-adversarial', provider: 'codex', role: 'adversarial', adapter_id: 'codex-exec' },
   { id: 'agy', provider: 'agy', role: 'standard', adapter_id: 'agy-cli' },
 ];
 
@@ -299,11 +314,17 @@ test('G2: --no-codex emits disabled_providers and excludes codex routes from the
   assert.equal(result.routing_plan.routes.some((r) => r.provider === 'codex'), false, 'no codex route must be emitted when --no-codex disables it');
 });
 
-test('G2: --codex-only yields disabled_providers [agy, claude] and a codex-only plan', async () => {
+test('G2: literal --codex-only preserves canonical provenance and yields both Codex routes', async () => {
   const { parsePublicRoute } = await import(routeUrl);
   const { runClassifyArtifactsCli } = await import(classifyUrl);
-  const route = parsePublicRoute({ entry: 'review', host: 'claude', cwd: root, argv: ['--codex-only'] });
+  const route = parsePublicRoute({
+    entry: 'review',
+    host: 'claude',
+    cwd: root,
+    argv: ['--codex-only', '--reviewer-strategy', 'static'],
+  });
   assert.equal(route.ok, true);
+  assert.equal(route.overrides.codex_only, true);
   assert.deepEqual(route.overrides.disabled_providers, ['agy', 'claude']);
 
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-g2-codex-only-'));
@@ -315,7 +336,14 @@ test('G2: --codex-only yields disabled_providers [agy, claude] and a codex-only 
     {},
     { capabilities: g2Capabilities(), reviewers: g2Reviewers },
   );
-  assert.deepEqual(result.routing_plan.routes.map((r) => r.reviewer_id), ['codex-review'], 'only the codex reviewer must remain routable under --codex-only');
+  assert.equal(result.routing_plan.codex_only, true);
+  assert.deepEqual(
+    result.routing_plan.routes.map((r) => r.reviewer_id),
+    ['codex-review', 'codex-adversarial'],
+    'both canonical Codex reviewers must remain routable under --codex-only',
+  );
+  assert.equal(result.routing_plan.provider_family_minimum, 1);
+  assert.equal(result.routing_plan.confidence_floor, null);
 });
 
 test('G2: no flags use adaptive defaults while explicit static + shadow preserves every eligible reviewer', async () => {
@@ -337,7 +365,7 @@ test('G2: no flags use adaptive defaults while explicit static + shadow preserve
   assert.deepEqual(result.routing_plan.routes.map((r) => r.reviewer_id).sort(), ['claude-opus', 'codex-review']);
   assert.deepEqual(
     result.routing_plan.candidate_reviewers.map((r) => r.reviewer_id).sort(),
-    ['agy', 'claude-opus', 'codex-review'],
+    ['agy', 'claude-opus', 'codex-adversarial', 'codex-review'],
   );
   assert.equal(result.routing_plan.shadow_mode, false);
 
@@ -354,7 +382,7 @@ test('G2: no flags use adaptive defaults while explicit static + shadow preserve
       projectPolicy: { features: { routing_shadow_mode: true } },
     },
   );
-  assert.deepEqual(staticResult.routing_plan.routes.map((r) => r.reviewer_id).sort(), ['agy', 'claude-opus', 'codex-review']);
+  assert.deepEqual(staticResult.routing_plan.routes.map((r) => r.reviewer_id).sort(), ['agy', 'claude-opus', 'codex-adversarial', 'codex-review']);
   assert.equal(staticResult.routing_plan.shadow_mode, true);
 });
 

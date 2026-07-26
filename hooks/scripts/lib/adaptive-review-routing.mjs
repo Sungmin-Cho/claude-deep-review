@@ -211,6 +211,13 @@ export function planReviewerAssignments(options = {}) {
     progressState,
     artifacts,
   });
+  const criticalRisk = risk === 'critical';
+  const criticalImplementation = artifactPhase === 'implementation' && risk === 'critical';
+  const providerFamilyMinimum = options.codexOnly === true
+    && reviewerStrategy === 'static'
+    && !criticalRisk
+    ? 1
+    : baseFloor.providerFamilyMinimum;
   const shouldExpand = ['regression', 'stalled'].includes(progressState);
   const tierAdjustment = shouldExpand ? 1 : baseFloor.tierAdjustment;
 
@@ -341,11 +348,10 @@ export function planReviewerAssignments(options = {}) {
   const providerFamilies = new Set(assignments.map((assignment) => assignment.provider)).size;
   const shortfalls = [];
   if (assignments.length < baseFloor.minimumReviewers) shortfalls.push('minimum_reviewers');
-  if (providerFamilies < baseFloor.providerFamilyMinimum) shortfalls.push('provider_families');
+  if (providerFamilies < providerFamilyMinimum) shortfalls.push('provider_families');
   if (assignments.length < targetCount) shortfalls.push('planned_reviewers');
   shortfalls.push(...missingHardConstraints);
   const uniqueShortfalls = [...new Set(shortfalls)];
-  const criticalImplementation = artifactPhase === 'implementation' && risk === 'critical';
   const operationalFailure = missingHardConstraints.length > 0
     || (criticalImplementation && (
       assignments.length < 3 || providerFamilies < 2
@@ -355,7 +361,7 @@ export function planReviewerAssignments(options = {}) {
     : null;
   const effectiveMinimum = Math.min(baseFloor.minimumReviewers, maximumReviewers);
   const effectiveProviderMinimum = Math.min(
-    baseFloor.providerFamilyMinimum,
+    providerFamilyMinimum,
     effectiveMinimum,
   );
 
