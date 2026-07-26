@@ -459,7 +459,7 @@ test('Codex exec bridge uses a neutral read-only invocation and ordered trusted 
   assert.equal(row.argv[11], '--output-last-message');
   assert.equal(row.argv[12], row.lastMessage);
   assert.notEqual(row.cwd, realpathSync(projectRoot));
-  assert.equal(row.cwdMode, 0o700);
+  if (process.platform !== 'win32') assert.equal(row.cwdMode, 0o700);
   assert.equal(existsSync(row.cwd), false, 'neutral temp directory is removed after invocation');
   const trusted = readFileSync(join(pluginRoot, 'agents', 'code-reviewer.md'), 'utf8');
   assert.equal(row.stdin.startsWith(trusted), true);
