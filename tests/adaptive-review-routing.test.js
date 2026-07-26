@@ -30,7 +30,7 @@ const candidates = [
   {
     id: 'codex-adversarial',
     provider: 'codex',
-    adapter_id: 'codex-companion',
+    adapter_id: 'codex-native-generic',
     assignment_roles: ['adversarial', 'security', 'confirmation'],
     last_status: 'success',
   },
@@ -188,6 +188,21 @@ test('static strategy fixes the eligible reviewer set and critical shortages fai
   }));
   assert.equal(critical.operational_failure, true);
   assert.ok(critical.shortfalls.includes('minimum_reviewers'));
+});
+
+test('critical document codex-only static routing retains the two-family provider floor', async () => {
+  const { planReviewerAssignments } = await import(adaptiveUrl);
+  const criticalDocument = planReviewerAssignments(plan({
+    artifacts: [{ path: 'docs/design.md', target_kind: 'design-document' }],
+    risk: 'critical',
+    reviewerStrategy: 'static',
+    codexOnly: true,
+    candidates: candidates.filter((candidate) => candidate.provider === 'codex'),
+  }));
+  assert.equal(criticalDocument.minimum_reviewers, 2);
+  assert.equal(criticalDocument.provider_family_minimum, 2);
+  assert.ok(criticalDocument.shortfalls.includes('provider_families'));
+  assert.equal(criticalDocument.confidence_floor, 'CONCERN');
 });
 
 test('risk assessment is four-level and monotonic across size, mixed, prior, receipt, and critical signals', async () => {

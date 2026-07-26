@@ -54,14 +54,16 @@ t_precedence() {
 t_security() {
   assert_grep S1 "$REVEXEC" '\-\-no-agy.*skip the scan and preflight' "--no-agy short-circuits privacy work"
   assert_grep S2 "$REVEXEC" 'create no state or config changes' "--no-agy makes no fingerprint/config mutation"
-  assert_grep S3 "$CODEXREF" 'changed result.*untrusted.*exclude' "generic reviewer mutation is excluded"
+  assert_grep S3a "$CODEXREF" 'mutation invalidates the result and makes it' "generic reviewer mutation invalidates trust"
+  assert_grep S3b "$CODEXREF" 'untrusted.*Stop the round before launching the sibling reviewer' "generic reviewer mutation stops sibling dispatch"
+  assert_grep S3c "$CODEXREF" 'do not synthesize it' "generic reviewer mutation is excluded from synthesis"
   assert_grep S4 "$REVEXEC" '\-\-no-codex.*disables both' "--no-codex disables both Codex roles"
 }
 
 t_ultracode() {
   assert_grep U1 "$ULTRA" 'correctness, architecture, entropy, tests, readability' "six review dimensions are enumerated"
   assert_grep U2 "$ULTRA" 'When named-agent capability exists' "fan-out is capability-selected"
-  assert_grep U3 "$REVEXEC" 'Launch every eligible role in a fresh background context' "eligible roles launch independently"
+  assert_grep U3 "$REVEXEC" 'Ultracode may launch its eligible lens contexts in fresh background contexts' "ultracode lens contexts retain background concurrency"
   assert_grep U4 "$ULTRA" 'run-claude-reviewer.mjs' "fallback uses native Claude bridge"
   assert_grep U5 "$ULTRA" 'seven-line bucket' "fixed seven-line bucket is documented"
   assert_grep U6 "$ULTRA" 'severity, path, seven-line bucket, and substance' "issue identity inputs are explicit"
@@ -75,7 +77,10 @@ t_ultracode() {
 
 t_execution_and_report() {
   assert_grep C1 "$REVEXEC" 'Follow .*ultracode-integration.md' "review execution delegates to ultracode SSOT"
-  assert_grep C2 "$REVEXEC" 'Launch every eligible role' "review execution preserves independent launch"
+  assert_grep C2a "$REVEXEC" 'dispatch is strictly serial and trust-gated' "native Codex dispatch is serial and trust-gated"
+  assert_grep C2b "$REVEXEC" 'launch one leaf, capture the post-review fingerprint, make the trust decision' "native Codex dispatch checks post-fingerprint trust after each leaf"
+  assert_grep C2c "$REVEXEC" 'only then launch the next leaf' "native Codex dispatch gates the next leaf on trust"
+  assert_grep C2d "$REVEXEC" 'Stop the round before launching a sibling reviewer' "native Codex mutation stops sibling dispatch"
   assert_grep C3 "$REVEXEC" 'Six lenses collapse to one Anthropic voice' "review execution preserves one-voice accounting"
   assert_absent C4 "$REVEXEC" 'K >= [0-9].*status is.*success' "quorum mechanics are not duplicated outside SSOT"
   assert_grep C5 "$REVEXEC" '### 4.5 .*--ultracode' "review execution has ultracode branch"

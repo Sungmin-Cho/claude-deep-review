@@ -162,13 +162,13 @@ test('both workflows cover every release-relevant path class', () => {
   }
 });
 
-test('release version is exactly 2.0.0 on all three package surfaces', () => {
+test('release version is exactly 2.1.0 on all three package surfaces', () => {
   const versions = [
     JSON.parse(read('.claude-plugin/plugin.json')).version,
     JSON.parse(read('.codex-plugin/plugin.json')).version,
     JSON.parse(read('package.json')).version,
   ];
-  assert.deepEqual(versions, ['2.0.0', '2.0.0', '2.0.0']);
+  assert.deepEqual(versions, ['2.1.0', '2.1.0', '2.1.0']);
 });
 
 test('evergreen bilingual READMEs advertise both native hosts and portable runtime', () => {
@@ -318,6 +318,48 @@ test('bilingual 2.0.0 release surfaces adaptive convergence and readiness receip
     assert.match(source, /READY_FOR_IMPLEMENTATION/u);
     assert.match(source, /DOCUMENT_BLOCKED/u);
   }
+});
+
+test('bilingual 2.1.0 release surfaces host-native Codex transports', () => {
+  const english = releaseBlockAnyDate(read('CHANGELOG.md'), '2.1.0');
+  const korean = releaseBlockAnyDate(read('CHANGELOG.ko.md'), '2.1.0');
+  assert.deepEqual(
+    ['### Added', '### Changed', '### Removed', '### Security']
+      .map((heading) => bulletCount(english, heading)),
+    ['### 추가', '### 변경', '### 제거', '### 보안']
+      .map((heading) => bulletCount(korean, heading)),
+  );
+  for (const block of [english, korean]) {
+    for (const anchor of [
+      /codex exec/iu,
+      /history-free/iu,
+      /model/iu,
+      /reasoning effort/iu,
+      /companion/iu,
+      /fallback/iu,
+    ]) assert.match(block, anchor);
+  }
+  for (const source of [read('README.md'), read('README.ko.md')]) {
+    assert.match(source, /codex exec/iu);
+    assert.match(source, /history-free/iu);
+    assert.doesNotMatch(source, /Codex auto-exposure|Codex 자동 노출/iu);
+  }
+});
+
+test('bilingual READMEs describe reviewer dispatch as serial and trust-gated', () => {
+  const english = read('README.md');
+  const korean = read('README.ko.md');
+
+  assert.match(
+    english,
+    /reviewer dispatch is serial and trust-gated.{0,240}pre-review fingerprint.{0,240}one reviewer.{0,240}post-review fingerprint.{0,240}trust decision.{0,240}next reviewer/isu,
+  );
+  assert.match(
+    korean,
+    /reviewer dispatch는 직렬.{0,80}신뢰 게이트.{0,240}리뷰 전 fingerprint.{0,240}한 reviewer.{0,240}리뷰 후 fingerprint.{0,240}신뢰 판정.{0,240}다음 reviewer/isu,
+  );
+  assert.doesNotMatch(english, /review runs in parallel|parallel cross-model verification/iu);
+  assert.doesNotMatch(korean, /리뷰가 병렬로 실행|병렬 교차 모델 검증/iu);
 });
 
 test('agent guides are concise, version-free, and use the portable version command', () => {

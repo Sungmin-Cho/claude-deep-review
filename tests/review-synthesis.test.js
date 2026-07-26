@@ -24,6 +24,107 @@ function attempt(role, { critical = 0, warning = 0, included = true, exclusion =
   };
 }
 
+function canonicalReviewerReport({
+  date = '2026-07-26',
+  verdict = 'APPROVE',
+  critical = 0,
+  warning = 0,
+  info = 0,
+  bodyCritical = critical,
+  bodyWarning = warning,
+  bodyInfo = info,
+  includeCodeReview = true,
+  passed = 'Contract valid.',
+} = {}) {
+  const findings = (count, label) => (
+    count === 0
+      ? 'None.'
+      : Array.from({ length: count }, (_, index) => `- ${label} ${index + 1}.`).join('\n')
+  );
+  return [
+    `# Deep Review Report — ${date}`,
+    '',
+    '## Summary',
+    '',
+    `- **Verdict**: ${verdict}`,
+    `- **Issues**: 🔴 ${critical}건, 🟡 ${warning}건, ℹ️ ${info}건`,
+    ...(includeCodeReview
+      ? [
+          '',
+          '## Code Review',
+          '',
+          '### 🔴 Critical',
+          '',
+          findings(bodyCritical, 'Critical finding'),
+          '',
+          '### 🟡 Warning',
+          '',
+          findings(bodyWarning, 'Warning finding'),
+          '',
+          '### ℹ️ Info',
+          '',
+          findings(bodyInfo, 'Info finding'),
+          '',
+          '### 🟢 Passed',
+          '',
+          `- ${passed}`,
+        ]
+      : []),
+    '',
+  ].join('\n');
+}
+
+function strictGrammarViolationReports(role) {
+  const canonical = canonicalReviewerReport({ passed: role });
+  const issues = '- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건';
+  return [
+    [
+      'content before Critical',
+      canonical.replace(
+        '## Code Review\n\n### 🔴 Critical',
+        '## Code Review\n\n- Unscoped finding.\n\n### 🔴 Critical',
+      ),
+    ],
+    [
+      'same-line contradictory prefix',
+      canonical.replace(
+        issues,
+        '- **Issues**: 🟡 9건, 🔴 0건, 🟡 0건, ℹ️ 0건',
+      ),
+    ],
+    [
+      'trailing duplicate severity',
+      canonical.replace(
+        issues,
+        '- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건, 🔴 9건',
+      ),
+    ],
+  ];
+}
+
+function visuallyEquivalentSummaryLabelReports(role) {
+  const canonical = canonicalReviewerReport({ passed: role });
+  const verdict = '- **Verdict**: APPROVE';
+  const issues = '- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건';
+  return [
+    [
+      'space before Verdict colon',
+      canonical.replace(verdict, `${verdict}\n- **Verdict** : REQUEST_CHANGES`),
+    ],
+    [
+      'lowercase Verdict alias',
+      canonical.replace(verdict, `${verdict}\n- **verdict**: REQUEST_CHANGES`),
+    ],
+    [
+      'spaced Issues alias',
+      canonical.replace(
+        issues,
+        `${issues}\n-  ** Issues ** : 🔴 9건, 🟡 9건, ℹ️ 9건`,
+      ),
+    ],
+  ];
+}
+
 const candidates = [
   {
     reviewer_id: 'claude-opus',
@@ -111,6 +212,423 @@ function routingPlan(overrides = {}) {
   }
   return plan;
 }
+
+test('canonical report parser accepts synthesis-supported verdict and count combinations', async (t) => {
+  const { parseReviewerReport } = await import(synthesisUrl);
+  for (const [name, report, expected] of [
+    [
+      'clean approval',
+      '# Deep Review Report — 2026-07-26\n\n## Summary\n\n- **Verdict**: APPROVE\n- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 1건\n',
+      { verdict: 'APPROVE', issues: { critical: 0, warning: 0, info: 1 } },
+    ],
+    [
+      'warning concern',
+      '# Deep Review Report — 2026-07-26\n\n## Summary\n\n- **Verdict**: CONCERN\n- **Issues**: 🔴 0건, 🟡 1건, ℹ️ 0건\n',
+      { verdict: 'CONCERN', issues: { critical: 0, warning: 1, info: 0 } },
+    ],
+    [
+      'warning request changes',
+      '# Deep Review Report — 2026-07-26\n\n## Summary\n\n- **Verdict**: REQUEST_CHANGES\n- **Issues**: 🔴 0건, 🟡 1건, ℹ️ 0건\n',
+      { verdict: 'REQUEST_CHANGES', issues: { critical: 0, warning: 1, info: 0 } },
+    ],
+    [
+      'critical request changes',
+      '# Deep Review Report — 2026-07-26\n\n## Summary\n\n- **Verdict**: REQUEST_CHANGES\n- **Issues**: 🔴 1건, 🟡 0건, ℹ️ 0건\n',
+      { verdict: 'REQUEST_CHANGES', issues: { critical: 1, warning: 0, info: 0 } },
+    ],
+    [
+      'summary slice ignores similarly labeled body data',
+      '# Deep Review Report — 2026-07-26\n\n## Summary\n\n- **Verdict**: APPROVE\n- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건\n\n## Appendix\n\n- **Verdict**: REQUEST_CHANGES\n- **Issues**: 🔴 9건, 🟡 9건, ℹ️ 9건\n',
+      { verdict: 'APPROVE', issues: { critical: 0, warning: 0, info: 0 } },
+    ],
+  ]) {
+    await t.test(name, () => {
+      assert.deepEqual(parseReviewerReport(report), expected);
+    });
+  }
+});
+
+test('canonical report parser rejects duplicate or contradictory summary lines', async (t) => {
+  const { parseReviewerReport } = await import(synthesisUrl);
+  for (const [name, report] of [
+    [
+      'duplicate verdict',
+      '# Deep Review Report — 2026-07-26\n\n## Summary\n\n- **Verdict**: APPROVE\n- **Verdict**: REQUEST_CHANGES\n- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건\n',
+    ],
+    [
+      'duplicate issues',
+      '# Deep Review Report — 2026-07-26\n\n## Summary\n\n- **Verdict**: APPROVE\n- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건\n- **Issues**: 🔴 1건, 🟡 0건, ℹ️ 0건\n',
+    ],
+    [
+      'malformed duplicate verdict label',
+      '# Deep Review Report — 2026-07-26\n\n## Summary\n\n- **Verdict**: APPROVE\n- **Verdict**: MAYBE\n- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건\n',
+    ],
+    [
+      'malformed duplicate issues label',
+      '# Deep Review Report — 2026-07-26\n\n## Summary\n\n- **Verdict**: APPROVE\n- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건\n- **Issues**: unavailable\n',
+    ],
+    [
+      'warning approval',
+      '# Deep Review Report — 2026-07-26\n\n## Summary\n\n- **Verdict**: APPROVE\n- **Issues**: 🔴 0건, 🟡 1건, ℹ️ 0건\n',
+    ],
+    [
+      'zero-issue concern',
+      '# Deep Review Report — 2026-07-26\n\n## Summary\n\n- **Verdict**: CONCERN\n- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건\n',
+    ],
+    [
+      'critical concern',
+      '# Deep Review Report — 2026-07-26\n\n## Summary\n\n- **Verdict**: CONCERN\n- **Issues**: 🔴 1건, 🟡 0건, ℹ️ 0건\n',
+    ],
+    [
+      'duplicate report heading',
+      '# Deep Review Report — 2026-07-26\n# Deep Review Report — 2026-07-27\n\n## Summary\n\n- **Verdict**: APPROVE\n- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건\n',
+    ],
+    [
+      'duplicate Summary heading',
+      '# Deep Review Report — 2026-07-26\n\n## Summary\n\n- **Verdict**: APPROVE\n- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건\n\n## Summary\n',
+    ],
+  ]) {
+    await t.test(name, () => {
+      assert.equal(parseReviewerReport(report), null);
+    });
+  }
+});
+
+test('canonical report parser rejects canonical content before the sole report heading', async (t) => {
+  const { parseReviewerReport } = await import(synthesisUrl);
+  const summary = '## Summary\n\n'
+    + '- **Verdict**: APPROVE\n'
+    + '- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건\n\n';
+  const codeReview = '## Code Review\n\n'
+    + '### 🔴 Critical\n\nNone.\n\n'
+    + '### 🟡 Warning\n\nNone.\n\n'
+    + '### ℹ️ Info\n\nNone.\n\n'
+    + '### 🟢 Passed\n\n- Contract valid.\n\n';
+  const heading = '# Deep Review Report — 2026-07-26\n';
+
+  await t.test('ordinary mode', () => {
+    assert.equal(parseReviewerReport(summary + heading), null);
+  });
+  await t.test('strict mode', () => {
+    assert.equal(
+      parseReviewerReport(
+        summary + codeReview + '## Appendix\n\npreamble boundary\n\n' + heading,
+        { strict: true },
+      ),
+      null,
+    );
+  });
+});
+
+test('canonical report parser rejects out-of-order or duplicate canonical sections', async (t) => {
+  const { parseReviewerReport } = await import(synthesisUrl);
+  const heading = '# Deep Review Report — 2026-07-26\n\n';
+  const summary = '## Summary\n\n'
+    + '- **Verdict**: APPROVE\n'
+    + '- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건\n\n';
+  const codeReview = '## Code Review\n\n'
+    + '### 🔴 Critical\n\nNone.\n\n'
+    + '### 🟡 Warning\n\nNone.\n\n'
+    + '### ℹ️ Info\n\nNone.\n\n'
+    + '### 🟢 Passed\n\n- Contract valid.\n';
+
+  for (const [name, report, options] of [
+    ['Summary is not the next canonical section', heading + '## Appendix\n\nnoise\n\n' + summary, {}],
+    ['Code Review precedes Summary', heading + codeReview + '\n' + summary, {}],
+    ['ordinary mode has duplicate Code Review sections', heading + summary + codeReview + '\n' + codeReview, {}],
+    ['strict mode has Code Review before Summary', heading + codeReview + '\n' + summary, { strict: true }],
+  ]) {
+    await t.test(name, () => {
+      assert.equal(parseReviewerReport(report, options), null);
+    });
+  }
+});
+
+test('strict canonical parser requires and reconciles the complete Code Review body', async () => {
+  const { parseReviewerReport } = await import(synthesisUrl);
+  const valid = '# Deep Review Report — 2026-07-26\n\n## Summary\n\n'
+    + '- **Verdict**: CONCERN\n'
+    + '- **Issues**: 🔴 0건, 🟡 1건, ℹ️ 1건\n\n'
+    + '## Code Review\n\n'
+    + '### 🔴 Critical\n\nNone.\n\n'
+    + '### 🟡 Warning\n\n- Warning finding.\n\n'
+    + '### ℹ️ Info\n\n- Informational finding.\n\n'
+    + '### 🟢 Passed\n\n- Contract valid.\n';
+  assert.deepEqual(
+    parseReviewerReport(valid, { strict: true }),
+    { verdict: 'CONCERN', issues: { critical: 0, warning: 1, info: 1 } },
+  );
+  assert.equal(
+    parseReviewerReport(
+      '# Deep Review Report — 2026-07-26\n\n## Summary\n\n'
+      + '- **Verdict**: APPROVE\n'
+      + '- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건\n',
+      { strict: true },
+    ),
+    null,
+  );
+  assert.equal(
+    parseReviewerReport(
+      valid.replace('- **Issues**: 🔴 0건, 🟡 1건, ℹ️ 1건', '- **Issues**: 🔴 0건, 🟡 2건, ℹ️ 1건'),
+      { strict: true },
+    ),
+    null,
+  );
+});
+
+test('raw canonical reviewer admission excludes missing or count-mismatched Code Review bodies', async (t) => {
+  const { evaluateReviewerAttempt } = await import(synthesisUrl);
+  const fingerprint = { mode: 'hybrid', digest: 'unchanged', error: null };
+  for (const role of ['codex-review', 'codex-adversarial', 'claude-opus', 'agy']) {
+    for (const [failure, output] of [
+      [
+        'missing Code Review',
+        canonicalReviewerReport({ includeCodeReview: false, passed: role }),
+      ],
+      [
+        'mismatched warning bullets',
+        canonicalReviewerReport({
+          verdict: 'CONCERN',
+          warning: 1,
+          bodyWarning: 0,
+          passed: role,
+        }),
+      ],
+    ]) {
+      await t.test(`${role}: ${failure}`, () => {
+        const evaluated = evaluateReviewerAttempt({
+          reviewer_id: role,
+          role,
+          output,
+          beforeFingerprint: fingerprint,
+          afterFingerprint: fingerprint,
+        });
+        assert.equal(evaluated.included, false);
+        assert.equal(evaluated.exclusion, 'malformed_or_empty_result');
+        assert.equal(evaluated.verdict, null);
+        assert.equal(evaluated.issues, null);
+      });
+    }
+  }
+});
+
+test('synthesis CLI excludes malformed raw reports from N_actual and Phase 6', async (t) => {
+  const fingerprint = { mode: 'hybrid', digest: 'unchanged', error: null };
+  for (const role of ['codex-review', 'codex-adversarial', 'claude-opus', 'agy']) {
+    for (const [failure, output] of [
+      [
+        'missing Code Review',
+        canonicalReviewerReport({ includeCodeReview: false, passed: role }),
+      ],
+      [
+        'mismatched info bullets',
+        canonicalReviewerReport({ info: 1, bodyInfo: 0, passed: role }),
+      ],
+    ]) {
+      await t.test(`${role}: ${failure}`, () => {
+        const rootDir = mkdtempSync(path.join(tmpdir(), 'deep-review-strict-admission-'));
+        const inputPath = path.join(rootDir, 'attempts.json');
+        writeFileSync(inputPath, JSON.stringify({
+          attempts: [{
+            reviewer_id: role,
+            role,
+            output,
+            beforeFingerprint: fingerprint,
+            afterFingerprint: fingerprint,
+          }],
+        }));
+        const cli = spawnSync(process.execPath, [
+          path.join(root, 'hooks/scripts/review-synthesis.mjs'),
+          '--input',
+          inputPath,
+        ], { encoding: 'utf8' });
+        assert.equal(cli.status, 0, cli.stderr);
+        const result = JSON.parse(cli.stdout);
+        assert.equal(result.status, 'operational_failure');
+        assert.equal(result.n_actual, 0);
+        assert.equal(result.verdict, null);
+        assert.equal(result.phase6_allowed, false);
+        assert.deepEqual(result.exclusions, [{
+          role,
+          reason: 'malformed_or_empty_result',
+        }]);
+      });
+    }
+  }
+});
+
+test('strict API admission rejects Code Review preamble and noncanonical Issues lines', async (t) => {
+  const { evaluateReviewerAttempt } = await import(synthesisUrl);
+  const fingerprint = { mode: 'hybrid', digest: 'unchanged', error: null };
+  for (const role of ['codex-review', 'codex-adversarial', 'claude-opus', 'agy']) {
+    for (const [failure, output] of strictGrammarViolationReports(role)) {
+      await t.test(`${role}: ${failure}`, () => {
+        const evaluated = evaluateReviewerAttempt({
+          reviewer_id: role,
+          role,
+          output,
+          beforeFingerprint: fingerprint,
+          afterFingerprint: fingerprint,
+        });
+        assert.equal(evaluated.included, false);
+        assert.equal(evaluated.exclusion, 'malformed_or_empty_result');
+        assert.equal(evaluated.verdict, null);
+        assert.equal(evaluated.issues, null);
+      });
+    }
+  }
+});
+
+test('raw synthesis CLI keeps strict grammar violations out of N_actual and Phase 6', async (t) => {
+  const fingerprint = { mode: 'hybrid', digest: 'unchanged', error: null };
+  for (const role of ['codex-review', 'codex-adversarial', 'claude-opus', 'agy']) {
+    for (const [failure, output] of strictGrammarViolationReports(role)) {
+      await t.test(`${role}: ${failure}`, () => {
+        const rootDir = mkdtempSync(path.join(tmpdir(), 'deep-review-strict-grammar-'));
+        const inputPath = path.join(rootDir, 'attempts.json');
+        writeFileSync(inputPath, JSON.stringify({
+          attempts: [{
+            reviewer_id: role,
+            role,
+            output,
+            beforeFingerprint: fingerprint,
+            afterFingerprint: fingerprint,
+          }],
+        }));
+        const cli = spawnSync(process.execPath, [
+          path.join(root, 'hooks/scripts/review-synthesis.mjs'),
+          '--input',
+          inputPath,
+        ], { encoding: 'utf8' });
+        assert.equal(cli.status, 0, cli.stderr);
+        const result = JSON.parse(cli.stdout);
+        assert.equal(result.status, 'operational_failure');
+        assert.equal(result.n_actual, 0);
+        assert.equal(result.verdict, null);
+        assert.equal(result.phase6_allowed, false);
+      });
+    }
+  }
+});
+
+test('distinct routed reviewers may independently return byte-identical clean reports', async () => {
+  const { evaluateReviewerAttempt, synthesizeReviewRound } = await import(synthesisUrl);
+  const output = canonicalReviewerReport({ passed: 'Shared clean result.' }).replace(
+    '- **Verdict**: APPROVE',
+    '- **Verdict**: APPROVE\n'
+      + '- **Review Mode**: 2-way Cross-Model\n'
+      + '- **Warnings**: None.',
+  );
+  const fingerprint = { mode: 'hybrid', digest: 'unchanged', error: null };
+  const attempts = ['claude-opus', 'codex-review'].map((role) => (
+    evaluateReviewerAttempt({
+      reviewer_id: role,
+      role,
+      output,
+      beforeFingerprint: fingerprint,
+      afterFingerprint: fingerprint,
+    })
+  ));
+  assert.equal(attempts[0].included, true);
+  assert.equal(attempts[1].included, true);
+  assert.equal(attempts[0].output_digest, attempts[1].output_digest);
+
+  const result = synthesizeReviewRound({
+    attempts,
+    consensus: { findings: [] },
+    routingPlan: routingPlan(),
+  });
+  assert.equal(result.status, 'reviewed');
+  assert.equal(result.n_actual, 2);
+  assert.equal(result.verdict, 'APPROVE');
+  assert.equal(result.phase6_allowed, true);
+});
+
+test('raw synthesis CLI admits identical clean output from distinct routed reviewers', () => {
+  const output = canonicalReviewerReport({ passed: 'Shared CLI clean result.' }).replace(
+    '- **Verdict**: APPROVE',
+    '- **Verdict**: APPROVE\n'
+      + '- **Review Mode**: 2-way Cross-Model\n'
+      + '- **Warnings**: None.',
+  );
+  const fingerprint = { mode: 'hybrid', digest: 'unchanged', error: null };
+  const rootDir = mkdtempSync(path.join(tmpdir(), 'deep-review-identical-clean-'));
+  const inputPath = path.join(rootDir, 'attempts.json');
+  writeFileSync(inputPath, JSON.stringify({
+    attempts: ['claude-opus', 'codex-review'].map((role) => ({
+      reviewer_id: role,
+      role,
+      output,
+      beforeFingerprint: fingerprint,
+      afterFingerprint: fingerprint,
+    })),
+    consensus: { findings: [] },
+    routing_plan: routingPlan(),
+  }));
+  const cli = spawnSync(process.execPath, [
+    path.join(root, 'hooks/scripts/review-synthesis.mjs'),
+    '--input',
+    inputPath,
+  ], { encoding: 'utf8' });
+  assert.equal(cli.status, 0, cli.stderr);
+  const result = JSON.parse(cli.stdout);
+  assert.equal(result.status, 'reviewed');
+  assert.equal(result.n_actual, 2);
+  assert.equal(result.verdict, 'APPROVE');
+  assert.equal(result.phase6_allowed, true);
+});
+
+test('strict API admission rejects malformed equivalents of canonical Summary labels', async (t) => {
+  const { evaluateReviewerAttempt } = await import(synthesisUrl);
+  const fingerprint = { mode: 'hybrid', digest: 'unchanged', error: null };
+  for (const role of ['codex-review', 'codex-adversarial', 'claude-opus', 'agy']) {
+    for (const [failure, output] of visuallyEquivalentSummaryLabelReports(role)) {
+      await t.test(`${role}: ${failure}`, () => {
+        const evaluated = evaluateReviewerAttempt({
+          reviewer_id: role,
+          role,
+          output,
+          beforeFingerprint: fingerprint,
+          afterFingerprint: fingerprint,
+        });
+        assert.equal(evaluated.included, false);
+        assert.equal(evaluated.exclusion, 'malformed_or_empty_result');
+      });
+    }
+  }
+});
+
+test('raw synthesis CLI excludes malformed Summary label equivalents', async (t) => {
+  const fingerprint = { mode: 'hybrid', digest: 'unchanged', error: null };
+  for (const role of ['codex-review', 'codex-adversarial', 'claude-opus', 'agy']) {
+    for (const [failure, output] of visuallyEquivalentSummaryLabelReports(role)) {
+      await t.test(`${role}: ${failure}`, () => {
+        const rootDir = mkdtempSync(path.join(tmpdir(), 'deep-review-summary-alias-'));
+        const inputPath = path.join(rootDir, 'attempts.json');
+        writeFileSync(inputPath, JSON.stringify({
+          attempts: [{
+            reviewer_id: role,
+            role,
+            output,
+            beforeFingerprint: fingerprint,
+            afterFingerprint: fingerprint,
+          }],
+        }));
+        const cli = spawnSync(process.execPath, [
+          path.join(root, 'hooks/scripts/review-synthesis.mjs'),
+          '--input',
+          inputPath,
+        ], { encoding: 'utf8' });
+        assert.equal(cli.status, 0, cli.stderr);
+        const result = JSON.parse(cli.stdout);
+        assert.equal(result.status, 'operational_failure');
+        assert.equal(result.n_actual, 0);
+        assert.equal(result.verdict, null);
+        assert.equal(result.phase6_allowed, false);
+      });
+    }
+  }
+});
 
 test('split warning requests exactly one blind expansion reviewer', async () => {
   const { synthesizeReviewRound } = await import(synthesisUrl);
@@ -817,37 +1335,6 @@ test('protocol-3 synthesis requires a SHA-256 output digest on every included at
     assert.equal(result.verdict, null);
     assert.equal(result.phase6_allowed, false);
   }
-});
-
-test('protocol-3 synthesis rejects duplicated raw reviewer output relabeled as another voice', async () => {
-  const { evaluateReviewerAttempt, synthesizeReviewRound } = await import(synthesisUrl);
-  const output = '# Deep Review Report — 2026-07-24\n\n## Summary\n\n'
-    + '- **Verdict**: APPROVE\n'
-    + '- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건\n';
-  const fingerprint = { mode: 'hybrid', digest: 'same', error: null };
-  const evaluated = evaluateReviewerAttempt({
-    reviewer_id: 'claude-opus',
-    role: 'claude-opus',
-    output,
-    beforeFingerprint: fingerprint,
-    afterFingerprint: fingerprint,
-  });
-  const result = synthesizeReviewRound({
-    attempts: [
-      evaluated,
-      {
-        ...evaluated,
-        reviewer_id: 'codex-review',
-        role: 'codex-review',
-      },
-    ],
-    consensus: { findings: [] },
-    routingPlan: routingPlan(),
-  });
-  assert.equal(result.status, 'operational_failure');
-  assert.equal(result.error, 'invalid_reviewer_identity');
-  assert.equal(result.verdict, null);
-  assert.equal(result.phase6_allowed, false);
 });
 
 test('protocol-3 synthesis rejects candidate voices without a selected route', async () => {

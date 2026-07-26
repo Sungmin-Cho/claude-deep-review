@@ -100,9 +100,29 @@ async function exercisePublicRoute(installedRoot, host, route) {
 function validReviewerReport() {
   return [
     '# Deep Review Report — 2026-07-18',
+    '',
     '## Summary',
+    '',
     '- **Verdict**: APPROVE',
-    '- **Issues**: {🔴 0건, 🟡 0건, ℹ️ 0건}',
+    '- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건',
+    '',
+    '## Code Review',
+    '',
+    '### 🔴 Critical',
+    '',
+    'None.',
+    '',
+    '### 🟡 Warning',
+    '',
+    'None.',
+    '',
+    '### ℹ️ Info',
+    '',
+    'None.',
+    '',
+    '### 🟢 Passed',
+    '',
+    '- Installed runtime contract valid.',
     '',
   ].join('\n');
 }
@@ -302,11 +322,11 @@ test('multi-reviewer synthesis requires materialized agreement and preserves spl
     { ...attempts[1], output_digest: attempts[0].output_digest },
   ], { findings: [] }), {
     status: 'operational_failure',
-    n_actual: 0,
+    n_actual: 2,
     verdict: null,
     phase6_allowed: false,
     exclusions: [],
-    error: 'invalid_reviewer_identity',
+    error: 'consensus_required',
   });
 
   const criticalAttempts = [

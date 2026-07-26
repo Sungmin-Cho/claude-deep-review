@@ -37,12 +37,12 @@ and use its absolute `plugin_root` value for every later plugin path.
 1. Collect environment and target data with `detect-environment.mjs`,
    `build-change-files.mjs`, direct Git host commands, and direct file reads.
 2. Load active Sprint Contracts when requested or present.
-3. Build one shared reviewer payload with `build-reviewer-payload.mjs`.
+3. Build one route-specific reviewer payload per selected canonical reviewer
+   with `build-reviewer-payload.mjs`.
 4. Enumerate independent roles from `runtime-dispatch.md`, dispatch all
    eligible roles, and enforce read-only fingerprints.
 5. Synthesize only trusted successful results into `report-format.md`.
-6. Restore any planned companion index exposure with `mutation-protocol.mjs`.
-7. Export recurring evidence through `wrap-recurring-findings-envelope.js`.
+6. Export recurring evidence through `wrap-recurring-findings-envelope.js`.
 
 The detailed stages and failure behavior live only in `review-execution.md`.
 

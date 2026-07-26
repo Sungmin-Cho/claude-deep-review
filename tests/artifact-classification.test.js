@@ -1030,7 +1030,7 @@ function writeFakeClaudeBinary(binDir, probeLogPath) {
   return claudeScript;
 }
 
-test('R2I1: a fresh probe writes the capability cache and a subsequent run hits it, skipping the probe runner', async (t) => {
+test('R2I1: repository cache never skips current probes or supplies capability objects', async (t) => {
   if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script'); return; }
   const { runClassifyArtifactsCli } = await loadScope();
   const repo = temporaryDirectory('deep-review-r2i1-cache-');
@@ -1056,13 +1056,10 @@ test('R2I1: a fresh probe writes the capability cache and a subsequent run hits 
   const invocationsAfterFirst = fs.readFileSync(probeLog, 'utf8').trim().split('\n').filter(Boolean).length;
   assert.ok(invocationsAfterFirst > 0, 'the first run must invoke the probe runner');
 
-  // R2I1 (3): native assertion entries (claude-native-agent, codex-native-generic)
-  // must never be persisted to the on-disk cache.
   const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
-  const cachedAdapterIds = cached.capabilities.map((item) => item.adapter_id);
-  assert.equal(cachedAdapterIds.includes('claude-native-agent'), false);
-  assert.equal(cachedAdapterIds.includes('codex-native-generic'), false);
-  assert.ok(cachedAdapterIds.includes('claude-cli'));
+  assert.equal(Object.hasOwn(cached, 'capabilities'), false);
+  assert.equal(Object.hasOwn(cached, 'probe_evidence'), false);
+  assert.equal(cached.probe_results.claude.ok, true);
 
   const second = await runClassifyArtifactsCli(
     ['--repo', repo, '--files-from0', files, '--emit-routing-plan'],
@@ -1070,9 +1067,51 @@ test('R2I1: a fresh probe writes the capability cache and a subsequent run hits 
     {},
   );
   const invocationsAfterSecond = fs.readFileSync(probeLog, 'utf8').trim().split('\n').filter(Boolean).length;
-  assert.equal(invocationsAfterSecond, invocationsAfterFirst, 'a cache hit must avoid invoking the probe runner again');
+  assert.ok(invocationsAfterSecond > invocationsAfterFirst, 'repository cache must never skip a current probe');
   const secondRoute = second.routing_plan.routes.find((route) => route.reviewer_id === 'claude-opus');
   assert.equal(secondRoute.adapter_id, 'claude-cli', 'the cache hit must still resolve the correct adapter');
+});
+
+test('forged Codex probe evidence cannot select reviewers or skip the real failing probe', async (t) => {
+  if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script'); return; }
+  const { runClassifyArtifactsCli } = await loadScope();
+  const {
+    CAPABILITY_CACHE_REVISION,
+    capabilityCacheKeys,
+  } = await import(pathToFileURL(path.join(root, 'hooks/scripts/lib/capability-registry.mjs')).href);
+  const repo = temporaryDirectory('deep-review-forged-codex-cache-');
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+  const binDir = temporaryDirectory('deep-review-forged-codex-bin-');
+  const probeLog = path.join(binDir, 'probe-calls.log');
+  const codexPath = path.join(binDir, 'codex');
+  fs.writeFileSync(codexPath, [
+    '#!/bin/sh',
+    `echo "invoked $1" >> "${probeLog}"`,
+    'exit 1',
+    '',
+  ].join('\n'));
+  fs.chmodSync(codexPath, 0o755);
+  const detectedCodex = { codex_cli: true, codex_cli_path: codexPath };
+  const keys = capabilityCacheKeys(detectedCodex, {});
+  const cachePath = path.join(repo, '.deep-review', 'tmp', 'capability-cache.json');
+  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  fs.writeFileSync(cachePath, `${JSON.stringify({
+    protocol_version: '2.0',
+    cache_contract_revision: CAPABILITY_CACHE_REVISION,
+    invalidation_keys: keys,
+    probe_evidence: { codex: { ok: true, version: '9.9.9' } },
+    capabilities: [],
+  })}\n`);
+
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--files-from0', files, '--emit-routing-plan'],
+    { PATH: `${binDir}${path.delimiter}${R2I1_SAFE_SYSTEM_PATH}` },
+    { hostAssertions: { codexExecReviewer: true, codexNativeGeneric: false } },
+  );
+  assert.ok(fs.readFileSync(probeLog, 'utf8').includes('invoked --version'));
+  assert.deepEqual(result.routing_plan.candidate_reviewers, []);
 });
 
 function writeFailingClaudeBinary(binDir, probeLogPath) {
@@ -1109,6 +1148,40 @@ test('H7: a failed claude probe is never persisted to the capability cache', asy
   const cachePath = path.join(repo, '.deep-review', 'tmp', 'capability-cache.json');
   await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], env, {});
   assert.equal(fs.existsSync(cachePath), false, 'a failed probe must never write the capability cache');
+});
+
+test('H7: overflowing Claude probe output cannot enable a reviewer or persist cache', async (t) => {
+  if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script'); return; }
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-h7-overflow-probe-');
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+  const binDir = temporaryDirectory('deep-review-h7-overflow-bin-');
+  const claudeScript = path.join(binDir, 'claude');
+  fs.writeFileSync(claudeScript, [
+    '#!/bin/sh',
+    'if [ "$1" = "--version" ] || [ "$1" = "--help" ]; then',
+    "  yes 'overflow-probe-output' | head -c 200000",
+    '  exit 0',
+    'fi',
+    'exit 1',
+    '',
+  ].join('\n'));
+  fs.chmodSync(claudeScript, 0o755);
+  const cachePath = path.join(repo, '.deep-review', 'tmp', 'capability-cache.json');
+
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--files-from0', files, '--emit-routing-plan'],
+    { PATH: `${binDir}${path.delimiter}${R2I1_SAFE_SYSTEM_PATH}` },
+    {},
+  );
+
+  assert.equal(
+    result.routing_plan.candidate_reviewers.some((item) => item.adapter_id === 'claude-cli'),
+    false,
+  );
+  assert.equal(fs.existsSync(cachePath), false);
 });
 
 test('H7: a successful probe still writes the capability cache', async (t) => {
@@ -1170,73 +1243,118 @@ test('H7: a symlinked cache directory is neither read nor written outside the re
   );
 });
 
-// ---------------------------------------------------------------------------
-// H8: codex-companion availability must be rebuilt fresh from this run's
-// detected.codex_plugin on every cache hit, never reused from a stale
-// on-disk cache entry — installing/removing the companion between runs (with
-// the keyed claude/codex/agy CLI paths+mtime unchanged) must be observable
-// immediately.
-// ---------------------------------------------------------------------------
-
-function codexCompanionEnv(binDir, probeLog, companionPath) {
-  const env = { PATH: `${binDir}${path.delimiter}${R2I1_SAFE_SYSTEM_PATH}`, PROBE_LOG: probeLog };
-  if (companionPath) env.CODEX_COMPANION_PATH = companionPath;
-  return env;
+function writeFakeCodexBinary(binDir, probeLogPath) {
+  const codexScript = path.join(binDir, 'codex');
+  fs.writeFileSync(codexScript, [
+    '#!/bin/sh',
+    `echo "invoked $1" >> "${probeLogPath}"`,
+    'if [ "$1" = "--version" ]; then echo "codex-cli 9.9.9"; exit 0; fi',
+    'if [ "$1" = "exec" ] && [ "$2" = "--help" ]; then',
+    '  echo "--ephemeral --sandbox --ignore-user-config --ignore-rules --cd --skip-git-repo-check --output-last-message --color --model -c"',
+    '  exit 0',
+    'fi',
+    'exit 1',
+    '',
+  ].join('\n'));
+  if (process.platform !== 'win32') fs.chmodSync(codexScript, 0o755);
+  return codexScript;
 }
 
-test('H8: a cache written when the companion was absent still yields an available codex-companion once detected.codex_plugin is true', async (t) => {
+test('cache reuse across Claude and Codex hosts recomputes both Codex adapter availabilities from current assertions', async (t) => {
   if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script'); return; }
   const { runClassifyArtifactsCli } = await loadScope();
-  const repo = temporaryDirectory('deep-review-h8-companion-appears-');
+  const repo = temporaryDirectory('deep-review-codex-cross-host-cache-');
   fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
   const files = path.join(repo, 'targets.z');
   fs.writeFileSync(files, 'notes.md\0');
 
-  const binDir = temporaryDirectory('deep-review-h8-bin-');
+  const binDir = temporaryDirectory('deep-review-codex-cross-host-bin-');
   const probeLog = path.join(binDir, 'probe-calls.log');
-  writeFakeClaudeBinary(binDir, probeLog);
-  const companionPath = path.join(binDir, 'codex-companion.mjs');
-  fs.writeFileSync(companionPath, '// fake codex companion plugin\n');
+  writeFakeCodexBinary(binDir, probeLog);
+  const env = { PATH: `${binDir}${path.delimiter}${R2I1_SAFE_SYSTEM_PATH}` };
+  const argv = ['--repo', repo, '--files-from0', files, '--emit-routing-plan'];
 
-  const cachePath = path.join(repo, '.deep-review', 'tmp', 'capability-cache.json');
-  const absentEnv = codexCompanionEnv(binDir, probeLog, null);
-  const first = await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], absentEnv, {});
-  assert.ok(fs.existsSync(cachePath), 'the first (companion-absent) run must write the cache');
-  assert.equal(first.routing_plan.routes.some((route) => route.reviewer_id === 'codex-review'), false, 'no codex route without the companion');
+  const claudeHost = await runClassifyArtifactsCli(argv, env, {
+    hostAssertions: { codexExecReviewer: true, codexNativeGeneric: false },
+  });
+  assert.deepEqual(
+    claudeHost.routing_plan.candidate_reviewers.map((candidate) => [candidate.reviewer_id, candidate.adapter_id]),
+    [['codex-review', 'codex-exec'], ['codex-adversarial', 'codex-exec']],
+  );
+  const probeCalls = fs.readFileSync(probeLog, 'utf8');
 
-  const presentEnv = codexCompanionEnv(binDir, probeLog, companionPath);
-  const second = await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], presentEnv, {});
-  assert.equal(second.routing_plan.candidate_reviewers.some((candidate) => (
-    candidate.reviewer_id === 'codex-review' && candidate.adapter_id === 'codex-companion'
-  )), true, 'a cache hit must still rebuild codex-companion fresh and make it eligible once detected.codex_plugin is true');
+  const codexHost = await runClassifyArtifactsCli(argv, env, {
+    hostAssertions: { codexExecReviewer: false, codexNativeGeneric: true },
+  });
+  assert.deepEqual(
+    codexHost.routing_plan.candidate_reviewers.map((candidate) => [candidate.reviewer_id, candidate.adapter_id]),
+    [['codex-review', 'codex-native-generic'], ['codex-adversarial', 'codex-native-generic']],
+  );
+  const codexHostProbeCalls = fs.readFileSync(probeLog, 'utf8');
+  assert.ok(codexHostProbeCalls.length > probeCalls.length, 'cross-host reuse must perform a fresh authoritative probe');
+
+  const claudeHostAgain = await runClassifyArtifactsCli(argv, env, {
+    hostAssertions: { codexExecReviewer: true, codexNativeGeneric: false },
+  });
+  assert.deepEqual(
+    claudeHostAgain.routing_plan.candidate_reviewers.map((candidate) => [candidate.reviewer_id, candidate.adapter_id]),
+    [['codex-review', 'codex-exec'], ['codex-adversarial', 'codex-exec']],
+  );
+  assert.ok(
+    fs.readFileSync(probeLog, 'utf8').length > codexHostProbeCalls.length,
+    'Codex-to-Claude reuse must also perform a fresh authoritative probe',
+  );
 });
 
-test('H8: a cache written when the companion was present no longer yields codex-companion once detected.codex_plugin is false', async (t) => {
+test('Codex CLI removal invalidates cached probe evidence and companion detection never creates candidates', async (t) => {
   if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script'); return; }
   const { runClassifyArtifactsCli } = await loadScope();
-  const repo = temporaryDirectory('deep-review-h8-companion-disappears-');
+  const repo = temporaryDirectory('deep-review-codex-cli-removal-');
   fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
   const files = path.join(repo, 'targets.z');
   fs.writeFileSync(files, 'notes.md\0');
 
-  const binDir = temporaryDirectory('deep-review-h8-bin2-');
+  const binDir = temporaryDirectory('deep-review-codex-cli-removal-bin-');
   const probeLog = path.join(binDir, 'probe-calls.log');
-  writeFakeClaudeBinary(binDir, probeLog);
+  const codexPath = writeFakeCodexBinary(binDir, probeLog);
   const companionPath = path.join(binDir, 'codex-companion.mjs');
   fs.writeFileSync(companionPath, '// fake codex companion plugin\n');
+  const env = {
+    PATH: `${binDir}${path.delimiter}${R2I1_SAFE_SYSTEM_PATH}`,
+    CODEX_COMPANION_PATH: companionPath,
+  };
+  const argv = ['--repo', repo, '--files-from0', files, '--emit-routing-plan'];
+  const hostAssertions = { codexExecReviewer: true, codexNativeGeneric: false };
+  const first = await runClassifyArtifactsCli(argv, env, { hostAssertions });
+  assert.equal(first.routing_plan.candidate_reviewers.length, 2);
 
-  const cachePath = path.join(repo, '.deep-review', 'tmp', 'capability-cache.json');
-  const presentEnv = codexCompanionEnv(binDir, probeLog, companionPath);
-  const first = await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], presentEnv, {});
-  assert.ok(fs.existsSync(cachePath), 'the first (companion-present) run must write the cache');
-  assert.equal(first.routing_plan.candidate_reviewers.some((candidate) => (
-    candidate.reviewer_id === 'codex-review' && candidate.adapter_id === 'codex-companion'
-  )), true);
+  fs.rmSync(codexPath);
+  const second = await runClassifyArtifactsCli(argv, env, { hostAssertions });
+  assert.deepEqual(second.routing_plan.candidate_reviewers, []);
+});
 
-  const absentEnv = codexCompanionEnv(binDir, probeLog, null);
-  const second = await runClassifyArtifactsCli(['--repo', repo, '--files-from0', files, '--emit-routing-plan'], absentEnv, {});
-  assert.equal(second.routing_plan.candidate_reviewers.some((candidate) => candidate.reviewer_id === 'codex-review'), false,
-    'a cache hit must never reuse a stale companion-available entry once detected.codex_plugin is false');
+test('Codex CLI installation invalidates an absent-CLI cache and enables both codex-exec reviewers', async (t) => {
+  if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script'); return; }
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-codex-cli-install-');
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+  const binDir = temporaryDirectory('deep-review-codex-cli-install-bin-');
+  const probeLog = path.join(binDir, 'probe-calls.log');
+  const env = { PATH: `${binDir}${path.delimiter}${R2I1_SAFE_SYSTEM_PATH}` };
+  const argv = ['--repo', repo, '--files-from0', files, '--emit-routing-plan'];
+  const hostAssertions = { codexExecReviewer: true, codexNativeGeneric: false };
+
+  const absent = await runClassifyArtifactsCli(argv, env, { hostAssertions });
+  assert.deepEqual(absent.routing_plan.candidate_reviewers, []);
+
+  writeFakeCodexBinary(binDir, probeLog);
+  const installed = await runClassifyArtifactsCli(argv, env, { hostAssertions });
+  assert.deepEqual(
+    installed.routing_plan.candidate_reviewers.map((candidate) => candidate.reviewer_id),
+    ['codex-review', 'codex-adversarial'],
+  );
 });
 
 test('R2I1: a corrupt capability cache falls open to a fresh probe instead of failing the preflight', async (t) => {
@@ -1265,6 +1383,37 @@ test('R2I1: a corrupt capability cache falls open to a fresh probe instead of fa
   assert.equal(route.adapter_id, 'claude-cli', 'a corrupt cache must fail open to a fresh probe, never a hard error');
   const invocations = fs.readFileSync(probeLog, 'utf8').trim().split('\n').filter(Boolean).length;
   assert.ok(invocations > 0, 'the corrupt-cache path must still invoke the probe runner');
+});
+
+test('R2I1: an oversized capability cache falls open to bounded fresh probes', async (t) => {
+  if (process.platform === 'win32') { t.skip('POSIX-only fake probe shell script'); return; }
+  const { runClassifyArtifactsCli } = await loadScope();
+  const repo = temporaryDirectory('deep-review-r2i1-oversized-cache-');
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+
+  const binDir = temporaryDirectory('deep-review-r2i1-oversized-bin-');
+  const probeLog = path.join(binDir, 'probe-calls.log');
+  writeFakeClaudeBinary(binDir, probeLog);
+  const env = {
+    PATH: `${binDir}${path.delimiter}${R2I1_SAFE_SYSTEM_PATH}`,
+    PROBE_LOG: probeLog,
+  };
+  const cachePath = path.join(repo, '.deep-review', 'tmp', 'capability-cache.json');
+  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  fs.writeFileSync(cachePath, ' '.repeat((64 * 1024) + 1));
+
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--files-from0', files, '--emit-routing-plan'],
+    env,
+    {},
+  );
+  assert.ok(result.routing_plan.routes.some((route) => route.reviewer_id === 'claude-opus'));
+  assert.ok(
+    fs.readFileSync(probeLog, 'utf8').trim().length > 0,
+    'oversized cache rejection must continue with fresh probes',
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -1361,6 +1510,24 @@ test('J2: writeContainedFile performs a plain contained write and the content ma
   assert.equal(fs.readFileSync(dest, 'utf8'), '{"ok":true}\n');
 });
 
+test('J2: validateContainedFilePath preflights destinations without creating or writing them', async () => {
+  const { validateContainedFilePath } = await import(runtimeContextUrl);
+  assert.equal(typeof validateContainedFilePath, 'function');
+  const repo = temporaryDirectory('deep-review-j2-validate-');
+  const destination = path.join(repo, '.deep-review', 'reports', 'result.md');
+
+  assert.equal(validateContainedFilePath(repo, destination), destination);
+  assert.equal(fs.existsSync(path.join(repo, '.deep-review')), false);
+
+  const outside = temporaryDirectory('deep-review-j2-validate-outside-');
+  const target = path.join(outside, 'target.json');
+  fs.writeFileSync(target, 'outside\n');
+  const linkedDestination = path.join(repo, 'result.json');
+  fs.symlinkSync(target, linkedDestination);
+  assert.throws(() => validateContainedFilePath(repo, linkedDestination), /symlink/);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'outside\n');
+});
+
 test('J2: writeContainedFile refuses a destination symlink pointing outside the repo and leaves the outside target unmodified', async () => {
   const { writeContainedFile } = await import(runtimeContextUrl);
   const repo = temporaryDirectory('deep-review-j2-dest-symlink-');
@@ -1391,6 +1558,43 @@ test('J2: writeContainedFile refuses a symlinked .deep-review/tmp ancestor direc
   );
 });
 
+test('J2: writeContainedFile rejects an ancestor swapped to an outside symlink after validation', async () => {
+  const { writeContainedFile } = await import(runtimeContextUrl);
+  const repo = temporaryDirectory('deep-review-j2-ancestor-swap-');
+  const outsideRoot = temporaryDirectory('deep-review-j2-swap-outside-');
+  const parent = path.join(repo, '.deep-review', 'tmp');
+  const displacedParent = path.join(repo, '.deep-review', 'tmp-before-swap');
+  const outsideTarget = path.join(outsideRoot, 'artifact-classification.json');
+  const dest = path.join(parent, 'artifact-classification.json');
+  fs.mkdirSync(parent, { recursive: true });
+  let swapped = false;
+  let writeError;
+
+  try {
+    writeContainedFile(repo, dest, '{"pwned":true}\n', {
+      beforeAtomicWrite() {
+        fs.renameSync(parent, displacedParent);
+        fs.symlinkSync(outsideRoot, parent, process.platform === 'win32' ? 'junction' : 'dir');
+        swapped = true;
+      },
+    });
+  } catch (error) {
+    writeError = error;
+  }
+  assert.equal(swapped, true, 'the deterministic race hook must swap the validated ancestor');
+  assert.equal(
+    fs.existsSync(outsideTarget),
+    false,
+    'the write must fail before publishing through the swapped ancestor',
+  );
+  assert.deepEqual(
+    fs.readdirSync(displacedParent),
+    [],
+    'a rejected publication must leave no temporary file in the displaced directory',
+  );
+  assert.match(writeError?.message ?? '', /changed during contained write/);
+});
+
 test('J2: readContainedFile refuses a symlinked ancestor directory that escapes the repo', async () => {
   const { readContainedFile } = await import(runtimeContextUrl);
   const repo = temporaryDirectory('deep-review-j2-read-dir-symlink-');
@@ -1402,6 +1606,18 @@ test('J2: readContainedFile refuses a symlinked ancestor directory that escapes 
   assert.throws(
     () => readContainedFile(repo, path.join(repo, '.deep-review', 'tmp', 'capability-cache.json')),
     /symlink/,
+  );
+});
+
+test('J2: readContainedFile rejects an oversized regular file before returning its contents', async () => {
+  const { readContainedFile } = await import(runtimeContextUrl);
+  const repo = temporaryDirectory('deep-review-j2-read-bounded-');
+  const cache = path.join(repo, 'capability-cache.json');
+  fs.writeFileSync(cache, 'x'.repeat(65));
+
+  assert.throws(
+    () => readContainedFile(repo, cache, { maxBytes: 64 }),
+    /maximum|exceeds|too large/iu,
   );
 });
 

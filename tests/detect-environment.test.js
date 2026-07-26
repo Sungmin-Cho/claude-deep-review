@@ -396,6 +396,42 @@ test('CLI paths with spaces and Unicode survive detection and agy version timeou
   assert.equal(elapsed < 5000, true, `agy timeout was not bounded: ${elapsed}ms`);
 });
 
+test('agy version probing uses finite capture limits and overflow cannot enable agy', async () => {
+  const { detectEnvironment } = await loadDetector();
+  const repo = makeTemporaryDirectory('deep-review-agy-overflow-repo-');
+  const cli = createFakeCliDirectory('deep-review-agy-overflow', {
+    agy: "process.stdout.write('real runner must not be used\\n');\n",
+  });
+  const calls = [];
+  const processRunner = async (binary, args, options) => {
+    calls.push({ binary, args, options });
+    return {
+      code: 0,
+      timedOut: false,
+      captureOverflow: true,
+      stdout: Buffer.from('agy 9.9.9\n' + 'x'.repeat(200_000)),
+      stderr: Buffer.alloc(0),
+    };
+  };
+  const result = await detectEnvironment({
+    cwd: repo,
+    env: isolatedEnvironment({
+      PATH: `${cli.bin}${delimiter}${process.env.PATH || ''}`,
+      PATHEXT: process.platform === 'win32' ? '.COM;.EXE;.BAT;.CMD' : process.env.PATHEXT,
+    }),
+    processRunner,
+  });
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, ['--version']);
+  assert.equal(Number.isSafeInteger(calls[0].options.maxCaptureBytesPerStream), true);
+  assert.equal(calls[0].options.maxCaptureBytesPerStream > 0, true);
+  assert.equal(Number.isSafeInteger(calls[0].options.maxCaptureBytesTotal), true);
+  assert.equal(calls[0].options.maxCaptureBytesTotal > 0, true);
+  assert.equal(result.agy_cli, false);
+  assert.equal(result.agy_version, '');
+});
+
 test('CLI JSON round-trips equals signs and KV remains a compatibility format', async () => {
   const repo = createGitFixture('cli output 환경 Ω');
   const cli = createFakeCliDirectory('deep-review-cli-output', {

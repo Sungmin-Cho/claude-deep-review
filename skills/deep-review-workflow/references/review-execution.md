@@ -81,9 +81,9 @@ For a dirty Git target, offer a WIP commit. Create it only after an explicit
 affirmative response. Acceptance changes the effective target to
 `REVIEW_BASE..HEAD`; decline keeps the exact working-tree target and does not
 disable eligible reviewers. Re-run environment detection after a WIP commit so
-payload, companion scope, and report metadata use the same post-decision state.
+payload inputs, routing, and report metadata use the same post-decision state.
 
-## 2. Context and shared payload
+## 2. Context and route-specific payload inputs
 
 Read `.deep-review/rules.yaml`, fitness evidence, and a canonical deep-work
 session receipt when present. Validate any envelope identity before using its
@@ -98,11 +98,8 @@ skipped with a visible path-specific warning while other active contracts
 continue.
 
 Write context and diff bytes to private temporary files through direct host
-file tools, then invoke:
-
-```text
-node {plugin_root}/hooks/scripts/build-reviewer-payload.mjs --plugin-root PLUGIN_ROOT_ABS --repo PROJECT_ROOT --change-state CHANGE_STATE --review-base REVIEW_BASE --context-file CONTEXT_FILE --diff-file DIFF_FILE
-```
+file tools. Stage 3 builds one final payload per selected route from these same
+inputs.
 
 When the public route carries `--readiness-receipt`, append
 `--readiness-receipt RECEIPT_PATH`. The builder re-verifies repository/path
@@ -118,9 +115,12 @@ automatic consumption; that would be exactly the fixed-path-existence keying
 this design replaced. A single-shot review invocation (no loop) never has
 this flag and therefore never sees the section.
 
-The JSON result contains the absolute shared payload path. This Node builder is
-the sole doctrine injector for all supported reviewer roles. Preserve every
-builder warning in the final report.
+Each JSON result contains one absolute route-specific payload path. The Node
+builder is the sole doctrine injector: it omits false-positive suppression
+doctrine only for `codex-review` and `codex-adversarial`, while preserving the
+trusted assignment, verified readiness receipt, changed files, project
+context, prior rounds, and diff. All other reviewers retain the doctrine.
+Preserve every builder warning in the final report.
 
 ## 3. Reviewer flags, privacy, and capability enumeration
 
@@ -139,15 +139,13 @@ string.
 2. Reject `--ultracode` with `--no-opus`; reject `--codex` with `--no-codex`.
 3. `--no-opus` disables `claude-opus`; `--no-codex` disables both
    `codex-review` and `codex-adversarial`; `--no-agy` disables `agy`.
-4. A native Codex generic subagent supplies `codex-review` whenever its host
-   tool capability exists. It replaces the standard companion review rather
-   than duplicating it. The generic role is available without a companion.
-5. A companion may supply the standard role only when no generic role exists,
-   and may independently supply optional `codex-adversarial`.
-6. A named Claude agent or the Claude CLI bridge supplies `claude-opus`.
+4. Native Codex generic subagents supply both `codex-review` and
+   `codex-adversarial` whenever the host capability exists. Claude Code uses
+   the generic Codex exec bridge for both roles.
+5. A named Claude agent or the Claude CLI bridge supplies `claude-opus`.
    Forward `review_model` unchanged; it is a non-empty installed Claude model
    alias such as `fable`.
-7. Config value `agy_enabled: false` disables `agy` before privacy work.
+6. Config value `agy_enabled: false` disables `agy` before privacy work.
 
 `--no-agy`: skip the scan and preflight, create no state or config changes;
 this disabled privacy branch is a no-op. `--codex-only`: after expansion, skip
@@ -171,29 +169,23 @@ node {plugin_root}/hooks/scripts/agy-privacy-preflight.mjs --repo PROJECT_ROOT -
 - A positive approval may patch only those acknowledgment fields. Decline or
   any error excludes `agy`; no reviewer process receives project access.
 
-### 3.2 planned companion index exposure
+### 3.2 artifact classification and routing preflight
 
-Run index mutation only if a selected companion needs ignored-path exposure.
-Send `scan-sensitive`, then `perform`, as framed JSON requests to
-`mutation-protocol.mjs`. Obtain approval for sensitive files before `perform`.
-Keep the returned owner token private for Stage 5 restoration. A generic Codex
-subagent reads the payload and allowed project paths directly and never causes
-index mutation merely because Codex is the host.
-
-### 3.3 artifact classification and routing preflight
-
-Immediately before §§3.1–3.2 and Stage 4, invoke the reviewer-free preflight
+Immediately before §3.1 and Stage 4, invoke the reviewer-free preflight
 with argv-array transport:
 
 ```text
-node {plugin_root}/hooks/scripts/classify-artifacts.mjs --repo PROJECT_ROOT --emit-routing-plan --routing-plan-out .deep-review/tmp/routing-plan.json --host-assertions-json '{"claudeNativeAgent":true,"codexNativeGeneric":false}'
+node {plugin_root}/hooks/scripts/classify-artifacts.mjs --repo PROJECT_ROOT --emit-routing-plan --routing-plan-out .deep-review/tmp/routing-plan.json --host-assertions-json '{"claudeNativeAgent":true,"codexExecReviewer":true,"codexNativeGeneric":false}'
+node {plugin_root}/hooks/scripts/classify-artifacts.mjs --repo PROJECT_ROOT --emit-routing-plan --routing-plan-out .deep-review/tmp/routing-plan.json --host-assertions-json '{"claudeNativeAgent":false,"codexExecReviewer":false,"codexNativeGeneric":true}'
 ```
 
 Because this subprocess cannot observe the orchestrating host directly, always
 append `--host-assertions-json` with compact JSON reflecting the current host
-tool capability (named Claude agent availability → `claudeNativeAgent`, native
-Codex generic subagent availability → `codexNativeGeneric`) as one argv value;
-omitting either key or the whole flag leaves that adapter `unknown`.
+tool capability (named Claude agent availability → `claudeNativeAgent`,
+external Codex reviewer eligibility → `codexExecReviewer`, native Codex generic
+subagent availability → `codexNativeGeneric`) as one argv value. The first
+example is the Claude Code profile and the second is the Codex profile.
+Omitting a key or the whole flag leaves that adapter `unknown`.
 
 When public-route returned normalized overrides, append `--overrides-json` and
 the compact `JSON.stringify(route.overrides)` as one argv value. An explicit
@@ -228,16 +220,25 @@ only their own route by path and reviewer id; they do not reinterpret provider
 or reviewer flags.
 
 After the plan exists, invoke `build-reviewer-payload.mjs` once per selected
-route with `--routing-plan ROUTING_PLAN --reviewer-id REVIEWER_ID` (and the same
-context, diff, prior-context, and readiness inputs). The builder injects only
-the canonical trusted rubric for that assignment. Never pass raw selection
-reasons or another reviewer's route to the leaf.
+route:
+
+```text
+node {plugin_root}/hooks/scripts/build-reviewer-payload.mjs --plugin-root PLUGIN_ROOT_ABS --repo PROJECT_ROOT --change-state CHANGE_STATE --review-base REVIEW_BASE --context-file CONTEXT_FILE --diff-file DIFF_FILE --routing-plan ROUTING_PLAN --reviewer-id REVIEWER_ID
+```
+
+Append the same explicit prior-context and readiness inputs described in Stage
+2. The builder validates the canonical reviewer ID through the routing plan and
+injects only that route's trusted rubric. Never pass raw selection reasons or
+another reviewer's route to the leaf.
 
 ## 4. Dispatch independent reviewers
 
-Launch every selected route in a fresh background context. Capture a repository
-fingerprint immediately before and after each reviewer. A changed fingerprint
-makes that output untrusted and excluded.
+Use a fresh isolated context for every selected route. Native Codex reviewer
+dispatch is strictly serial and trust-gated: capture the pre-review fingerprint,
+launch one leaf, capture the post-review fingerprint, make the trust decision,
+and only then launch the next leaf. A mutation invalidates the result and makes
+it untrusted. Stop the round before launching a sibling reviewer and before any
+response or commit action.
 
 Use the exported `captureFingerprint` API from
 `{plugin_root}/hooks/scripts/lib/fingerprint.mjs` for both snapshots, with the
@@ -271,38 +272,47 @@ With a shadow-only plan, preserve the command above byte-for-byte.
 Do not replace a requested Claude role with a Codex identity. Record timeout,
 authentication, empty-output, or unavailable-model status exactly as emitted.
 
-### 4.2 `codex-review`
+### 4.2 `codex-review` and `codex-adversarial`
 
-On native Codex, create one generic `spawn_agent` context. Its prompt must begin
-with these ordered actions:
-
-1. read the absolute `{plugin_root}/agents/code-reviewer.md` in full;
-2. read the shared payload from its absolute path;
-3. stay strictly read-only and inspect only the target repository;
-4. return the `report-format.md` report contract as text.
-
-Label it `codex-review`, never Opus. Capture the pre/post fingerprint and
-exclude an untrusted result.
-
-When generic capability is absent and a standard companion is eligible, use:
+On native Codex, create two separate subagents with different subagent IDs.
+Each leaf reads the absolute `{plugin_root}/agents/code-reviewer.md`, then only
+its route-specific payload, stays strictly read-only, inspects the target
+repository, and returns the `report-format.md` contract. Neither receives
+generator history. Native `spawn_agent` has no enforceable tool allowlist; the
+read-only instruction is paired with fingerprint-based trust rejection:
 
 ```text
-node {plugin_root}/hooks/scripts/run-codex-reviewer.mjs --project-root PROJECT_ROOT --companion COMPANION_FILE --kind review --scope working-tree --output OUTPUT_FILE --timeout-seconds 900
+const options = { task_name: `${canonicalReviewerId}-round-${roundNumber}-${invocationNonce}`, fork_turns: "none", message: ROUTE_SPECIFIC_PAYLOAD_INSTRUCTIONS }
+if (route.resolved.model !== null) options.model = route.resolved.model
+if (route.resolved.effort !== null) options.reasoning_effort = route.resolved.effort
+spawn_agent(options)
 ```
 
-For a clean committed target, replace `--scope working-tree` with
-`--base REVIEW_BASE`.
+Use an invocation-unique `task_name` on every role, round, and retry. Preserve
+the canonical reviewer IDs `codex-review` and `codex-adversarial` in routing and
+report provenance. Never use `followup_task` or reuse a prior subagent or its
+history; retries also create a fresh `fork_turns: "none"` invocation.
 
-### 4.3 `codex-adversarial`
+Capture pre/post fingerprints for each leaf with the same
+`lib/fingerprint.mjs` API and identical options. A mutation invalidates the
+result and makes it untrusted; stop the round before launching the sibling
+reviewer and before any response or commit action. Each canonical role counts
+at most once.
 
-Write the adversarial focus text with a direct host file tool, then invoke:
+If the host rejects an explicit model or effort as unsupported, retry that leaf
+at most once and only when `--allow-fallback` authorized it. Omit only the
+rejected dimension, or both when both are clearly rejected. Authentication,
+authorization, timeout, empty-output, and generic failures never retry.
+
+On Claude Code, invoke the generic Codex exec bridge once per role:
 
 ```text
-node {plugin_root}/hooks/scripts/run-codex-reviewer.mjs --project-root PROJECT_ROOT --companion COMPANION_FILE --kind adversarial --base REVIEW_BASE --focus-file FOCUS_FILE --output OUTPUT_FILE --timeout-seconds 900
+node {plugin_root}/hooks/scripts/run-codex-reviewer.mjs --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PROMPT_FILE --routing-plan ROUTING_PLAN --reviewer-id codex-review --output OUTPUT_FILE --timeout-seconds 900
+node {plugin_root}/hooks/scripts/run-codex-reviewer.mjs --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PROMPT_FILE --routing-plan ROUTING_PLAN --reviewer-id codex-adversarial --output OUTPUT_FILE --timeout-seconds 900
 ```
 
-Use `--scope working-tree` instead of `--base` for a dirty target. The bridge
-owns secure transport and cleanup.
+The bridge reads each route's resolved model/effort and applies the same
+explicit runtime-rejection-only single-retry rule.
 
 ### 4.4 `agy`
 
@@ -322,16 +332,12 @@ untrusted even if the process produced report text.
 ### 4.5 `--ultracode`
 
 Follow `ultracode-integration.md`.
-Launch every eligible role in a fresh background context.
+Ultracode may launch its eligible lens contexts in fresh background contexts.
 Six lenses collapse to one Anthropic voice; they never increase `N_actual`
 above one for the Claude family. The loop may request ultracode only on its
 first round.
 
-## 5. Restore, synthesize, and report
-
-If Stage 3 performed index exposure, send `restore` with the exact owner token
-to `mutation-protocol.mjs` before synthesis. A restore error is a terminal
-operational failure and must remain visible.
+## 5. Synthesize and report
 
 For every attempted role, serialize `role`, raw `output`, and the pre/post
 fingerprint results to a private `attempts` JSON array. When at least two roles
@@ -376,11 +382,17 @@ reviewer/provider counts are carried by the numeric floors, while
 `required: true` is reserved for explicit constraints and the materialized
 floor replacement. Final synthesis rejects a missing required route and also
 rejects any missing materialized wave-2 route, so clearing or changing the
-required flag cannot authorize Phase 6. Raw reviewer output is SHA-256-bound at
-the synthesis boundary; reusing one identical output under two canonical voice
-identities is an operational identity failure. Protocol-3 attempts require
-`reviewer_id == role`, and the materialized wave-2 route set is cross-checked
-against the expansion counter so neither carrier can be omitted. The plan's
+required flag cannot authorize Phase 6. SHA-256 binds the raw output to each
+attempt at the synthesis boundary; the digest is an integrity binding, not a
+reviewer identity. Independence comes from unique canonical reviewer IDs plus
+fresh route-specific dispatch, validated route/report provenance, and trusted
+pre/post fingerprints. Byte-identical canonical reports from distinct
+identities are allowed: digest equality alone is not an operational identity
+failure. A duplicate `reviewer_id`, a non-canonical or plan-absent identity, or
+missing or invalid provenance remains an operational failure. Protocol-3
+attempts require `reviewer_id == role`, and the materialized wave-2 route set
+is cross-checked against the expansion counter so neither carrier can be
+omitted. The plan's
 `initial_reviewer_ids` and `required_reviewer_ids` are structural carriers:
 every wave-1 route must remain in the initial set, every initial ID must have a
 route, every wave-2 route must remain outside the set, and a wave-1 `required`

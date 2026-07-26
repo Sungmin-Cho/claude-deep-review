@@ -21,46 +21,54 @@ does not create an additional `N_actual` voice.
 | public review/respond entry | `/deep-review` command shim | `$deep-review:deep-review` |
 | loop entry | `/deep-review-loop` | `$deep-review:deep-review-loop` |
 | independent Claude reviewer | named `Agent(code-reviewer)` or Node Claude bridge | Node Claude bridge when CLI exists |
-| Codex standard reviewer | Node Codex bridge | generic subagent that reads `agents/code-reviewer.md` |
-| Codex adversarial reviewer | Node Codex bridge | Node Codex bridge |
+| Codex standard reviewer | Node Codex exec bridge | generic subagent that reads `agents/code-reviewer.md` |
+| Codex adversarial reviewer | Node Codex exec bridge | generic subagent that reads `agents/code-reviewer.md` |
 | agy reviewer | Node agy bridge | Node agy bridge |
 
 ## Selection invariants
 
-- Enumerate roles by tool capability: named-agent availability and the
-  detected Claude, Codex companion, and agy executables. `runtime_host` is
+- Enumerate roles by tool capability: named-agent availability, the detected
+  Claude/Codex/agy executables, and fresh host assertions. `runtime_host` is
   diagnostic only and must never change reviewer enumeration or `N_actual`.
 - Adaptive selection is deterministic: role fit, provider-family diversity,
   prior-round unused status, last success, then canonical reviewer id.
   `--reviewer-strategy static` preserves the eligible candidate set; shadow
   mode observes the adaptive plan without applying it.
-- A native Codex generic subagent is one fresh context, counts once as
-  `codex-review`, and replaces the standard companion review. It is never
-  labeled Opus. It is available without a separately installed companion;
-  companion detection controls only optional `codex-adversarial`.
-- The generic subagent's prompt first reads the absolute
-  `{plugin_root}/agents/code-reviewer.md`, then reads the shared payload file,
-  stays read-only, and returns the report contract. It consumes those paths
-  directly and does not mutate the Git index merely because Codex is the host.
+- Native Codex creates two separate history-free contexts: one
+  `codex-review` subagent and one `codex-adversarial` subagent. Both use
+  `fork_turns: "none"`, have different subagent identities, count at most once
+  each in `N_actual`, and are never labeled Opus. Give every attempt an
+  invocation-unique `task_name`; keep the canonical reviewer IDs unchanged in
+  routing and report provenance. Never use `followup_task` or reuse an existing
+  subagent identity or history, including for a fallback retry.
+- Each generic subagent first reads the absolute
+  `{plugin_root}/agents/code-reviewer.md`, then its own route-specific payload,
+  stays read-only, and returns the report contract. It receives no generator
+  history. Build the `spawn_agent` options for that attempt and include model
+  only when `route.resolved.model !== null`; include reasoning effort only when
+  `route.resolved.effort !== null`.
 - When Claude CLI exists, `run-claude-reviewer.mjs` remains the distinct
   `claude-opus` role. A named Claude agent fills the same role when available.
-- On a Claude capability profile, `run-codex-reviewer.mjs --kind review` fills
-  `codex-review` and is eligible only for the `standard` assignment; its
-  optional `--kind adversarial-review` invocation fills `codex-adversarial`
-  and is eligible only for `adversarial`. The shared companion adapter cannot
-  satisfy `feasibility`, `traceability`, `security`, or `confirmation`
-  assignments because those invocation paths do not transport the selected
-  rubric.
+- On a Claude capability profile, the generic Codex exec bridge fills both
+  `codex-review` and `codex-adversarial`. Each invocation consumes its own
+  routing-plan route and payload, so every canonical assignment rubric and the
+  selected model/effort reach the leaf transport.
 - `--no-codex` disables both the standard and adversarial Codex roles. It does
   not affect `claude-opus` or `agy`.
-- The Git-index mutation protocol runs only when a planned companion process
-  needs ignored-path exposure. The generic subagent never triggers it by
-  itself.
+- If an explicit model or effort is rejected as unsupported, retry the leaf at
+  most once only when `--allow-fallback` authorizes it, omitting only the
+  rejected dimension. Authentication, timeout, empty output, and generic
+  failures never retry.
 
 ## Read-only trust boundary
 
-Capture a pre and post repository fingerprint around every external or generic
-reviewer. Any mutation makes the result untrusted and excluded from synthesis.
-Use the shared `lib/fingerprint.mjs` `captureFingerprint` API with identical
-`repo`, `pluginRoot`, and `mode` options for both snapshots. Record the
+Native `spawn_agent` has no enforceable tool allowlist. Its honest read-only
+contract is a read-only instruction plus fingerprint-based trust rejection;
+writes remain possible and are detected after the attempt. Capture a pre and
+post repository fingerprint around every external or generic reviewer. A
+mutation invalidates the result: stop the round before launching any sibling
+reviewer and before any response or commit action, then report the untrusted
+attempt. The untrusted result is excluded from synthesis.
+Use the same fingerprint API, `lib/fingerprint.mjs` `captureFingerprint`, with
+identical `repo`, `pluginRoot`, and `mode` options for both snapshots. Record the
 exclusion in the final report; never silently reduce `N_actual`.

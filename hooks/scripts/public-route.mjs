@@ -56,7 +56,8 @@ function existingFile(path) {
   }
 }
 
-function parseReview(argv, host, cwd) {
+function parseReview(argv, host, cwd, provenance = {}) {
+  const codexOnly = provenance.codexOnly === true || argv.includes('--codex-only');
   const expanded = expandCodexOnly(argv);
   if (expanded[0] === 'init') {
     return expanded.length === 1
@@ -131,6 +132,10 @@ function parseReview(argv, host, cwd) {
     providers: {},
     reviewers: {},
   };
+  if (codexOnly) {
+    overrides.codex_only = true;
+    hasOverrides = true;
+  }
   function assignment(flag, value, allowed, destination, field, label) {
     const separator = value.indexOf('=');
     if (separator <= 0 || separator === value.length - 1) return `${flag} requires <${label}>=<value>`;
@@ -285,6 +290,7 @@ function parseReview(argv, host, cwd) {
 }
 
 function parseLoop(argv, host, cwd) {
+  const codexOnly = argv.includes('--codex-only');
   const expanded = expandCodexOnly(argv);
   for (const forbidden of ['init', '--respond', '--qa']) {
     if (expanded.includes(forbidden)) {
@@ -330,7 +336,7 @@ function parseLoop(argv, host, cwd) {
       index += 1;
     }
   }
-  const reviewRoute = parseReview(reviewArgs, host, cwd);
+  const reviewRoute = parseReview(reviewArgs, host, cwd, { codexOnly });
   if (!reviewRoute.ok || reviewRoute.route !== 'review') {
     return { ...routeError(reviewRoute.error || 'invalid loop review arguments'), host, argv: expanded };
   }

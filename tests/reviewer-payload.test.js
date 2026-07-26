@@ -83,6 +83,51 @@ function doctrineFromPrompt(prompt) {
   return match?.[1].trimEnd() ?? '';
 }
 
+function writeSingleReviewerPlan(root, {
+  reviewerId,
+  provider,
+  adapterId,
+  assignmentRole,
+  model = 'review-model',
+  effort = 'high',
+}) {
+  const routingPlan = join(root, `${reviewerId}-routing-plan.json`);
+  writeFileSync(routingPlan, JSON.stringify({
+    protocol_version: '3.0',
+    reviewer_strategy: 'static',
+    shadow_mode: false,
+    artifact_phase: 'implementation',
+    risk: 'low',
+    progress: 'initial',
+    minimum_reviewers: 1,
+    maximum_reviewers: 4,
+    provider_family_minimum: 1,
+    planned_reviewers: 1,
+    max_expansion_waves: 1,
+    initial_reviewer_ids: [reviewerId],
+    required_reviewer_ids: [reviewerId],
+    candidate_reviewers: [{
+      reviewer_id: reviewerId,
+      provider,
+      adapter_id: adapterId,
+      assignment_roles: [assignmentRole],
+      last_status: 'unknown',
+    }],
+    routes: [{
+      reviewer_id: reviewerId,
+      provider,
+      adapter_id: adapterId,
+      assignment_role: assignmentRole,
+      rubric_id: `${assignmentRole}-v1`,
+      wave: 1,
+      required: true,
+      selection_reason: 'test route',
+      resolved: { model, effort },
+    }],
+  }));
+  return routingPlan;
+}
+
 test('anchor extraction requires one ordered non-empty pair for both blocks', async () => {
   const { buildReviewerPayload } = await loadPayload();
   const invalidCases = new Map([
@@ -261,6 +306,110 @@ test('routing-plan assignment injects only the canonical trusted rubric for the 
   assert.doesNotMatch(prompt, /forged instruction/);
   assert.equal([...prompt.matchAll(/(?:^|\n)===== DIFF UNDER REVIEW =====\n/gu)].length, 1);
   assert.ok(prompt.trimEnd().endsWith('REAL DIFF'));
+});
+
+test('Codex reviewer payloads omit only suppression doctrine and preserve every other supplied section', async () => {
+  const { buildReviewerPayload } = await loadPayload();
+  const { createDocumentReadinessReceipt } = await import(pathToFileURL(
+    join(pluginRoot, 'hooks', 'scripts', 'document-readiness.mjs'),
+  ).href);
+  const temp = temporaryDirectory('deep-review-codex-payload-');
+  const repo = createGitFixture('codex payload sections');
+  writeFileSync(join(repo, 'src-preserved.js'), 'export const preserved = true;\n');
+  mkdirSync(join(repo, 'docs'), { recursive: true });
+  mkdirSync(join(repo, '.deep-review', 'reports'), { recursive: true });
+  writeFileSync(join(repo, 'docs', 'plan.md'), '# Plan\n');
+  const readinessReport = join(repo, '.deep-review', 'reports', 'readiness-review.md');
+  writeFileSync(readinessReport, [
+    '# Deep Review Report',
+    '## Summary',
+    '- **Verdict**: APPROVE',
+    '- **Issues**: 🔴 0건, 🟡 0건, ℹ️ 0건',
+    '## Artifact Gate',
+    '```json',
+    '{"schema_version":1,"findings":[]}',
+    '```',
+  ].join('\n'));
+  const readiness = createDocumentReadinessReceipt({
+    repo,
+    artifacts: [{ path: 'docs/plan.md', target_kind: 'implementation-plan' }],
+    reports: [{
+      path: readinessReport,
+      reviewer_id: 'codex-review',
+      provider_family: 'codex',
+    }],
+    risk: 'low',
+    requiredReviewers: 1,
+    providerFamilyMinimum: 1,
+  });
+  const priorRoundsFile = join(temp, 'prior-rounds.md');
+  writeFileSync(
+    priorRoundsFile,
+    '<!-- PRIOR-CONTEXT v1 loop_id=loop-codex base_commit=deadbeef round=2 -->\nPRIOR_SENTINEL',
+  );
+
+  for (const reviewer of [
+    {
+      reviewerId: 'codex-review',
+      provider: 'codex',
+      adapterId: 'codex-native-generic',
+      assignmentRole: 'standard',
+    },
+    {
+      reviewerId: 'codex-adversarial',
+      provider: 'codex',
+      adapterId: 'codex-native-generic',
+      assignmentRole: 'adversarial',
+    },
+  ]) {
+    const routingPlan = writeSingleReviewerPlan(temp, reviewer);
+    const result = buildReviewerPayload({
+      pluginRoot,
+      routingPlan,
+      reviewerId: reviewer.reviewerId,
+      repo,
+      changeState: 'untracked-only',
+      context: 'RULES_SENTINEL',
+      readinessReceipt: readiness.receipt_path,
+      priorRoundsFile,
+      priorBase: 'deadbeef',
+      diff: 'DIFF_SENTINEL',
+    });
+    const prompt = readFileSync(result.promptFile, 'utf8');
+    assert.doesNotMatch(prompt, /REVIEW SUPPRESSION DOCTRINE/, reviewer.reviewerId);
+    assert.match(prompt, /TRUSTED REVIEW ASSIGNMENT/, reviewer.reviewerId);
+    assert.match(prompt, new RegExp(`reviewer_id: ${reviewer.reviewerId}`), reviewer.reviewerId);
+    assert.match(prompt, /VERIFIED DOCUMENT READINESS RECEIPT/, reviewer.reviewerId);
+    assert.match(prompt, /"status": "READY_FOR_IMPLEMENTATION"/, reviewer.reviewerId);
+    assert.match(prompt, /CHANGED FILES \(cross-file context\)/, reviewer.reviewerId);
+    assert.match(prompt, /src-preserved\.js/, reviewer.reviewerId);
+    assert.match(prompt, /PROJECT RULES \/ CONTRACT \/ HEALTH/, reviewer.reviewerId);
+    assert.match(prompt, /RULES_SENTINEL/, reviewer.reviewerId);
+    assert.match(prompt, /PRIOR ROUND CONTEXT/, reviewer.reviewerId);
+    assert.match(prompt, /PRIOR_SENTINEL/, reviewer.reviewerId);
+    assert.match(prompt, /DIFF UNDER REVIEW/, reviewer.reviewerId);
+    assert.equal(prompt.trimEnd().endsWith('DIFF_SENTINEL'), true, reviewer.reviewerId);
+    assert.deepEqual(result.warnings, [], reviewer.reviewerId);
+  }
+});
+
+test('non-Codex reviewer payloads retain suppression doctrine', async () => {
+  const { buildReviewerPayload } = await loadPayload();
+  const temp = temporaryDirectory('deep-review-non-codex-payload-');
+  const routingPlan = writeSingleReviewerPlan(temp, {
+    reviewerId: 'claude-opus',
+    provider: 'claude',
+    adapterId: 'claude-cli',
+    assignmentRole: 'standard',
+  });
+  const result = buildReviewerPayload({
+    pluginRoot,
+    routingPlan,
+    reviewerId: 'claude-opus',
+    diff: 'DIFF',
+  });
+  assert.match(readFileSync(result.promptFile, 'utf8'), /REVIEW SUPPRESSION DOCTRINE/);
+  assert.deepEqual(result.warnings, []);
 });
 
 test('payload builder fails closed on a forged, duplicate, unsupported, or mismatched assignment', async () => {

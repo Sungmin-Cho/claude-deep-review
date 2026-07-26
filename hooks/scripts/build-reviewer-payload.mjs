@@ -202,17 +202,21 @@ export function buildReviewerPayload(options = {}) {
   const assignment = trustedAssignmentSection(options);
   const readinessReceipt = trustedReadinessReceiptSection(options);
   let doctrine = '';
-  try {
-    const criteriaPath = join(
-      root,
-      'skills',
-      'deep-review-workflow',
-      'references',
-      'review-criteria.md',
-    );
-    doctrine = extractFalsePositiveDoctrine(readFileSync(criteriaPath, 'utf8'));
-  } catch {
-    warnings.push(DOCTRINE_WARNING);
+  const omitDoctrine = options.reviewerId === 'codex-review'
+    || options.reviewerId === 'codex-adversarial';
+  if (!omitDoctrine) {
+    try {
+      const criteriaPath = join(
+        root,
+        'skills',
+        'deep-review-workflow',
+        'references',
+        'review-criteria.md',
+      );
+      doctrine = extractFalsePositiveDoctrine(readFileSync(criteriaPath, 'utf8'));
+    } catch {
+      warnings.push(DOCTRINE_WARNING);
+    }
   }
 
   let changeFiles = '';

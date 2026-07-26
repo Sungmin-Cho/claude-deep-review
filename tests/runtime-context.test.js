@@ -282,6 +282,7 @@ test('process runner preserves one Unicode argument and classifies timeout as 12
   );
   assert.equal(probe.code, 0);
   assert.equal(probe.stdout.toString(), '공백 Ω');
+  assert.equal(probe.captureOverflow, false);
 
   const timed = await runProcess(
     process.execPath,
@@ -290,6 +291,40 @@ test('process runner preserves one Unicode argument and classifies timeout as 12
   );
   assert.equal(timed.timedOut, true);
   assert.equal(timed.code, 124);
+});
+
+test('process runner caps each captured stream while continuing to drain noisy children', async () => {
+  const { runProcess } = await import(processUrl);
+  const result = await runProcess(
+    process.execPath,
+    ['-e', 'process.stdout.write("o".repeat(4096)); process.stderr.write("e".repeat(4096));'],
+    {
+      maxCaptureBytesPerStream: 32,
+      maxCaptureBytesTotal: 128,
+    },
+  );
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout.equals(Buffer.alloc(32, 'o')), true);
+  assert.equal(result.stderr.equals(Buffer.alloc(32, 'e')), true);
+  assert.equal(result.captureOverflow, true);
+});
+
+test('process runner enforces the total capture ceiling without accumulating discarded bytes', async () => {
+  const { runProcess } = await import(processUrl);
+  const result = await runProcess(
+    process.execPath,
+    ['-e', 'process.stdout.write("x".repeat(4096));'],
+    {
+      maxCaptureBytesPerStream: 4096,
+      maxCaptureBytesTotal: 17,
+    },
+  );
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout.equals(Buffer.alloc(17, 'x')), true);
+  assert.equal(result.stderr.length, 0);
+  assert.equal(result.captureOverflow, true);
 });
 
 test('process runner normalizes every ENOENT spawn result to code 127', async () => {

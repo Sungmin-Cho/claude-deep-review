@@ -4,6 +4,25 @@
 
 deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)와 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
+## [2.1.0] — 2026-07-26
+
+### 추가
+
+- **Route별 Codex 제어** — 이제 Claude Code와 Codex에서 두 Codex reviewer 역할 모두 선택된 model과 reasoning effort를 전달받습니다.
+
+### 변경
+
+- **Host-native Codex transport** — Claude Code는 격리된 ephemeral read-only `codex exec` 세션으로 두 Codex 역할을 실행하고, Codex는 두 역할을 독립 history-free 네이티브 서브에이전트로 실행합니다.
+- **Codex-only static gate** — 명시적인 non-critical `--codex-only --reviewer-strategy static` route는 critical reviewer-family floor를 약화하지 않으면서 두 Codex voice로 단일 family 제약을 충족할 수 있습니다.
+
+### 제거
+
+- **Companion 기반 review routing** — Codex companion 탐지는 2.x 환경 호환성을 위해 유지되지만 더 이상 reviewer 역할을 선택·실행·대체하지 않습니다.
+
+### 보안
+
+- Codex CLI report는 bounded non-symlink last-message 파일만 사용하고 ambient user config와 rule을 제외합니다. runtime model/effort 거부 retry는 명시적 fallback 승인이 필요하며 인증, timeout, 빈 출력, 모호한 오류, 일반 실패는 retry하지 않습니다.
+
 ## [2.0.0] — 2026-07-24
 
 ### 추가
