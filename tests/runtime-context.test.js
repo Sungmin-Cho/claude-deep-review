@@ -662,6 +662,34 @@ test('Windows batch preparation defers literal percent through one expansion pas
   assert.equal(expandedOnce.includes('EXPANDED-PATH'), false);
 });
 
+test('Windows batch transport independently quotes a Unicode executable path containing spaces', async () => {
+  const source = readFileSync(new URL(processUrl), 'utf8');
+  const forcedWindowsSource = source.replace(
+    "const IS_WINDOWS = process.platform === 'win32';",
+    'const IS_WINDOWS = true;',
+  );
+  assert.notEqual(forcedWindowsSource, source, 'the platform seam must remain testable');
+  const instrumented = `${forcedWindowsSource}\nexport { prepareSpawn as __prepareSpawnForTest };\n`;
+  const module = await import(`data:text/javascript;base64,${Buffer.from(instrumented).toString('base64')}`);
+  const command = 'C:\\Program Files\\검토 Ω\\codex.cmd';
+  const env = {
+    ...process.env,
+    ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+  };
+
+  const prepared = module.__prepareSpawnForTest(
+    command,
+    ['exec', '--model', 'gpt-route Ω'],
+    env,
+  );
+
+  assert.equal(prepared.command, env.ComSpec);
+  assert.equal(
+    prepared.args.at(-1),
+    '"^"C:\\Program^ Files\\검토^ Ω\\codex.cmd^" ^"exec^" ^"--model^" ^"gpt-route^ Ω^""',
+  );
+});
+
 test('Windows raw batch transport rejects quotes and line breaks without a shim', async () => {
   const source = readFileSync(new URL(processUrl), 'utf8');
   const forcedWindowsSource = source.replace(
