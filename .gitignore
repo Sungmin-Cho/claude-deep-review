@@ -20,6 +20,10 @@
 .deep-review/
 docs/
 
+# deep-loop 플러그인 런타임 상태(runs/insights/event-log). `.deep-review/`와
+# 같은 취지로, 오케스트레이션 로컬 상태를 공개 저장소에 커밋하지 않습니다.
+.deep-loop/
+
 # Claude Code 런타임 상태(hook 입출력·센서 캐시). dogfooding 중 hook 이
 # `.claude/.hook-tool-input.<pid>`(session_id·transcript_path·permission_mode 등
 # 개인 경로 포함 가능)·`.claude/.sensor-detection-cache.json` 를 생성하므로,

@@ -47,6 +47,7 @@ committed unless explicitly requested as an artifact.
 npm test
 npm run test:legacy
 node --test tests/plugin-contract.test.js tests/skill-runtime-contract.test.js tests/native-release-smoke.test.js
+# maintainer-local — skip if the validator is absent on this machine
 python3 /Users/sungmin/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py .
 git diff --check
 ```
