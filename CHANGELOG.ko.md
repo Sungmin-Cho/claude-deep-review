@@ -13,6 +13,10 @@ deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Ke
 - **`--no-opus` 와 `--no-opus --no-codex` 의 동작이 바뀝니다.** 전자는 Codex 단일 provider family 만 남아 `APPROVE` 가 `CONCERN` 으로 상한 처리되고, 후자는 남는 후보가 없습니다. 둘 다 `--agy` 로 복원합니다.
 - 설정 키 `agy_enabled` 는 비활성으로 문서화했습니다. 애초에 코드 소비자가 없었으며, 강제 가능한 비활성화 수단은 `--no-agy` 입니다.
 
+### 수정
+
+- **진단 캡처만 넘쳤을 때 Codex 리뷰어의 완결된 보고서를 폐기하지 않습니다.** `run-codex-reviewer.mjs` 가 `captureOverflow` 를 종단 실패로 취급했으나, 이 플래그는 stdout/stderr 진단 버퍼만 자를 뿐 자식 프로세스에 시그널을 보내지 않습니다(`lib/process.mjs` 의 `appendCaptured`). 정식 보고서는 `--output-last-message` 로 기록되어 디스크에서 읽히므로, stderr 의 장황한 추론 트레이스가 공유 캡처 예산을 소진하면 완결된 계약 유효 보고서가 버려졌습니다 — 단일 리뷰 루프에서 3회 연속 재현되었습니다. 오버플로는 시도 provenance 에 그대로 기록되고, 읽을 보고서가 없는 오버플로는 여전히 fail-closed 이며, 잘린 stderr 는 model/effort fallback 재시도를 계속 억제합니다.
+
 ### 보안
 
 - `agy` opt-in 은 argv 로만 전달되므로 저장소가 커밋한 설정 파일이 기본 라우팅 경로에서 agy 를 선출할 수 없습니다. 다만 저장소가 `review-policy.yaml` 로 자동 라우팅을 끈 경우에 대해서는 **보안 경계가 아닙니다** — 그 경로는 변경되지 않았고 별건으로 추적합니다.

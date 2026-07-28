@@ -174,7 +174,12 @@ function rejectionDimensions(result, applied) {
 }
 
 function processStatus(result, report) {
-  if (result.captureOverflow) return 'failed';
+  // A capture overflow truncates only the diagnostic stdout/stderr buffers; it
+  // never signals the child (see lib/process.mjs appendCaptured). The canonical
+  // report is written by Codex to --output-last-message and read from disk, so
+  // a complete, independently validated report stays trustworthy even when a
+  // verbose reasoning trace on stderr exhausts the shared capture budget.
+  // Overflow with no readable report still fails below via `!report`.
   if (result.code === 124 || result.timedOut) return 'timeout';
   if (result.code !== 0 && AUTH_PATTERN.test(structuredDiagnostic(result.stderr))) {
     return 'not_authenticated';
@@ -476,7 +481,7 @@ export async function runCodexReviewer(options = {}) {
           maxCaptureBytesTotal: MAX_CAPTURE_BYTES_TOTAL,
         },
       );
-      const candidate = result.code === 0 && !result.timedOut && !result.captureOverflow
+      const candidate = result.code === 0 && !result.timedOut
         ? readCanonicalReport(lastMessageFile)
         : null;
       attempts.push(attemptProvenance(attempts.length + 1, result, applied, candidate));

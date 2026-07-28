@@ -13,6 +13,10 @@ All notable changes to deep-review are documented here. Follows [Keep a Changelo
 - **`--no-opus` and `--no-opus --no-codex` change.** The former now yields Codex-only routes (a single provider family, which caps `APPROVE` at `CONCERN`); the latter has no candidate left. Add `--agy` to restore either.
 - The config key `agy_enabled` is documented as inert. It never had a code consumer; the enforceable disable is `--no-agy`.
 
+### Fixed
+
+- **A Codex reviewer's completed report is no longer discarded when only the diagnostic capture overflows.** `run-codex-reviewer.mjs` treated `captureOverflow` as a terminal failure, but that flag truncates only the stdout/stderr diagnostic buffers and never signals the child (`lib/process.mjs` `appendCaptured`). The canonical report is written to `--output-last-message` and read from disk, so a verbose reasoning trace on stderr could exhaust the shared capture budget and throw away a complete, contract-valid report — observed three times in a row in a single review loop. Overflow stays recorded in attempt provenance, an overflow with no readable report still fails closed, and a truncated stderr still suppresses model/effort fallback retries.
+
 ### Security
 
 - Reviewer opt-in for `agy` is transported through argv only, so a repository-committed config file cannot elect it on the default routing path. This is **not** a security boundary for a repository that commits `review-policy.yaml` to disable automatic routing — that path is unchanged and is tracked separately.

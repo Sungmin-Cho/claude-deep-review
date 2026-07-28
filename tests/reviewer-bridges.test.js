@@ -848,8 +848,50 @@ test('Codex exec bridge rejects an oversized prompt before spawning the reviewer
   assert.equal(existsSync(`${outputFile}.status`), false);
 });
 
-test('Codex exec bridge fails closed without fallback when process capture overflows', async (t) => {
-  for (const behavior of ['noisy-stdout', 'noisy-stderr-model']) {
+// A capture overflow truncates only the diagnostic stdout/stderr buffers and
+// never signals the child (lib/process.mjs appendCaptured). The canonical
+// report is written to --output-last-message and read from disk, so overflow
+// alone must not discard a complete report: `noisy-stdout` exits 0 with a valid
+// report and stays trusted, while `noisy-stderr-model` exits non-zero with no
+// report and still fails closed. Neither retries, because a truncated stderr
+// cannot be trusted to prove a model/effort rejection.
+test('Codex exec bridge keeps a complete report when only the diagnostic capture overflows', async () => {
+  const root = workspace('codex-noisy-stdout');
+  const projectRoot = codexProject(root);
+  const outputFile = join(projectRoot, 'result.md');
+  const promptFile = join(root, 'payload.txt');
+  const log = join(root, 'argv.jsonl');
+  const binary = fakeCodexCli(root);
+  writeFileSync(promptFile, 'payload');
+
+  const result = await runCodexReviewer({
+    projectRoot,
+    pluginRoot,
+    promptFile,
+    outputFile,
+    reviewerId: 'codex-review',
+    binary,
+    executionPlan: codexPlan({ allowFallback: true }),
+    timeoutSeconds: 5,
+    env: {
+      ...process.env,
+      FAKE_LOG: log,
+      FAKE_BEHAVIORS: JSON.stringify(['noisy-stdout', 'success']),
+    },
+  });
+
+  assert.equal(result.status, 'success');
+  assert.equal(rows(log).length, 1, 'an overflow must not trigger a retry');
+  const sidecar = JSON.parse(readFileSync(`${outputFile}.result.json`, 'utf8'));
+  assert.equal(sidecar.attempt_count, 1);
+  assert.equal(sidecar.attempts[0].capture_overflow, true, 'overflow stays visible in provenance');
+  assert.equal(sidecar.attempts[0].classification, 'success');
+  assert.ok(sidecar.canonical_report, 'the on-disk report survives a diagnostic-buffer overflow');
+  assert.equal(sidecar.fallback.occurred, false);
+});
+
+test('Codex exec bridge fails closed without fallback when capture overflows and no report exists', async (t) => {
+  for (const behavior of ['noisy-stderr-model']) {
     await t.test(behavior, async () => {
       const root = workspace(`codex-${behavior}`);
       const projectRoot = codexProject(root);
