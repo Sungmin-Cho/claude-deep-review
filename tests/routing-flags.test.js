@@ -39,6 +39,7 @@ test('review routing flags normalize repeated provider and canonical reviewer ov
       agy: { model: 'agy-fast' },
     },
     required_reviewers: ['agy', 'claude-opus', 'codex-adversarial', 'codex-review'],
+    enabled_providers: ['agy'],
   });
 });
 
@@ -478,4 +479,117 @@ test('J3: an explicit claude effort override keeps claude-native-agent (and surf
     /ERROR_UNSUPPORTED_EFFORT|ERROR_EFFORT_TRANSPORT_UNAVAILABLE/,
     'when neither claude adapter can transport the explicit effort, the router must surface the honest error rather than silently succeeding',
   );
+});
+
+// agy opt-in: these cases deliberately omit the `reviewers` injection so the
+// real defaultReviewers() gate runs instead of a pre-built candidate list.
+async function agyPlan(argv) {
+  const { parsePublicRoute } = await import(routeUrl);
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const route = parsePublicRoute({ entry: 'review', host: 'claude', cwd: root, argv });
+  assert.equal(route.ok, true, `route must parse: ${JSON.stringify(route.error)}`);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-agy-optin-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+  const result = await runClassifyArtifactsCli(
+    ['--repo', repo, '--change-state', 'non-git', '--files-from0', files, '--emit-routing-plan',
+      ...(route.overrides ? ['--overrides-json', JSON.stringify(route.overrides)] : [])],
+    {},
+    { capabilities: g2Capabilities() },
+  );
+  return { route, plan: result.routing_plan };
+}
+
+test('agy opt-in: a detected agy-cli is not a candidate without an explicit argv signal', async () => {
+  const { plan } = await agyPlan([]);
+  assert.equal(
+    plan.candidate_reviewers.some((c) => c.reviewer_id === 'agy'), false,
+    'capability detection alone must never elect agy',
+  );
+  assert.equal(plan.routes.some((r) => r.reviewer_id === 'agy'), false);
+});
+
+test('agy opt-in: --agy restores candidacy AND wins a wave-1 route as a required provider', async () => {
+  const { route, plan } = await agyPlan(['--agy']);
+  assert.deepEqual(route.overrides.enabled_providers, ['agy']);
+  assert.deepEqual(route.overrides.required_providers, ['agy']);
+  const agyRoute = plan.routes.find((r) => r.reviewer_id === 'agy' && r.wave === 1);
+  assert.ok(agyRoute, 'candidacy alone never wins a planner slot; --agy must also require selection');
+  assert.equal(agyRoute.required, true);
+  assert.ok(plan.required_reviewer_ids.includes('agy'));
+});
+
+test('agy opt-in: a pre-existing agy override restores candidacy without forcing selection', async () => {
+  const { route, plan } = await agyPlan(['--model', 'agy=agy-pro']);
+  assert.deepEqual(route.overrides.enabled_providers, ['agy']);
+  assert.equal(route.overrides.required_providers, undefined,
+    'a provider-level override must not become a hard required constraint');
+  assert.equal(
+    plan.routes.some((r) => r.reviewer_id === 'agy' && r.required === true), false,
+    'declining agy privacy must not be able to void the whole verdict',
+  );
+});
+
+test('agy opt-in: --agy conflicts with --no-agy and with --codex-only', async () => {
+  const { parsePublicRoute } = await import(routeUrl);
+  for (const argv of [['--agy', '--no-agy'], ['--codex-only', '--agy']]) {
+    const route = parsePublicRoute({ entry: 'review', host: 'claude', cwd: root, argv });
+    assert.equal(route.ok, false, `${argv.join(' ')} must be rejected`);
+    assert.match(route.error, /--agy cannot be combined with --no-agy/);
+  }
+});
+
+test('agy opt-in: enabled_providers is schema-validated like disabled_providers', async () => {
+  const { runClassifyArtifactsCli } = await import(classifyUrl);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-agy-schema-'));
+  fs.writeFileSync(path.join(repo, 'notes.md'), 'plain review notes');
+  const files = path.join(repo, 'targets.z');
+  fs.writeFileSync(files, 'notes.md\0');
+  for (const bad of ['agy', ['agy', 'agy'], ['nope']]) {
+    await assert.rejects(
+      () => runClassifyArtifactsCli(
+        ['--repo', repo, '--change-state', 'non-git', '--files-from0', files,
+          '--overrides-json', JSON.stringify({
+            protocol_version: '2.0',
+            routing_policy: 'auto',
+            allow_fallback: false,
+            allow_classifier: false,
+            providers: {},
+            reviewers: {},
+            enabled_providers: bad,
+          })],
+        {},
+        { capabilities: g2Capabilities() },
+      ),
+      /enabled_providers must be a unique array/,
+    );
+  }
+});
+
+// DOC-2: agy leaving the default candidate set silently degrades two
+// pre-existing selector combinations. Pin both so the migration is a contract,
+// not a surprise.
+test('agy opt-in: --no-opus collapses to a single provider family unless --agy is added', async () => {
+  const withoutAgy = await agyPlan(['--no-opus']);
+  const families = new Set(withoutAgy.plan.routes.map((r) => r.provider));
+  assert.equal(families.has('agy'), false, 'agy must not be elected without an explicit signal');
+  assert.deepEqual([...families], ['codex'], '--no-opus now yields codex-only routes');
+
+  const withAgy = await agyPlan(['--no-opus', '--agy']);
+  assert.equal(
+    withAgy.plan.routes.some((r) => r.reviewer_id === 'agy'), true,
+    '--agy restores the second provider family for --no-opus',
+  );
+});
+
+test('agy opt-in: --no-opus --no-codex has no candidate left unless --agy is added', async () => {
+  const withoutAgy = await agyPlan(['--no-opus', '--no-codex']);
+  assert.deepEqual(withoutAgy.plan.candidate_reviewers, [],
+    'the former "1-way (agy only)" mode has no candidate without --agy');
+  assert.deepEqual(withoutAgy.plan.routes, []);
+
+  const withAgy = await agyPlan(['--no-opus', '--no-codex', '--agy']);
+  assert.deepEqual(withAgy.plan.routes.map((r) => r.reviewer_id), ['agy'],
+    '--agy restores the documented agy-only mode');
 });

@@ -70,7 +70,8 @@ Claude Code slash commands and Codex skills are distinct host entrypoints for th
 **Composable reviewer flags**:
 
 - `--ultracode` — six focused Claude reviewer contexts collapsed into one "Claude(ultracode)" voice; an unavailable fan-out degrades visibly to one native Claude bridge.
-- `--codex` / `--no-codex` / `--no-opus` / `--no-agy`, and `--codex-only` (= `--codex --no-opus --no-agy`).
+- `--codex` / `--no-codex` / `--no-opus` / `--agy` / `--no-agy`, and `--codex-only` (= `--codex --no-opus --no-agy`).
+- **`agy` is opt-in and off by default.** A detected `agy` CLI is no longer elected on its own; pass `--agy` to enable it. This drops the default reviewer set from 4 to 3, which removes the spare that used to backfill a failed reviewer in high/critical implementation reviews. Two pre-existing combinations change: `--no-opus` now yields Codex-only routes (one provider family), and `--no-opus --no-codex` has no reviewer left. Add `--agy` to restore either. Opt-in governs reviewer dispatch and project access, not capability detection — the `agy --version` probe still runs.
 - `/deep-review-loop --ultracode --codex`: ultracode once (round 1) + codex every round.
 - Adaptive reviewer and automatic model routing are enabled by default for
   single reviews and loops. `--reviewer-strategy static` fixes the eligible

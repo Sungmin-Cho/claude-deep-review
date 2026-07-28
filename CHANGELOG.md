@@ -4,6 +4,19 @@
 
 All notable changes to deep-review are documented here. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] — 2026-07-28
+
+### Changed
+
+- **`agy` is now opt-in.** A detected `agy` CLI is no longer elected into the default reviewer set; `--agy` enables it and mirrors `--codex` by both permitting candidacy and requiring selection. An agy-targeting model or effort override restores candidacy without forcing selection, so existing invocations keep working.
+- **Default reviewer count drops from 4 to 3.** Verdict rules are unchanged (`N_actual`-driven), but the redundancy margin for the critical-implementation floor falls from 1 to 0: a single failed reviewer now reaches `no_unused_candidate` and then `critical_reviewer_floor` with no verdict. This is fail-closed and intentional; add `--agy` when that margin is needed.
+- **`--no-opus` and `--no-opus --no-codex` change.** The former now yields Codex-only routes (a single provider family, which caps `APPROVE` at `CONCERN`); the latter has no candidate left. Add `--agy` to restore either.
+- The config key `agy_enabled` is documented as inert. It never had a code consumer; the enforceable disable is `--no-agy`.
+
+### Security
+
+- Reviewer opt-in for `agy` is transported through argv only, so a repository-committed config file cannot elect it on the default routing path. This is **not** a security boundary for a repository that commits `review-policy.yaml` to disable automatic routing — that path is unchanged and is tracked separately.
+
 ## [2.1.0] — 2026-07-26
 
 ### Added

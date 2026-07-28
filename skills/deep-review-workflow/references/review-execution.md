@@ -136,7 +136,8 @@ duplicate the routing matrix in prose, or move model IDs through a shell
 string.
 
 1. Expand `--codex-only` to `--codex --no-opus --no-agy`.
-2. Reject `--ultracode` with `--no-opus`; reject `--codex` with `--no-codex`.
+2. Reject `--ultracode` with `--no-opus`; reject `--codex` with `--no-codex`;
+   reject `--agy` with `--no-agy` (and therefore with `--codex-only`).
 3. `--no-opus` disables `claude-opus`; `--no-codex` disables both
    `codex-review` and `codex-adversarial`; `--no-agy` disables `agy`.
 4. Native Codex generic subagents supply both `codex-review` and
@@ -145,7 +146,14 @@ string.
 5. A named Claude agent or the Claude CLI bridge supplies `claude-opus`.
    Forward `review_model` unchanged; it is a non-empty installed Claude model
    alias such as `fable`.
-6. Config value `agy_enabled: false` disables `agy` before privacy work.
+6. `agy` is **opt-in and is never a default candidate**. `defaultReviewers()`
+   in `classify-artifacts.mjs` admits it only when the emitted overrides carry
+   `enabled_providers` containing `agy`; `public-route.mjs` sets that from
+   `--agy` or from an agy-targeting model/effort override. `--agy` also sets
+   `required_providers`, because candidacy alone never wins a planner slot at a
+   small reviewer floor. This gate is code-owned — do not re-derive it here.
+   The legacy config key `agy_enabled` has **no code consumer** and never had
+   one; it is inert. The enforceable disable is `--no-agy`.
 
 `--no-agy`: skip the scan and preflight, create no state or config changes;
 this disabled privacy branch is a no-op. `--codex-only`: after expansion, skip
@@ -154,8 +162,10 @@ no-op privacy branch.
 
 ### 3.1 agy privacy preflight
 
-Run this only after §3.3 selects `agy`; an eligible but unselected agy performs
-no privacy work and creates no state. Invoke before any selected bridge can
+Run this only after the emitted routing plan (§3.2) carries an `agy` route; an
+eligible but unselected agy performs no privacy work and creates no state.
+`agy-privacy-preflight.mjs` has no opt-in check of its own, so this ordering is
+a prose gate, not a code guarantee. Invoke before any selected bridge can
 receive an `--add-dir` argument:
 
 ```text

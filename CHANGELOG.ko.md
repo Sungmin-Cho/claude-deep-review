@@ -4,6 +4,19 @@
 
 deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)와 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
+## [2.2.0] — 2026-07-28
+
+### 변경
+
+- **`agy` 가 opt-in 으로 바뀌었습니다.** `agy` CLI 가 탐지되어도 기본 리뷰어 집합에 들어가지 않습니다. `--agy` 로 켜며, `--codex` 와 동일하게 후보 자격과 선택을 모두 부여합니다. agy 를 겨냥한 model/effort 오버라이드는 후보 자격만 복원하고 선택을 강제하지 않으므로 기존 호출은 그대로 동작합니다.
+- **기본 리뷰어가 4→3 으로 줄어듭니다.** 판정 규칙은 그대로(`N_actual` 구동)지만 critical 구현 하한의 리던던시 마진이 1→0 이 됩니다 — 리뷰어 1건만 실패해도 `no_unused_candidate` 후 `critical_reviewer_floor` 에 도달해 판정이 나오지 않습니다. fail-closed 이며 의도된 동작입니다. 마진이 필요하면 `--agy` 를 추가하세요.
+- **`--no-opus` 와 `--no-opus --no-codex` 의 동작이 바뀝니다.** 전자는 Codex 단일 provider family 만 남아 `APPROVE` 가 `CONCERN` 으로 상한 처리되고, 후자는 남는 후보가 없습니다. 둘 다 `--agy` 로 복원합니다.
+- 설정 키 `agy_enabled` 는 비활성으로 문서화했습니다. 애초에 코드 소비자가 없었으며, 강제 가능한 비활성화 수단은 `--no-agy` 입니다.
+
+### 보안
+
+- `agy` opt-in 은 argv 로만 전달되므로 저장소가 커밋한 설정 파일이 기본 라우팅 경로에서 agy 를 선출할 수 없습니다. 다만 저장소가 `review-policy.yaml` 로 자동 라우팅을 끈 경우에 대해서는 **보안 경계가 아닙니다** — 그 경로는 변경되지 않았고 별건으로 추적합니다.
+
 ## [2.1.0] — 2026-07-26
 
 ### 추가

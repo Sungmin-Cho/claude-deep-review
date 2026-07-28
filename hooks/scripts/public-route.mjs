@@ -12,6 +12,7 @@ const REVIEW_FLAGS = new Set([
   '--no-codex',
   '--no-opus',
   '--no-agy',
+  '--agy',
 ]);
 
 const ROUTING_POLICIES = new Set(['auto', 'fast', 'balanced', 'quality']);
@@ -44,6 +45,11 @@ function validateReviewerFlags(argv) {
   }
   if (argv.includes('--codex') && argv.includes('--no-codex')) {
     return '--codex cannot be combined with --no-codex';
+  }
+  // --codex-only expands to --no-agy before this runs, so that combination is
+  // rejected here too.
+  if (argv.includes('--agy') && argv.includes('--no-agy')) {
+    return '--agy cannot be combined with --no-agy/--codex-only';
   }
   return null;
 }
@@ -262,6 +268,20 @@ function parseReview(argv, host, cwd, provenance = {}) {
   const requiredProviders = new Set();
   if (expanded.includes('--ultracode')) requiredReviewers.add('claude-opus');
   if (expanded.includes('--codex')) requiredProviders.add('codex');
+  // agy is not a default candidate. `--agy` mirrors `--codex`: it both permits
+  // candidacy and requires selection, because candidacy alone never wins a
+  // planner slot at a small reviewer floor. Pre-existing agy-targeting
+  // overrides only restore candidacy, so their required-ness stays as it is
+  // today and a privacy decline cannot void the whole verdict.
+  if (expanded.includes('--agy')) requiredProviders.add('agy');
+  const enabledProviders = new Set();
+  if (expanded.includes('--agy')
+    || Object.hasOwn(overrides.providers, 'agy')
+    || Object.hasOwn(overrides.reviewers, 'agy')) enabledProviders.add('agy');
+  if (enabledProviders.size > 0) {
+    overrides.enabled_providers = [...enabledProviders].sort();
+    hasOverrides = true;
+  }
   if (requiredReviewers.size > 0) {
     overrides.required_reviewers = [...requiredReviewers].sort();
     hasOverrides = true;

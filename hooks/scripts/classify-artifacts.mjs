@@ -350,6 +350,17 @@ function validateOverrides(value) {
       throw new Error('--overrides-json disabled_providers must be a unique array of claude, codex, or agy');
     }
   }
+  // enabled_providers is the permissive counterpart: it restores candidacy for
+  // a provider that is not a default candidate (today only agy). It never
+  // forces selection — `--agy` transports that through required_providers.
+  if (value.enabled_providers !== undefined) {
+    const providers = value.enabled_providers;
+    const known = new Set(['claude', 'codex', 'agy']);
+    if (!Array.isArray(providers) || providers.some((provider) => !known.has(provider))
+        || new Set(providers).size !== providers.length) {
+      throw new Error('--overrides-json enabled_providers must be a unique array of claude, codex, or agy');
+    }
+  }
   if (value.required_providers !== undefined) {
     const providers = value.required_providers;
     const known = new Set(['claude', 'codex', 'agy']);
@@ -447,7 +458,12 @@ function defaultReviewers(capabilities, overrides) {
     reviewers.push({ id: 'codex-review', provider: 'codex', role: 'standard', adapter_id: codexAdapter });
     reviewers.push({ id: 'codex-adversarial', provider: 'codex', role: 'adversarial', adapter_id: codexAdapter });
   }
-  if (has('agy-cli')) reviewers.push({ id: 'agy', provider: 'agy', role: 'standard', adapter_id: 'agy-cli' });
+  // agy is opt-in: capability detection alone never elects it. Candidacy is
+  // restored only by an explicit argv signal transported as enabled_providers
+  // (`--agy`, or a pre-existing agy-targeting model/effort override).
+  if (has('agy-cli') && (overrides?.enabled_providers || []).includes('agy')) {
+    reviewers.push({ id: 'agy', provider: 'agy', role: 'standard', adapter_id: 'agy-cli' });
+  }
   return reviewers;
 }
 

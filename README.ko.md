@@ -70,7 +70,8 @@ Claude Code 슬래시 커맨드와 Codex 스킬은 동일한 라우트 문법을
 **합성 리뷰어 플래그**:
 
 - `--ultracode` — 6개 집중 Claude reviewer context를 단일 "Claude(ultracode)" 보이스로 collapse하며, fan-out 불가 시 하나의 네이티브 Claude 브리지로 명시적으로 degrade.
-- `--codex` / `--no-codex` / `--no-opus` / `--no-agy`, 슈가 `--codex-only`(= `--codex --no-opus --no-agy`).
+- `--codex` / `--no-codex` / `--no-opus` / `--agy` / `--no-agy`, 슈가 `--codex-only`(= `--codex --no-opus --no-agy`).
+- **`agy` 는 기본 비활성(opt-in)입니다.** `agy` CLI 가 탐지되어도 더 이상 자동 선택되지 않으며, `--agy` 로 켭니다. 기본 리뷰어가 4→3 으로 줄어 high/critical 구현 리뷰에서 실패 1건을 보충하던 여유가 사라집니다. 기존 조합 두 가지가 바뀝니다 — `--no-opus` 는 Codex 단일 provider family 만 남고, `--no-opus --no-codex` 는 남는 리뷰어가 없습니다. 둘 다 `--agy` 로 복원합니다. opt-in 은 리뷰어 디스패치와 프로젝트 접근을 통제하며 capability 탐지는 통제하지 않습니다 — `agy --version` 프로브는 계속 실행됩니다.
 - `/deep-review-loop --ultracode --codex`: ultracode 1회(라운드 1) + codex 매 라운드.
 - 단발 리뷰와 loop 모두 adaptive reviewer routing과 automatic model
   routing이 기본 활성화됩니다. `--reviewer-strategy static`은 eligible set을
