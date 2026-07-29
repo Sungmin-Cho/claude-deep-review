@@ -52,7 +52,7 @@ Owns the trusted state machine:
 - `recover`: exact worktree and index restoration from snapshot authority;
 - `commit`: verification-receipt-bound path commit and pre-staged confirmation.
 
-### `agents/phase6-implementer.md`
+### `{plugin_root}/agents/phase6-implementer.md`
 
 Defines the mechanical item loop, runner priority, JSON argv contract, result
 schema, write allowlist, and recursion prohibition. Claude uses its frontmatter;
@@ -60,9 +60,9 @@ Codex reads the same file as instruction data before editing.
 
 ### Skills and references
 
-`respond-execution.md` is the orchestration SSOT. `phase6-prompt-contract.md`
-owns the shared prompt/result schemas. `response-protocol.md` owns judgment and
-PR trust classification. `response-format.md` owns the published report.
+`{plugin_root}/skills/receiving-review/references/respond-execution.md` is the orchestration SSOT. `{plugin_root}/skills/receiving-review/references/phase6-prompt-contract.md`
+owns the shared prompt/result schemas. `{plugin_root}/skills/receiving-review/references/response-protocol.md` owns judgment and
+PR trust classification. `{plugin_root}/skills/receiving-review/references/response-format.md` owns the published report.
 
 ## 4. Data flow
 
@@ -197,7 +197,7 @@ Automated tests cover:
 - missing log, outside delta, and HEAD fail-closed cases;
 - pre-staged confirmation with invariant HEAD and index before consent;
 - Claude/Codex prompt parity and recursion prohibition;
-- response references, including `response-format.md`, remaining free of
+- response references, including `{plugin_root}/skills/receiving-review/references/response-format.md`, remaining free of
   executable host-specific recipes;
 - current Node and exact supported Node 22 execution.
 

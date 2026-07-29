@@ -132,7 +132,8 @@ Apply reviewer-count rules before Respond:
 - `N_actual == 0`: stop with operational failure; no verdict is trusted.
 - `N_actual == 1`: Critical or security is `REQUEST_CHANGES`, Warning-only is
   `CONCERN`, and no blocking issue is `APPROVE`.
-- Larger sets use the synthesis contract in `review-execution.md`.
+- Larger sets use the synthesis contract in
+  `{plugin_root}/skills/deep-review-workflow/references/review-execution.md`.
 
 Review synthesis is two-wave at most. First produce a provisional result with
 `review-synthesis.mjs`. When it reports `needs_expansion`, dispatch exactly one

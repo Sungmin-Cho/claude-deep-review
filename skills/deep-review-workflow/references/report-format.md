@@ -28,7 +28,7 @@
 | (issue) | ✓ / – | ✓ / – | ✓ / – | ✓ / – | unanimous_4 / majority_3_of_4 / split_2_of_4 / solo_1_of_4 |
 
 > For N < 4 modes, the agy column is omitted (or shown as `(not run)`).
-> **XF-1**: When `claude_reviewer = ultracode-fanout`, render the "Claude (Opus)" column header as **"Claude (ultracode)"** — the cell holds the single collapsed voice (1 Anthropic vote; see [`ultracode-integration.md`](./ultracode-integration.md) §4).
+> **XF-1**: When `claude_reviewer = ultracode-fanout`, render the "Claude (Opus)" column header as **"Claude (ultracode)"** — the cell holds the single collapsed voice (1 Anthropic vote; see [`{plugin_root}/skills/deep-review-workflow/references/ultracode-integration.md`](./ultracode-integration.md) §4).
 
 ## Routing Plan
 
@@ -107,8 +107,8 @@ when no checks passed.
 - 🟡만 있고 전원 일치 (N_actual ≥ 2) → REQUEST_CHANGES
 - 🟡만 있고 의견 분리 → CONCERN (사람에게 에스컬레이션)
 - 🟢만 → APPROVE
-- **N_actual == 1 예외**: "🟡만 있고 전원 일치" 규칙 부적용 — N=1 이면 단독 리뷰어 전용 분기(🔴 1건 이상 → REQUEST_CHANGES(critical/security 단독 blocking) / 🟡만 → CONCERN / 🟢 → APPROVE)가 최종(final)이다(🟡 1건 = 전원 일치가 자명하므로 게이트 없이 두면 REQUEST_CHANGES 로 무력화되고, 🔴 은 severity 자체가 blocking 이라 단독이라도 REQUEST_CHANGES 유지). 전용 분기 정의의 SSOT 는 [`review-execution.md`](./review-execution.md) §5.1 N_actual == 1 전용 분기.
-- 🔴/🟡 판정은 `review-criteria.md`의 "severity 부여 원칙"(영향×도달 가능성, 보수적 기본값)을 따른다.
+- **N_actual == 1 예외**: "🟡만 있고 전원 일치" 규칙 부적용 — N=1 이면 단독 리뷰어 전용 분기(🔴 1건 이상 → REQUEST_CHANGES(critical/security 단독 blocking) / 🟡만 → CONCERN / 🟢 → APPROVE)가 최종(final)이다(🟡 1건 = 전원 일치가 자명하므로 게이트 없이 두면 REQUEST_CHANGES 로 무력화되고, 🔴 은 severity 자체가 blocking 이라 단독이라도 REQUEST_CHANGES 유지). 전용 분기 정의의 SSOT 는 [`{plugin_root}/skills/deep-review-workflow/references/review-execution.md`](./review-execution.md) §5.1 N_actual == 1 전용 분기.
+- 🔴/🟡 판정은 `{plugin_root}/skills/deep-review-workflow/references/review-criteria.md`의 "severity 부여 원칙"(영향×도달 가능성, 보수적 기본값)을 따른다.
 
 ### Per-finding annotations (4-way mode)
 
@@ -134,4 +134,4 @@ This is deterministic (no AskUserQuestion at synthesis) — see spec §4.3.1 for
 
 ### `opus_status` under ultracode fan-out (CONS-10)
 
-ultracode 모드에서 "opus"는 6샤드이므로 degraded 마커가 키로 쓰는 단일 `opus_status` 를 샤드 성공 수 K 의 **disjoint quorum 밴드**(우선순위 failed→partial→success)로 collapse 한다: **`failed` iff K=0; `partial` iff 1 ≤ K < 쿼럼(=4); `success` iff K ≥ 쿼럼(=4).** degraded 마커(`opus_status != success AND N_actual_external ≤ 1`)는 이 collapse 값(K<4 이면 success 아님)으로 평가되어 결정성을 유지한다. 정의 단일 출처는 [`ultracode-integration.md`](./ultracode-integration.md) §2(B).
+ultracode 모드에서 "opus"는 6샤드이므로 degraded 마커가 키로 쓰는 단일 `opus_status` 를 샤드 성공 수 K 의 **disjoint quorum 밴드**(우선순위 failed→partial→success)로 collapse 한다: **`failed` iff K=0; `partial` iff 1 ≤ K < 쿼럼(=4); `success` iff K ≥ 쿼럼(=4).** degraded 마커(`opus_status != success AND N_actual_external ≤ 1`)는 이 collapse 값(K<4 이면 success 아님)으로 평가되어 결정성을 유지한다. 정의 단일 출처는 [`{plugin_root}/skills/deep-review-workflow/references/ultracode-integration.md`](./ultracode-integration.md) §2(B).

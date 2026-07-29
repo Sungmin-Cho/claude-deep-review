@@ -103,10 +103,16 @@ test('Stage 5.5 executable reference is shell-free and delegates discovery to th
     'utf8',
   );
   assert.doesNotMatch(source, /```(?:sh|shell|bash)/i);
+  // Anchored at {plugin_root}. The bare-basename spelling this used to pin was the
+  // arbitrary-code-execution shape the reference guard exists to catch: `node <name>`
+  // resolves against cwd, cwd is the analysed workspace, and a planted file there runs
+  // with the caller's permissions. The flags are unchanged — only the path moved.
   assert.match(
     source,
-    /node wrap-recurring-findings-envelope\.js --payload-file FILE --output FILE --discover-sources-from PROJECT_ROOT/,
+    /node \{plugin_root\}\/hooks\/scripts\/wrap-recurring-findings-envelope\.js --payload-file FILE --output FILE --discover-sources-from PROJECT_ROOT/,
   );
+  assert.doesNotMatch(source, /(?<![\/])\bnode wrap-recurring-findings-envelope\.js/,
+    'the unanchored spelling must not come back');
   assert.match(source, /payload.{0,100}preserv/is);
   assert.match(source, /nonzero|non-zero/i);
 });

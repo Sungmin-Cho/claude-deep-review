@@ -1,6 +1,6 @@
 # agy integration
 
-agy is an optional independent reviewer. `review-execution.md` resolves flags
+agy is an optional independent reviewer. `{plugin_root}/skills/deep-review-workflow/references/review-execution.md` resolves flags
 and role eligibility before this reference is used.
 
 ## Privacy gate

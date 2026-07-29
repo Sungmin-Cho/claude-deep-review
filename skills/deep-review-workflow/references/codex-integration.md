@@ -1,6 +1,6 @@
 # Codex integration
 
-`runtime-dispatch.md` owns role selection. This file owns Codex execution and
+`{plugin_root}/skills/deep-review-workflow/references/runtime-dispatch.md` owns role selection. This file owns Codex execution and
 cross-model synthesis after the public route has resolved `plugin_root`.
 
 ## Roles
@@ -24,7 +24,7 @@ does not guarantee that writes cannot happen:
 const codexReviewOptions = {
   task_name: `codex-review-round-${roundNumber}-${invocationNonce}`,
   fork_turns: "none",
-  message: "Read agents/code-reviewer.md, then the codex-review route-specific payload; stay read-only and return report-format.md"
+  message: "Read {plugin_root}/agents/code-reviewer.md, then the codex-review route-specific payload; stay read-only and return {plugin_root}/skills/deep-review-workflow/references/report-format.md"
 }
 if (codexReviewRoute.resolved.model !== null) codexReviewOptions.model = codexReviewRoute.resolved.model
 if (codexReviewRoute.resolved.effort !== null) codexReviewOptions.reasoning_effort = codexReviewRoute.resolved.effort
@@ -33,7 +33,7 @@ spawn_agent(codexReviewOptions)
 const codexAdversarialOptions = {
   task_name: `codex-adversarial-round-${roundNumber}-${invocationNonce}`,
   fork_turns: "none",
-  message: "Read agents/code-reviewer.md, then the codex-adversarial route-specific payload; stay read-only and return report-format.md"
+  message: "Read {plugin_root}/agents/code-reviewer.md, then the codex-adversarial route-specific payload; stay read-only and return {plugin_root}/skills/deep-review-workflow/references/report-format.md"
 }
 if (codexAdversarialRoute.resolved.model !== null) codexAdversarialOptions.model = codexAdversarialRoute.resolved.model
 if (codexAdversarialRoute.resolved.effort !== null) codexAdversarialOptions.reasoning_effort = codexAdversarialRoute.resolved.effort
@@ -82,6 +82,6 @@ only materially identical issues. Preserve each role's agreement and dissent:
 - with four: unanimous, majority three of four, split two of four, or solo.
 
 `N_actual` is the number of trusted successful roles, not the number requested.
-Apply the N=0/N=1 rules in `review-execution.md` before ordinary consensus.
+Apply the N=0/N=1 rules in `{plugin_root}/skills/deep-review-workflow/references/review-execution.md` before ordinary consensus.
 Ultracode's collapsed output remains one Anthropic voice. A failed or untrusted
 role is named in Summary and contributes no vote.

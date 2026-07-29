@@ -105,7 +105,7 @@ agent의 5번째 원칙과 동일한 심각도(🔴 Critical, taxonomy `security
 - 공통 유틸리티가 필요한가?
 ```
 
-**소유권**: 분류/매칭/경고는 이 문서(response-protocol.md Phase 1)가 단일 소스다. SKILL.md와 respond-execution.md는 요약만 포함하고 상세는 이 섹션을 참조한다.
+**소유권**: 분류/매칭/경고는 이 문서({plugin_root}/skills/receiving-review/references/response-protocol.md Phase 1)가 단일 소스다. SKILL.md와 {plugin_root}/skills/receiving-review/references/respond-execution.md는 요약만 포함하고 상세는 이 섹션을 참조한다.
 
 ---
 
@@ -169,7 +169,7 @@ verification:
 
 ### Source별 판단 기준 (신뢰도 매트릭스 상위 참조)
 
-> 기본 신뢰도와 검증 수준의 단일 소스는 `../SKILL.md`의 "Source 신뢰도 매트릭스"다. 본 표는 그 전제 위에 **각 소스에서 accept/reject 판단 시 어떤 행동을 취할지** 정의한다.
+> 기본 신뢰도와 검증 수준의 단일 소스는 `{plugin_root}/skills/receiving-review/SKILL.md`의 "Source 신뢰도 매트릭스"다. 본 표는 그 전제 위에 **각 소스에서 accept/reject 판단 시 어떤 행동을 취할지** 정의한다.
 
 | Source | 판단 기준 |
 |--------|-----------|
@@ -264,11 +264,11 @@ Phase 6는 심각도 그룹(🔴 → 🟡 → ℹ️)별 group dispatch다. Main
 
 | 영역 | 단일 소스 |
 |---|---|
-| Main의 구현 절차 (snapshot, dispatch, verify, commit, recover) | `skills/receiving-review/references/respond-execution.md` Phase 6 loop |
-| Main↔Subagent 입출력 계약 | `references/phase6-prompt-contract.md` |
-| 설계 배경·결정 사항 | `references/phase6-delegation-spec.md` |
-| Subagent의 구현 절차 | `agents/phase6-implementer.md` 시스템 프롬프트 |
-| 실행 검증 | `hooks/scripts/phase6-protocol.mjs` + `tests/phase6-protocol.test.js` |
+| Main의 구현 절차 (snapshot, dispatch, verify, commit, recover) | `{plugin_root}/skills/receiving-review/references/respond-execution.md` Phase 6 loop |
+| Main↔Subagent 입출력 계약 | `{plugin_root}/skills/receiving-review/references/phase6-prompt-contract.md` |
+| 설계 배경·결정 사항 | `{plugin_root}/skills/receiving-review/references/phase6-delegation-spec.md` |
+| Subagent의 구현 절차 | `{plugin_root}/agents/phase6-implementer.md` 시스템 프롬프트 |
+| 실행 검증 | `{plugin_root}/hooks/scripts/phase6-protocol.mjs` + `{plugin_root}/tests/phase6-protocol.test.js` |
 
 **불변량 요약** (스킬 단독 로드 시 최소 보장 — 세부는 위 단일 소스 참조):
 

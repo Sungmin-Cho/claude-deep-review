@@ -21,8 +21,8 @@ does not create an additional `N_actual` voice.
 | public review/respond entry | `/deep-review` command shim | `$deep-review:deep-review` |
 | loop entry | `/deep-review-loop` | `$deep-review:deep-review-loop` |
 | independent Claude reviewer | named `Agent(code-reviewer)` or Node Claude bridge | Node Claude bridge when CLI exists |
-| Codex standard reviewer | Node Codex exec bridge | generic subagent that reads `agents/code-reviewer.md` |
-| Codex adversarial reviewer | Node Codex exec bridge | generic subagent that reads `agents/code-reviewer.md` |
+| Codex standard reviewer | Node Codex exec bridge | generic subagent that reads `{plugin_root}/agents/code-reviewer.md` |
+| Codex adversarial reviewer | Node Codex exec bridge | generic subagent that reads `{plugin_root}/agents/code-reviewer.md` |
 | agy reviewer | Node agy bridge | Node agy bridge |
 
 ## Selection invariants

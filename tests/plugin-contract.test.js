@@ -362,12 +362,44 @@ test('bilingual READMEs describe reviewer dispatch as serial and trust-gated', (
   assert.doesNotMatch(korean, /리뷰가 병렬로 실행|병렬 교차 모델 검증/iu);
 });
 
-test('agent guides are concise, version-free, and use the portable version command', () => {
-  for (const guide of ['CLAUDE.md', 'AGENTS.md']) {
-    const source = read(guide);
-    assert.ok(source.split(/\r?\n/u).length <= 100, `${guide} is not concise`);
-    assert.match(source, /docs\/DOCS_RULE\.md/u);
-    assert.match(source, /node -p "require\('\.\/package\.json'\)\.version"/u);
-    assert.doesNotMatch(source, /\b\d+\.\d+\.\d+\b/u);
+test('the Claude guide is a thin wrapper over the single source', () => {
+  // AGENTS.md is self-contained because Codex has no `@` import; CLAUDE.md is the
+  // line-1 import plus Claude-only remainder. Before the split both files carried the
+  // same runtime surfaces, release invariants and verification block in two
+  // phrasings — two definitions of one contract, and the place a stale absolute path
+  // survived in both copies at once. These assertions stop it drifting back.
+  const claude = read('CLAUDE.md');
+  assert.match(claude.split(/\r?\n/u)[0], /^@AGENTS\.md$/u,
+    'CLAUDE.md must open by importing the single source');
+  assert.ok(claude.length < 2048, `CLAUDE.md is ${claude.length}B — remainder only, not a second guide`);
+  assert.doesNotMatch(claude, /^## Release invariants/mu, 'the invariants live in AGENTS.md, once');
+  assert.doesNotMatch(read('AGENTS.md'), /^@/mu,
+    'AGENTS.md must not import anything — Codex does not support it');
+});
+
+test('the agent guide is concise, version-free, and uses the portable version command', () => {
+  // Asserted on AGENTS.md alone now: it is the guide. CLAUDE.md is pinned as a
+  // wrapper by the test above, and requiring it to restate the version command and
+  // the DOCS_RULE caveat is what made the duplication a contract in the first place.
+  const source = read('AGENTS.md');
+  assert.ok(source.split(/\r?\n/u).length <= 100, 'AGENTS.md is not concise');
+  assert.match(source, /docs\/DOCS_RULE\.md/u);
+  // Anchored, and a file read rather than a module load. Unanchored it reports the
+  // analysed project's version; as a JS specifier a plugin path has no safe spelling,
+  // because nothing substitutes a documentation placeholder inside JS.
+  assert.match(source, /readFileSync\('\{plugin_root\}\/package\.json'/u);
+  assert.doesNotMatch(source, /require\('\.\/package\.json'\)/u);
+  assert.doesNotMatch(source, /\b\d+\.\d+\.\d+\b/u);
+});
+
+test('no shipped instruction file hardcodes an absolute home directory', () => {
+  // Both guides carried `python3 /Users/<name>/.codex/skills/.../validate_plugin.py .`
+  // — a maintainer-local absolute path in an always-loaded surface. It resolves to
+  // nothing on every other machine, and on a machine under analysis it resolves to
+  // whatever happens to sit there.
+  const offenders = [];
+  for (const f of ['AGENTS.md', 'CLAUDE.md', 'README.md', 'README.ko.md', 'CONTRIBUTING.md']) {
+    if (/(?:^|\s)\/(?:Users|home)\/[A-Za-z0-9._-]+\//u.test(read(f))) offenders.push(f);
   }
+  assert.deepEqual(offenders, [], 'absolute home paths must not ship in instruction files');
 });
