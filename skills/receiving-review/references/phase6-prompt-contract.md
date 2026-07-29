@@ -1,7 +1,7 @@
 # Phase 6 Prompt Contract
 
 This is the single contract for main, the Claude named implementer, and the
-Codex generic implementer. `respond-execution.md` owns orchestration;
+Codex generic implementer. `{plugin_root}/skills/receiving-review/references/respond-execution.md` owns orchestration;
 `phase6-protocol.mjs` owns snapshot, process logging, verification, recovery,
 and commit state transitions.
 
@@ -99,7 +99,7 @@ select the agent frontmatter's `model: sonnet`.
 ### Codex
 
 Codex uses one generic subagent for the group. Its host prefix requires the
-first action to read the absolute `agents/phase6-implementer.md` in full,
+first action to read the absolute `{plugin_root}/agents/phase6-implementer.md` in full,
 forbids nested dispatch, and states that the shared prompt is authoritative.
 It then appends `shared_group_prompt` without reformatting the Accepted Items
 block. A Codex generic subagent does not claim the Claude model selection.

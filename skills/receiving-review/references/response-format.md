@@ -10,7 +10,7 @@
 ## 디렉토리
 
 `.deep-review/responses/`와 최종 파일은
-`hooks/scripts/respond-runtime.mjs write-report`가 생성한다. Main은 완성된
+`{plugin_root}/hooks/scripts/respond-runtime.mjs write-report`가 생성한다. Main은 완성된
 UTF-8 본문을 private content file로 전달하고, runtime이 충돌하지 않는
 이름으로 원자적으로 publish한 절대 경로를 사용한다. Runtime을 호출할 수
 없는 host는 direct host file-creation tool로 동일한 unique-create 의미론을
@@ -131,4 +131,4 @@ PR 코멘트 게시(`gh api .../replies`)는 rate limit / 네트워크 오류 / 
 | `mixed` | 일부 그룹은 subagent, 일부는 main fallback (중간 그룹에서 dispatch 실패 시) |
 | `n/a` | ACCEPT 항목 0건으로 Phase 6 전체 skip |
 
-결정 절차는 `skills/receiving-review/references/respond-execution.md` Step 2.5(Phase 6 subagent dispatch) 및 스펙 §5.4 결정표 참조.
+결정 절차는 `{plugin_root}/skills/receiving-review/references/respond-execution.md` Step 2.5(Phase 6 subagent dispatch) 및 스펙 §5.4 결정표 참조.

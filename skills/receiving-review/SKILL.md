@@ -15,15 +15,15 @@ user-invocable: false
 
 ## 참조 문서 (on-demand Read)
 
-- `references/response-protocol.md` — 6단계 대응 프로토콜 상세
-- `references/forbidden-patterns.md` — 금지 표현 + 합리화 차단 테이블
-- `references/response-format.md` — Response 리포트 형식
-- `references/phase6-prompt-contract.md` — **Phase 6 진입 시 반드시 참조**.
+- `{plugin_root}/skills/receiving-review/references/response-protocol.md` — 6단계 대응 프로토콜 상세
+- `{plugin_root}/skills/receiving-review/references/forbidden-patterns.md` — 금지 표현 + 합리화 차단 테이블
+- `{plugin_root}/skills/receiving-review/references/response-format.md` — Response 리포트 형식
+- `{plugin_root}/skills/receiving-review/references/phase6-prompt-contract.md` — **Phase 6 진입 시 반드시 참조**.
   Claude named/fallback과 Codex generic subagent가 byte-identical Accepted Items를
   공유하는 prompt/result 정식 계약.
-- `references/phase6-delegation-spec.md` — capability-based host dispatch,
+- `{plugin_root}/skills/receiving-review/references/phase6-delegation-spec.md` — capability-based host dispatch,
   Node snapshot/verify/recover/confirmation 설계 배경과 edge cases.
-- `references/respond-execution.md` — `--respond` 전체 실행 절차 SSOT. `commands/deep-review.md` 의 `--respond` 분기에서 on-demand Read 되어 수행된다.
+- `{plugin_root}/skills/receiving-review/references/respond-execution.md` — `--respond` 전체 실행 절차 SSOT. `{plugin_root}/commands/deep-review.md` 의 `--respond` 분기에서 on-demand Read 되어 수행된다.
 
 ## 대응 원칙
 
@@ -35,7 +35,7 @@ user-invocable: false
 
 ## Source 신뢰도 매트릭스 (단일 소스)
 
-피드백 출처에 따라 기본 신뢰도와 검증 수준이 달라진다. **이 표가 신뢰도의 단일 소스다** — Phase 4(EVALUATE)의 구체적 판단 기준은 `references/response-protocol.md`에서 이 표를 전제로 한 행동 규칙을 제시한다. README의 요약 표는 사용자 안내용이며, 상충 시 본 표를 우선한다.
+피드백 출처에 따라 기본 신뢰도와 검증 수준이 달라진다. **이 표가 신뢰도의 단일 소스다** — Phase 4(EVALUATE)의 구체적 판단 기준은 `{plugin_root}/skills/receiving-review/references/response-protocol.md`에서 이 표를 전제로 한 행동 규칙을 제시한다. README의 요약 표는 사용자 안내용이며, 상충 시 본 표를 우선한다.
 
 | Source | 기본 신뢰도 | 검증 수준 |
 |--------|-------------|-----------|
@@ -54,7 +54,7 @@ user-invocable: false
 
 ## 6단계 대응 프로토콜 (요약)
 
-각 단계의 상세 절차는 `references/response-protocol.md` 참조.
+각 단계의 상세 절차는 `{plugin_root}/skills/receiving-review/references/response-protocol.md` 참조.
 
 ### Phase 1: READ — 전체 피드백 읽기
 반응하지 않고 전체를 먼저 읽는다. 항목 간 관계를 파악한다.
@@ -76,7 +76,7 @@ Source별 신뢰도 매트릭스에 따라 판단. Cross-model disagreement 처�
 agent contract를 먼저 읽는 generic subagent를 사용한다. 두 host는 같은
 Accepted Items prompt와 `phase6-protocol.mjs` snapshot/run-test/verify/recover/
 commit을 사용한다. Main은 Node verify를 항상 실행하고 error 또는 회귀에서
-다음 그룹을 중단한다. 상세는 `references/respond-execution.md` 참조.
+다음 그룹을 중단한다. 상세는 `{plugin_root}/skills/receiving-review/references/respond-execution.md` 참조.
 
 ## 구현 우선순위 (Verdict 연동)
 
@@ -88,16 +88,16 @@ commit을 사용한다. Main은 Node verify를 항상 실행하고 error 또는 
 
 ## Recurring Findings 연동
 
-상세 분류/매칭 로직은 `references/response-protocol.md` Phase 1(READ)의 **Recurring Findings 분류** 섹션을 단일 소스로 한다. 본 SKILL.md는 개요만 제공한다:
+상세 분류/매칭 로직은 `{plugin_root}/skills/receiving-review/references/response-protocol.md` Phase 1(READ)의 **Recurring Findings 분류** 섹션을 단일 소스로 한다. 본 `{plugin_root}/skills/receiving-review/SKILL.md`는 개요만 제공한다:
 
 - Phase 1(READ)에서 각 리뷰 항목을 7개 taxonomy 카테고리로 LLM 분류.
 - `.deep-review/recurring-findings.json`의 같은 카테고리 occurrences가 3회 이상이면 자동 경고를 출력하고 해당 항목을 "근본 원인 분석 권장"으로 표시.
-- 경고 메시지 템플릿과 카테고리 정의는 `response-protocol.md` 참조.
+- 경고 메시지 템플릿과 카테고리 정의는 `{plugin_root}/skills/receiving-review/references/response-protocol.md` 참조.
 
 ## Response 리포트
 
 대응 완료 후 `.deep-review/responses/{YYYY-MM-DD}-{HHmmss}-response.md`에 기록.
-형식은 `references/response-format.md` 참조.
+형식은 `{plugin_root}/skills/receiving-review/references/response-format.md` 참조.
 
 ## Re-review 제안
 

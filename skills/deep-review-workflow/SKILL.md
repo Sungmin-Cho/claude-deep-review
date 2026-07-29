@@ -11,15 +11,15 @@ invoke `$deep-review:deep-review` or its `/deep-review` Claude adapter.
 
 ## Reference map
 
-- `references/runtime-dispatch.md` — capability-based entry and reviewer matrix
-- `references/review-execution.md` — executable review pipeline
-- `references/review-criteria.md` — six review lenses and severity doctrine
-- `references/codex-integration.md` — Codex roles and synthesis
-- `references/agy-integration.md` — privacy-gated agy role
-- `references/ultracode-integration.md` — optional six-lens Claude fan-out
-- `references/recurring-findings-export.md` — Stage 5.5 export
-- `references/init-setup.md` — public init terminal branch
-- `references/contract-schema.md` and `references/report-format.md` — data contracts
+- `{plugin_root}/skills/deep-review-workflow/references/runtime-dispatch.md` — capability-based entry and reviewer matrix
+- `{plugin_root}/skills/deep-review-workflow/references/review-execution.md` — executable review pipeline
+- `{plugin_root}/skills/deep-review-workflow/references/review-criteria.md` — six review lenses and severity doctrine
+- `{plugin_root}/skills/deep-review-workflow/references/codex-integration.md` — Codex roles and synthesis
+- `{plugin_root}/skills/deep-review-workflow/references/agy-integration.md` — privacy-gated agy role
+- `{plugin_root}/skills/deep-review-workflow/references/ultracode-integration.md` — optional six-lens Claude fan-out
+- `{plugin_root}/skills/deep-review-workflow/references/recurring-findings-export.md` — Stage 5.5 export
+- `{plugin_root}/skills/deep-review-workflow/references/init-setup.md` — public init terminal branch
+- `{plugin_root}/skills/deep-review-workflow/references/contract-schema.md` and `{plugin_root}/skills/deep-review-workflow/references/report-format.md` — data contracts
 
 The reviewed runtime-reference file map is the list above. Every executable
 review or loop path uses `.mjs`/`.js` helpers or direct host tools.

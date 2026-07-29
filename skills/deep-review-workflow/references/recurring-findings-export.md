@@ -11,7 +11,7 @@ Run after a review report is written. Skip when fewer than two canonical
 > "two canonical reports" gate above and the occurrence counting below, or a
 > single real round report plus the aggregate could trip the ≥2 gate, and the
 > aggregate's re-listed round findings could inflate occurrence totals. The rule
-> is the shared predicate `hooks/scripts/lib/session-doc.js`
+> is the shared predicate `{plugin_root}/hooks/scripts/lib/session-doc.js`
 > `isSessionDocReportName` (the same one the Node enumerators use): any report
 > whose basename matches `loop-<id>-review.md` (the `loop-` prefix — canonical
 > round reports are always timestamp-prefixed, `{YYYY-MM-DD}-{HHmmss}-review.md`)
@@ -56,7 +56,7 @@ Resolve the absolute helper path from the runtime `plugin_root`, and invoke the
 equivalent argv sequence:
 
 ```text
-node wrap-recurring-findings-envelope.js --payload-file FILE --output FILE --discover-sources-from PROJECT_ROOT
+node {plugin_root}/hooks/scripts/wrap-recurring-findings-envelope.js --payload-file FILE --output FILE --discover-sources-from PROJECT_ROOT
 ```
 
 `--discover-sources-from` performs deterministic Node filesystem discovery. It

@@ -2,7 +2,7 @@
 
 This file is executed only by the public skill's terminal review branch. Host
 labels are diagnostic; capabilities decide the reviewer set. Read
-`runtime-dispatch.md` before dispatch.
+`{plugin_root}/skills/deep-review-workflow/references/runtime-dispatch.md` before dispatch.
 
 ## 0. Runtime root and state
 
@@ -19,8 +19,8 @@ Use the host's direct directory/file tools to ensure `.deep-review/reports`,
 part of this workflow.
 
 If `.deep-review/config.yaml` is absent, create it with the defaults in
-`init-setup.md` through a direct host file tool. If it predates the agy fields,
-use `lib/config.mjs` `patchTopLevelConfig` to add each missing scalar
+`{plugin_root}/skills/deep-review-workflow/references/init-setup.md` through a direct host file tool. If it predates the agy fields,
+use `{plugin_root}/hooks/scripts/lib/config.mjs` `patchTopLevelConfig` to add each missing scalar
 independently: `agy_notified=false`, `agy_enabled=true`, empty acknowledgment
 fingerprint/timestamp, and `agy_fingerprint_mode=hybrid`. Never reset an
 existing value and never replace the whole file during migration.
@@ -229,7 +229,7 @@ provenance. Protocol `2.0` plans remain readable. Stage 4 leaf adapters consume
 only their own route by path and reviewer id; they do not reinterpret provider
 or reviewer flags.
 
-After the plan exists, invoke `build-reviewer-payload.mjs` once per selected
+After the plan exists, invoke `{plugin_root}/hooks/scripts/build-reviewer-payload.mjs` once per selected
 route:
 
 ```text
@@ -287,7 +287,7 @@ authentication, empty-output, or unavailable-model status exactly as emitted.
 On native Codex, create two separate subagents with different subagent IDs.
 Each leaf reads the absolute `{plugin_root}/agents/code-reviewer.md`, then only
 its route-specific payload, stays strictly read-only, inspects the target
-repository, and returns the `report-format.md` contract. Neither receives
+repository, and returns the `{plugin_root}/skills/deep-review-workflow/references/report-format.md` contract. Neither receives
 generator history. Native `spawn_agent` has no enforceable tool allowlist; the
 read-only instruction is paired with fingerprint-based trust rejection:
 
@@ -341,7 +341,7 @@ untrusted even if the process produced report text.
 
 ### 4.5 `--ultracode`
 
-Follow `ultracode-integration.md`.
+Follow `{plugin_root}/skills/deep-review-workflow/references/ultracode-integration.md`.
 Ultracode may launch its eligible lens contexts in fresh background contexts.
 Six lenses collapse to one Anthropic voice; they never increase `N_actual`
 above one for the Claude family. The loop may request ultracode only on its
@@ -351,7 +351,7 @@ first round.
 
 For every attempted role, serialize `role`, raw `output`, and the pre/post
 fingerprint results to a private `attempts` JSON array. When at least two roles
-remain trusted, perform the issue matching from `codex-integration.md` and add
+remain trusted, perform the issue matching from `{plugin_root}/skills/deep-review-workflow/references/codex-integration.md` and add
 a `consensus.findings` array. Each finding records `severity` (`critical` or
 `warning`) and the unique admitted reviewer `roles` that reported that material
 finding. Include every admitted critical and warning exactly once per reporting
@@ -429,15 +429,15 @@ Ultracode's six lenses are one role. A degraded failed Claude role never
 downgrades a blocking verdict; it raises a low-confidence `APPROVE` to
 `CONCERN` when at most one external role remains.
 
-Use `codex-integration.md` for issue matching and `report-format.md` for the
+Use `{plugin_root}/skills/deep-review-workflow/references/codex-integration.md` for issue matching and `{plugin_root}/skills/deep-review-workflow/references/report-format.md` for the
 artifact. Create one unique
 `.deep-review/reports/{YYYY-MM-DD}-{HHmmss}-review.md` through a direct host
 file tool. Record every attempted role, terminal status, `N_actual`, builder
 warning, privacy exclusion, mutation outcome, and fingerprint exclusion.
 
 For pure document scope, require every trusted reviewer report to contain
-exactly one `Artifact Gate` JSON block from `report-format.md`. Invoke
-`document-readiness.mjs` after final synthesis. Any pre-implementation Critical
+exactly one `Artifact Gate` JSON block from `{plugin_root}/skills/deep-review-workflow/references/report-format.md`. Invoke
+`{plugin_root}/hooks/scripts/document-readiness.mjs` after final synthesis. Any pre-implementation Critical
 or Warning, or a reviewer/provider-family shortage, yields
 `DOCUMENT_BLOCKED`. `READY_FOR_IMPLEMENTATION` atomically writes
 `.deep-review/receipts/document-readiness/{scope_sha256}-{receipt_sha256}.json`; return that path
@@ -455,11 +455,11 @@ blocking verdicts.
 
 ## 6. Stage 5.5 and optional entropy
 
-After the report exists, read `recurring-findings-export.md`. When at least two
+After the report exists, read `{plugin_root}/skills/deep-review-workflow/references/recurring-findings-export.md`. When at least two
 reports exist, classify the taxonomy once, write the payload file directly,
-and call `wrap-recurring-findings-envelope.js --discover-sources-from`.
+and call `{plugin_root}/hooks/scripts/wrap-recurring-findings-envelope.js --discover-sources-from`.
 Preserve the payload and return a visible nonzero result if wrapping fails.
 
-When `--entropy` is present, read `entropy-scan.md` and append its evidence.
+When `--entropy` is present, read `{plugin_root}/skills/deep-review-workflow/references/entropy-scan.md` and append its evidence.
 Patch `last_review` only after the report and optional export complete, while
 preserving every unrelated config field.

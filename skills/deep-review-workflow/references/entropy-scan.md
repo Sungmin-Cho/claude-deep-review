@@ -1,6 +1,6 @@
 # entropy-scan — `--entropy` 스캔 (review-execution 에서 on-demand Read)
 
-<!-- review-execution.md 가 --entropy 일 때 Read 되어 그대로 수행된다. 동작 SSOT. -->
+<!-- {plugin_root}/skills/deep-review-workflow/references/review-execution.md 가 --entropy 일 때 Read 되어 그대로 수행된다. 동작 SSOT. -->
 
 ## Stage 6 — 엔트로피 스캔 (--entropy)
 
