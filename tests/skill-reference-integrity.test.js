@@ -844,12 +844,15 @@ const IGNORED_DIRS = (() => {
 // (2) ASK THE CONVENTION — `.deep-*` is the suite's name for a plugin output root.
 //     This covers a SIBLING's root, which this plugin never writes but a document may
 //     correctly tell an agent to read in the project.
-// (3) ASK THE HOST — `.claude` is Claude Code's own per-project directory, referenced
-//     by several plugins and always living in the analysed project.
-//
-// Arms (2) and (3) were missing here while a sibling had them, and the two repos
-// disagreed about `.deep-loop/` with the disagreement pinned by assertions on both
-// sides. Aligned.
+// (3) ASK THE HOST — a tool's per-project directory. `.claude` is Claude Code's,
+//     `.vscode` and `.idea` are the editors'. None belongs to any plugin, all live in
+//     the analysed project, and a document may correctly name one. This arm IS a small
+//     enumeration and saying so is the point: its growth condition is known — a new
+//     host or editor project directory — and the alternative, treating anything
+//     unproven as a workspace output, is fail-open. `.vscode` and `.idea` were found
+//     missing by a cross-repo sweep, flagged in a sibling that gitignores both.
+const HOST_PROJECT_DIRS = new Set(['.claude', '.vscode', '.idea']);
+
 const WORKSPACE_OUTPUT_DIRS = (() => {
   const WRITE = /(mkdirSync|writeFileSync|appendFileSync|createWriteStream|rmSync|cpSync|renameSync)/;
   const out = new Set();
@@ -872,7 +875,7 @@ const WORKSPACE_OUTPUT_DIRS = (() => {
   };
   ['hooks', 'scripts', 'runtime', 'lib'].forEach((s) => walk(path.join(ROOT, s)));
   for (const d of IGNORED_DIRS) {
-    if (d.startsWith('.deep-') || d === '.claude') out.add(d);
+    if (d.startsWith('.deep-') || HOST_PROJECT_DIRS.has(d)) out.add(d);
   }
   return out;
 })();
@@ -919,7 +922,7 @@ test('the workspace-output carve-out is derived from the runtime, and is narrow'
     + 'unchanged, which is not what its comment claims');
 });
 
-test('no undeclared path under a non-shipped directory is named', () => {
+test('no undeclared path under a maintainer-only directory is named', () => {
   // The generalisation of the caveat rule. Anything under a gitignored directory is
   // unresolvable in an installed plugin and therefore resolves only against the
   // workspace. Each one must be declared in NON_SHIPPED, which forces the caveat
