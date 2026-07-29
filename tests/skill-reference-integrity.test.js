@@ -831,37 +831,49 @@ const IGNORED_DIRS = (() => {
 
 // Not every gitignored directory is a leak when a document names it. The rule's
 // premise is "this can only ever resolve against the analysed project, so naming it
-// hands the instruction to that project" — and for the plugin's own declared output
-// root, resolving against the analysed project is the CONTRACT, not the defect.
-// `.deep-review/` is where this plugin is documented to write its reports.
+// hands the instruction there" — and for a plugin's declared output root, resolving
+// against the analysed project is the CONTRACT.
 //
-// Which directories those are is machine-readable rather than a matter of opinion:
-// the runtime joins them onto the analysed repo. `resolve(repo, '.deep-review', …)`
-// in `hooks/scripts/` says, in code, "this is workspace-relative by design". A
-// directory the runtime never builds that way has no such defence and stays in
-// scope. Asking the runtime is the same move as deriving the ignore list from
-// `.gitignore` instead of hand-listing it — the alternative here would have been to
-// declare 56 individual paths, which is the enumeration this guard keeps punishing.
+// Three arms, each with a stated authority, and no list of variable names:
+//
+// (1) ASK THE CODE — a directory this plugin WRITES into a project is its own output
+//     root. Writing is the discriminator, not joining: a sibling's release gate joins
+//     `docs` onto a project root and only READS it, because `docs/` belongs to
+//     whatever project is being analysed. Keying on joins classified `docs/` as an
+//     output root there and silenced the rule for the exact class it exists for.
+// (2) ASK THE CONVENTION — `.deep-*` is the suite's name for a plugin output root.
+//     This covers a SIBLING's root, which this plugin never writes but a document may
+//     correctly tell an agent to read in the project.
+// (3) ASK THE HOST — `.claude` is Claude Code's own per-project directory, referenced
+//     by several plugins and always living in the analysed project.
+//
+// Arms (2) and (3) were missing here while a sibling had them, and the two repos
+// disagreed about `.deep-loop/` with the disagreement pinned by assertions on both
+// sides. Aligned.
 const WORKSPACE_OUTPUT_DIRS = (() => {
+  const WRITE = /(mkdirSync|writeFileSync|appendFileSync|createWriteStream|rmSync|cpSync|renameSync)/;
   const out = new Set();
   const walk = (dir) => {
+    if (!fs.existsSync(dir)) return;
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, e.name);
-      if (e.isDirectory()) walk(p);
-      else if (/\.[cm]?js$/.test(e.name)) {
-        const body = fs.readFileSync(p, 'utf8');
-        for (const d of IGNORED_DIRS) {
-          const joined = new RegExp(
-            String.raw`\b(?:resolve|join)\s*\(\s*[A-Za-z_$][\w$.]*\bre(?:po|pository)\b[\w$.]*\s*,\s*['"\`]`
-            + d.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + String.raw`['"\`]`,
-            'i',
-          );
-          if (joined.test(body)) out.add(d);
+      if (e.isDirectory()) { walk(p); continue; }
+      if (!/\.[cm]?js$/.test(e.name) || /\.test\.[cm]?js$/.test(e.name)) continue;
+      const body = fs.readFileSync(p, 'utf8');
+      for (const d of IGNORED_DIRS) {
+        if (out.has(d)) continue;
+        const re = new RegExp(`['"\`]${d.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"\`]`, 'g');
+        let m;
+        while ((m = re.exec(body))) {
+          if (WRITE.test(body.slice(Math.max(0, m.index - 260), m.index + 260))) { out.add(d); break; }
         }
       }
     }
   };
-  walk(path.join(ROOT, 'hooks', 'scripts'));
+  ['hooks', 'scripts', 'runtime', 'lib'].forEach((s) => walk(path.join(ROOT, s)));
+  for (const d of IGNORED_DIRS) {
+    if (d.startsWith('.deep-') || d === '.claude') out.add(d);
+  }
   return out;
 })();
 
@@ -888,7 +900,12 @@ test('the workspace-output carve-out is derived from the runtime, and is narrow'
   // test rather than living only inside the sweep.
   assert.ok(WORKSPACE_OUTPUT_DIRS.has('.deep-review'),
     'the declared report root must be recognised — naming it is the contract');
-  for (const d of ['docs', '.deep-loop', '.claude']) {
+  // `.deep-loop` and `.claude` are output roots here too — a sibling's root and the
+  // host's project directory. Asserting the opposite is what made two repos in the
+  // same suite disagree, with the disagreement pinned on both sides.
+  assert.ok(WORKSPACE_OUTPUT_DIRS.has('.deep-loop'), "a sibling's output root is not a leak");
+  assert.ok(WORKSPACE_OUTPUT_DIRS.has('.claude'), "the host's project directory is not a leak");
+  for (const d of ['docs']) {
     assert.ok(!WORKSPACE_OUTPUT_DIRS.has(d),
       `${d} is gitignored with no runtime that builds it from the analysed repo, so `
       + 'it must stay in scope — a carve-out that covers it is a blanket exemption');
