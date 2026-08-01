@@ -781,3 +781,48 @@ test('document instructions use practical blockers and readiness-owned final ver
   assert.match(koreanChangelog, /## \[2\.3\.0\][\s\S]*실용적 문서 정책[\s\S]*Readiness 소유 문서 판정[\s\S]*문서 수렴/u);
   assert.doesNotMatch(changelog, /\n## PRACTICAL DOCUMENT POLICY\n/u);
 });
+
+// The emitted routing plan lives at a repository-internal path, so a repository
+// under analysis can commit one there. Leaf adapters no longer read it — routes
+// travel inline — and the only thing that could put a planted plan back into the
+// trusted path is an instruction telling the orchestrator to read that file.
+// Writing it (`--routing-plan-out`) is the audit copy and stays allowed.
+test('no shipped instruction directs a read of the repository-internal routing plan', () => {
+  const shipped = [
+    'skills/deep-review-workflow/SKILL.md',
+    'skills/deep-review-loop/SKILL.md',
+    'skills/deep-review/SKILL.md',
+    'skills/deep-review-workflow/references/runtime-dispatch.md',
+    'skills/deep-review-workflow/references/review-execution.md',
+    'skills/deep-review-workflow/references/codex-integration.md',
+    'skills/deep-review-workflow/references/agy-integration.md',
+    'commands/deep-review.md',
+    'agents/code-reviewer.md',
+  ];
+  for (const relativePath of shipped) {
+    const source = read(relativePath);
+    for (const line of source.split('\n')) {
+      if (!line.includes('.deep-review/tmp/routing-plan.json')) continue;
+      assert.ok(
+        line.includes('--routing-plan-out') || !line.includes('--routing-plan'),
+        `${relativePath} feeds the repository-internal plan back as a trusted source: ${line.trim()}`,
+      );
+    }
+  }
+
+  // Leaves take their route inline; nothing hands them a plan path.
+  const leafSurfaces = [
+    'skills/deep-review-workflow/references/review-execution.md',
+    'skills/deep-review-workflow/references/codex-integration.md',
+  ].map(read).join('\n');
+  for (const bridge of ['run-claude-reviewer.mjs', 'run-agy-reviewer.mjs', 'run-codex-reviewer.mjs']) {
+    for (const line of leafSurfaces.split('\n')) {
+      if (!line.includes(bridge)) continue;
+      assert.doesNotMatch(
+        line,
+        /--routing-plan(?!-out)/u,
+        `${bridge} must receive its route inline, not as a plan path`,
+      );
+    }
+  }
+});
