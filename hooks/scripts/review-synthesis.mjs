@@ -349,6 +349,12 @@ function expansionReasons({ included, synthesis, routingPlan, readinessMismatch 
     reasons.push('split_concern');
   }
   if (readinessMismatch) reasons.push('readiness_mismatch');
+  if (routingPlan.artifact_phase === 'document') {
+    return reasons.filter((reason) => ![
+      'single_critical_or_security',
+      'split_concern',
+    ].includes(reason));
+  }
   return reasons;
 }
 

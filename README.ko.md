@@ -265,6 +265,23 @@ deep-review는 `.deep-review/` 아래 여러 파일을 읽습니다:
 
 `review_model`은 비어 있지 않은 설치된 Claude 모델 alias를 그대로 전달합니다. 예: `review_model: fable`.
 
+## 실용적 문서 정책
+
+순수 문서 리뷰는 신뢰된 artifact phase와 risk를 모든 리뷰어 assignment에
+전달합니다. 문서 blocker는 저장소/아티팩트에 근거한 구체적 기능 모순,
+구현 불가능성 또는 실행을 막는 결정 누락, 도달 가능한 안전/보안/호환성/롤백
+피해, 객관적으로 검증할 수 없는 acceptance criteria로 제한합니다.
+
+스타일, 가독성, 명명, 취향, 근거 없는 추측은 advisory/info로 남기거나
+억제하며 pre-implementation blocker로 올리지 않습니다. 미래 구현/테스트
+누락은 구현 검증 evidence이며 객관적으로 확인할 수 있으므로 문서 blocker가 아닙니다.
+문서 finding만으로 same-round reviewer를 추가하지 않으며 운영 floor는
+fail-closed로 유지합니다.
+
+Artifact Gate readiness가 최종 문서 판정을 소유합니다: `DOCUMENT_BLOCKED` =>
+`REQUEST_CHANGES`; `READY_FOR_IMPLEMENTATION`에 deferred finding이 있으면
+`CONCERN`; 없으면 `APPROVE`입니다.
+
 ## 링크
 
 - [변경 기록](./CHANGELOG.ko.md)

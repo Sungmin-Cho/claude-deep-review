@@ -266,6 +266,24 @@ deep-review reads several files under `.deep-review/`:
 
 `review_model` accepts any non-empty installed Claude model alias and forwards it unchanged; for example, `review_model: fable`.
 
+## PRACTICAL DOCUMENT POLICY
+
+Pure-document review uses a trusted artifact phase and risk in every reviewer
+assignment. Document blockers are limited to a concrete repository/artifact-grounded
+functional contradiction; implementation infeasibility or a missing decision
+that prevents execution; reachable safety/security/compatibility/rollback harm;
+or acceptance criteria incapable of objective verification.
+
+Style, readability, naming, preference, and ungrounded speculation are
+advisory/info or suppressed, not Warning/Critical pre-implementation blockers.
+Missing future implementation/tests are implementation_verification evidence
+with objective acceptance evidence, not document blockers. Document finding-only
+disagreement does not add a same-round reviewer; operational floors remain.
+
+Artifact Gate readiness owns the final document verdict: `DOCUMENT_BLOCKED` =>
+`REQUEST_CHANGES`; `READY_FOR_IMPLEMENTATION` with deferred findings =>
+`CONCERN`; and `READY_FOR_IMPLEMENTATION` with no deferred findings => `APPROVE`.
+
 ## Links
 
 - [Changelog](./CHANGELOG.md)

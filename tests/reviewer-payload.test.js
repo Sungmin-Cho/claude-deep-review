@@ -88,6 +88,8 @@ function writeSingleReviewerPlan(root, {
   provider,
   adapterId,
   assignmentRole,
+  artifactPhase = 'implementation',
+  risk = 'low',
   model = 'review-model',
   effort = 'high',
 }) {
@@ -96,8 +98,8 @@ function writeSingleReviewerPlan(root, {
     protocol_version: '3.0',
     reviewer_strategy: 'static',
     shadow_mode: false,
-    artifact_phase: 'implementation',
-    risk: 'low',
+    artifact_phase: artifactPhase,
+    risk,
     progress: 'initial',
     minimum_reviewers: 1,
     maximum_reviewers: 4,
@@ -306,6 +308,54 @@ test('routing-plan assignment injects only the canonical trusted rubric for the 
   assert.doesNotMatch(prompt, /forged instruction/);
   assert.equal([...prompt.matchAll(/(?:^|\n)===== DIFF UNDER REVIEW =====\n/gu)].length, 1);
   assert.ok(prompt.trimEnd().endsWith('REAL DIFF'));
+});
+
+test('document routes inject phase-aware practical policy for every provider and role', async () => {
+  const { buildReviewerPayload } = await loadPayload();
+  for (const route of [
+    { reviewerId: 'claude-opus', provider: 'claude', adapterId: 'claude-cli', assignmentRole: 'feasibility' },
+    { reviewerId: 'codex-review', provider: 'codex', adapterId: 'codex-native-generic', assignmentRole: 'traceability' },
+    { reviewerId: 'codex-adversarial', provider: 'codex', adapterId: 'codex-companion', assignmentRole: 'adversarial' },
+  ]) {
+    const temp = temporaryDirectory(`deep-review-document-policy-${route.reviewerId}-`);
+    const routingPlan = writeSingleReviewerPlan(temp, {
+      ...route,
+      artifactPhase: 'document',
+      risk: 'high',
+    });
+    const result = buildReviewerPayload({
+      pluginRoot,
+      routingPlan,
+      reviewerId: route.reviewerId,
+      diff: 'DOCUMENT DIFF',
+    });
+    const prompt = readFileSync(result.promptFile, 'utf8');
+    assert.match(prompt, /artifact_phase: document/);
+    assert.match(prompt, /risk: high/);
+    assert.match(prompt, /practical document policy/i);
+    assert.match(prompt, /concrete repository\/artifact-grounded functional contradiction/i);
+    assert.match(prompt, /style.*readability.*naming.*preference/i);
+    assert.match(prompt, /missing future implementation\/tests.*implementation_verification/i);
+  }
+
+  const implementationRoot = temporaryDirectory('deep-review-document-policy-negative-');
+  const implementationPlan = writeSingleReviewerPlan(implementationRoot, {
+    reviewerId: 'claude-opus',
+    provider: 'claude',
+    adapterId: 'claude-cli',
+    assignmentRole: 'feasibility',
+    artifactPhase: 'implementation',
+    risk: 'high',
+  });
+  const implementation = buildReviewerPayload({
+    pluginRoot,
+    routingPlan: implementationPlan,
+    reviewerId: 'claude-opus',
+    diff: 'IMPLEMENTATION DIFF',
+  });
+  const implementationPrompt = readFileSync(implementation.promptFile, 'utf8');
+  assert.match(implementationPrompt, /artifact_phase: implementation/);
+  assert.doesNotMatch(implementationPrompt, /practical document policy/i);
 });
 
 test('Codex reviewer payloads omit only suppression doctrine and preserve every other supplied section', async () => {

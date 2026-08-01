@@ -32,6 +32,27 @@ tools:
 - Return only the report contract described below. Never edit, stage, commit,
   or create workspace files.
 
+## PRACTICAL DOCUMENT POLICY
+
+When the trusted assignment says `artifact_phase: document`, apply the common
+policy below regardless of provider or assignment role. Document blockers are
+limited to a concrete repository/artifact-grounded functional contradiction;
+implementation infeasibility or a missing decision that prevents execution;
+reachable safety/security/compatibility/rollback harm; or acceptance criteria
+incapable of objective verification.
+
+Style, readability, naming, preference, and ungrounded speculation are
+advisory/info or suppressed, not Warning/Critical pre-implementation blockers.
+Missing future implementation/tests are implementation_verification evidence
+with objective acceptance evidence, not document blockers. An implementation
+phase assignment keeps the normal code-review criteria and receives no document
+policy.
+
+Artifact Gate readiness owns the final document verdict:
+`DOCUMENT_BLOCKED` => `REQUEST_CHANGES`; `READY_FOR_IMPLEMENTATION` with
+deferred findings => `CONCERN`; and `READY_FOR_IMPLEMENTATION` with no deferred
+findings => `APPROVE`.
+
 ## 리뷰 원칙
 
 1. **자기 승인 편향 없음**: 이 코드는 당신이 쓴 것이 아닙니다. 객관적으로 평가하세요.

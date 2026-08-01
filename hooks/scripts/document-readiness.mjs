@@ -114,7 +114,7 @@ function repositoryIdentity(repo) {
   return sha256(Buffer.from(realpathSync(resolve(repo)), 'utf8'));
 }
 
-function validateFinding(value, index) {
+function validateFinding(value, index, { allowLegacyAdvisoryWarnings = false } = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`Artifact Gate finding ${index} must be an object`);
   }
@@ -130,6 +130,11 @@ function validateFinding(value, index) {
   if (value.severity === 'critical' && value.stage !== 'pre_implementation') {
     throw new Error(`Critical finding ${value.id} must be pre_implementation`);
   }
+  if (value.stage === 'advisory'
+      && value.severity !== 'info'
+      && !allowLegacyAdvisoryWarnings) {
+    throw new Error(`advisory finding ${value.id} must have info severity`);
+  }
   if (!Array.isArray(value.acceptance_evidence)
       || value.acceptance_evidence.some((entry) => typeof entry !== 'string' || entry.trim().length === 0)
       || (value.severity !== 'info' && value.acceptance_evidence.length === 0)) {
@@ -143,7 +148,7 @@ function validateFinding(value, index) {
   };
 }
 
-export function parseArtifactGate(reportText) {
+function parseArtifactGateInternal(reportText, { allowLegacyAdvisoryWarnings = false } = {}) {
   if (typeof reportText !== 'string') throw new TypeError('review report must be text');
   const headings = [...reportText.matchAll(/^## Artifact Gate[ \t]*$/gmu)];
   const blocks = [...reportText.matchAll(
@@ -162,7 +167,11 @@ export function parseArtifactGate(reportText) {
       || parsed.schema_version !== 1 || !Array.isArray(parsed.findings)) {
     throw new Error('Artifact Gate schema is invalid');
   }
-  const findings = parsed.findings.map(validateFinding);
+  const findings = parsed.findings.map((finding, index) => validateFinding(
+    finding,
+    index,
+    { allowLegacyAdvisoryWarnings },
+  ));
   const ids = new Set();
   for (const finding of findings) {
     if (ids.has(finding.id)) throw new Error(`Artifact Gate contains duplicate finding id ${finding.id}`);
@@ -183,6 +192,14 @@ export function parseArtifactGate(reportText) {
     throw new Error('Artifact Gate finding counts do not match the report Issues summary');
   }
   return { schema_version: 1, findings };
+}
+
+export function parseArtifactGate(reportText) {
+  return parseArtifactGateInternal(reportText);
+}
+
+function parseHistoricalReceiptArtifactGate(reportText) {
+  return parseArtifactGateInternal(reportText, { allowLegacyAdvisoryWarnings: true });
 }
 
 function documentRecords(repo, artifacts) {
@@ -292,6 +309,11 @@ function mergeGateFindings(reports) {
   return [...byId.values()].sort((left, right) => utf8Compare(left.id, right.id));
 }
 
+function documentVerdict(readiness) {
+  if (readiness.status === 'DOCUMENT_BLOCKED') return 'REQUEST_CHANGES';
+  return readiness.deferred_findings.length > 0 ? 'CONCERN' : 'APPROVE';
+}
+
 export function evaluateDocumentReadiness({
   reportEvidence,
   risk,
@@ -328,8 +350,9 @@ export function evaluateDocumentReadiness({
       severity: finding.severity,
       acceptance_evidence: finding.acceptance_evidence,
     }));
-  return {
-    status: blockingReasons.length === 0 ? 'READY_FOR_IMPLEMENTATION' : 'DOCUMENT_BLOCKED',
+  const status = blockingReasons.length === 0 ? 'READY_FOR_IMPLEMENTATION' : 'DOCUMENT_BLOCKED';
+  const readiness = {
+    status,
     blocking_finding_ids: blockingFindingIds,
     blocking_reasons: blockingReasons,
     deferred_findings: deferredFindings,
@@ -337,6 +360,10 @@ export function evaluateDocumentReadiness({
     provider_family_count: providerFamilies,
     required_reviewers: reviewerMinimum,
     provider_family_minimum: familyMinimum,
+  };
+  return {
+    ...readiness,
+    document_verdict: documentVerdict(readiness),
   };
 }
 
@@ -497,7 +524,7 @@ function verifyReceipt(options) {
     if (sha256(current.bytes) !== report.sha256) {
       throw new Error(`review report hash changed: ${report.path}`);
     }
-    const gate = parseArtifactGate(current.bytes.toString('utf8'));
+    const gate = parseHistoricalReceiptArtifactGate(current.bytes.toString('utf8'));
     if (sha256(Buffer.from(canonicalStringify(gate), 'utf8')) !== report.artifact_gate_sha256) {
       throw new Error(`Artifact Gate hash changed: ${report.path}`);
     }
@@ -541,6 +568,7 @@ function verifyReceipt(options) {
     scope_sha256: receipt.scope_sha256,
     risk: receipt.risk,
     deferred_findings: receipt.deferred_findings,
+    document_verdict: documentVerdict(readiness),
   };
 }
 

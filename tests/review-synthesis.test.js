@@ -649,6 +649,20 @@ test('split warning requests exactly one blind expansion reviewer', async () => 
   assert.equal(result.verdict, null);
 });
 
+test('document split findings do not trigger same-round expansion', async () => {
+  const { synthesizeReviewRound } = await import(synthesisUrl);
+  const result = synthesizeReviewRound({
+    attempts: [attempt('claude-opus', { warning: 1 }), attempt('codex-review')],
+    consensus: { findings: [{ severity: 'warning', roles: ['claude-opus'] }] },
+    routingPlan: routingPlan({ artifact_phase: 'document' }),
+    expansionWavesUsed: 0,
+  });
+  assert.equal(result.status, 'reviewed');
+  assert.equal(result.needs_expansion, false);
+  assert.equal(result.verdict, 'CONCERN');
+  assert.equal(Object.hasOwn(result, 'expansion_reasons'), false);
+});
+
 test('single critical, readiness mismatch, and reviewer-floor failure trigger one expansion', async () => {
   const { synthesizeReviewRound } = await import(synthesisUrl);
   const loneCritical = synthesizeReviewRound({

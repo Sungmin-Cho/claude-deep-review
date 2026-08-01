@@ -4,6 +4,14 @@
 
 deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)와 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
+## [2.3.0] — 2026-08-01
+
+### 변경
+
+- **실용적 문서 정책** — 신뢰된 protocol 3 문서 assignment에 artifact phase, risk와 role/provider 공통 정책을 전달합니다. 저장소/아티팩트에 근거한 구체적 기능 모순, 실행을 막는 결정 누락, 도달 가능한 안전/보안/호환성/롤백 피해, 객관적으로 검증할 수 없는 acceptance criteria는 blocker로 남기고, 스타일·가독성·명명·취향·근거 없는 추측은 advisory/info로 처리합니다. 미래 구현/테스트 누락은 구현 검증 evidence이며 객관적으로 확인할 수 있습니다.
+- **Readiness 소유 문서 판정** — `DOCUMENT_BLOCKED`는 `REQUEST_CHANGES`, deferred evidence가 있는 `READY_FOR_IMPLEMENTATION`은 `CONCERN`, 없는 READY는 `APPROVE`가 됩니다. 판정은 sealed Artifact Gate evidence에서 다시 계산하며 receipt schema에는 추가하지 않습니다.
+- **문서 수렴** — finding만으로 pure document의 same-round reviewer를 늘리지 않습니다. reviewer minimum/floor와 readiness mismatch expansion은 fail-closed로 유지하고 구현 동작은 바꾸지 않습니다.
+
 ## [2.2.0] — 2026-07-28
 
 ### 변경

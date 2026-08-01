@@ -27,6 +27,19 @@ export function validateRubricAssignment(role, rubricId) {
   return { role, rubricId: expected };
 }
 
+const DOCUMENT_REVIEW_POLICY = Object.freeze([
+  'Document blockers are limited to concrete repository/artifact-grounded functional contradiction; implementation infeasibility or a missing decision that prevents execution; reachable safety/security/compatibility/rollback harm; or acceptance criteria incapable of objective verification.',
+  'Style, readability, naming, preference, and ungrounded speculation are advisory/info or suppressed, not Warning/Critical pre-implementation blockers.',
+  'Missing future implementation/tests are implementation_verification evidence with objective acceptance evidence, not document blockers.',
+]);
+
+export function documentReviewPolicyText() {
+  return [
+    '### Practical document policy',
+    ...DOCUMENT_REVIEW_POLICY.map((line) => `- ${line}`),
+  ].join('\n');
+}
+
 const RUBRICS = Object.freeze({
   standard: [
     'Evaluate correctness, regression risk, error handling, maintainability, and evidence from tests.',

@@ -448,6 +448,27 @@ under `.deep-review/tmp/reviewer-reports/{round}-{reviewer_id}.md`. These privat
 files are receipt evidence and do not count as canonical round reports; the
 exact-one `*-review.md` report-set delta remains unchanged.
 
+## PRACTICAL DOCUMENT POLICY
+
+For a validated document phase, document blockers are limited to a concrete
+repository/artifact-grounded functional contradiction; implementation
+infeasibility or a missing decision that prevents execution; reachable
+safety/security/compatibility/rollback harm; or acceptance criteria incapable
+of objective verification.
+
+Style, readability, naming, preference, and ungrounded speculation are
+advisory/info or suppressed, not Warning/Critical pre-implementation blockers.
+Missing future implementation/tests are implementation_verification evidence
+with objective acceptance evidence, not document blockers. Document findings
+alone do not allocate a same-round expansion; reviewer minimum/floor and
+readiness-mismatch expansion remain active.
+
+Artifact Gate readiness owns the final document verdict:
+`DOCUMENT_BLOCKED` => `REQUEST_CHANGES`; `READY_FOR_IMPLEMENTATION` with
+deferred findings => `CONCERN`; and `READY_FOR_IMPLEMENTATION` with no deferred
+findings => `APPROVE`. Recompute this verdict from the sealed Artifact Gate
+evidence during verification; do not add it to the readiness receipt schema.
+
 For an implementation linked by a verified readiness receipt, evaluate every
 deferred finding against fresh final-implementation evidence before allowing
 `APPROVE`. Pending items raise APPROVE to CONCERN while preserving more

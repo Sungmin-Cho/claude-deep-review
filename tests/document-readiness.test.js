@@ -53,6 +53,104 @@ function writeReport(repo, name, contents) {
   return file;
 }
 
+function canonicalJsonV22(value) {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') {
+    return JSON.stringify(value);
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new TypeError('canonical JSON numbers must be finite');
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map(canonicalJsonV22).join(',')}]`;
+  if (!value || typeof value !== 'object') throw new TypeError('unsupported canonical JSON value');
+  const keys = Object.keys(value).sort((left, right) => Buffer.compare(
+    Buffer.from(left, 'utf8'),
+    Buffer.from(right, 'utf8'),
+  ));
+  return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJsonV22(value[key])}`).join(',')}}`;
+}
+
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function historicalV22Fixture() {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-review-readiness-v22-'));
+  const sourceRoot = path.join(root, 'tests', 'fixtures', 'document-readiness-v22');
+  const documentPath = path.join(repo, 'docs', 'implementation-plan.md');
+  const reportPath = path.join(repo, '.deep-review', 'reports', 'v2.2-warning-advisory-review.md');
+  const receiptDirectory = path.join(repo, '.deep-review', 'receipts', 'document-readiness');
+  fs.mkdirSync(path.dirname(documentPath), { recursive: true });
+  fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+  fs.mkdirSync(receiptDirectory, { recursive: true });
+  fs.copyFileSync(
+    path.join(sourceRoot, 'implementation-plan.fixture.md'),
+    documentPath,
+  );
+  fs.copyFileSync(
+    path.join(sourceRoot, 'v2.2-warning-advisory-review.fixture.md'),
+    reportPath,
+  );
+
+  const documentBytes = fs.readFileSync(documentPath);
+  const reportBytes = fs.readFileSync(reportPath);
+  const document = {
+    byte_size: documentBytes.length,
+    path: 'docs/implementation-plan.md',
+    sha256: sha256(documentBytes),
+    target_kind: 'implementation-plan',
+  };
+  const artifactGate = {
+    schema_version: 1,
+    findings: [{
+      id: 'DOC-LEGACY',
+      severity: 'warning',
+      stage: 'advisory',
+      acceptance_evidence: ['The observation is advisory and does not block implementation.'],
+    }],
+  };
+  const report = {
+    artifact_gate_sha256: sha256(Buffer.from(canonicalJsonV22(artifactGate), 'utf8')),
+    path: '.deep-review/reports/v2.2-warning-advisory-review.md',
+    provider_family: 'claude',
+    reviewer_id: 'claude-opus',
+    sha256: sha256(reportBytes),
+  };
+  const documents = [document];
+  const scopeSha256 = sha256(Buffer.from(canonicalJsonV22(documents.map((entry) => ({
+    path: entry.path,
+    target_kind: entry.target_kind,
+    sha256: entry.sha256,
+  }))), 'utf8'));
+  const body = {
+    deferred_findings: [],
+    documents,
+    generated_at: '2026-07-24T00:00:00.000Z',
+    reports: [report],
+    repository_identity_sha256: sha256(Buffer.from(fs.realpathSync(repo), 'utf8')),
+    reviewer_requirements: {
+      actual_provider_families: 1,
+      actual_reviewers: 1,
+      provider_family_minimum: 1,
+      required_reviewers: 1,
+    },
+    risk: 'low',
+    schema_version: '1.0',
+    scope_sha256: scopeSha256,
+    status: 'READY_FOR_IMPLEMENTATION',
+  };
+  const receipt = {
+    ...body,
+    receipt_sha256: sha256(Buffer.from(canonicalJsonV22(body), 'utf8')),
+  };
+  const receiptPath = path.join(
+    receiptDirectory,
+    `${scopeSha256}-${receipt.receipt_sha256}.json`,
+  );
+  fs.writeFileSync(receiptPath, `${canonicalJsonV22(receipt)}\n`);
+  return { repo, documentPath, reportPath, receiptPath };
+}
+
 test('Artifact Gate is singular, structured, and Critical is always pre-implementation', async () => {
   const { parseArtifactGate } = await import(readinessUrl);
   const parsed = parseArtifactGate(report());
@@ -77,6 +175,98 @@ test('Artifact Gate is singular, structured, and Critical is always pre-implemen
       acceptance_evidence: ['evidence'],
     }],
   })), /stage/);
+  assert.throws(() => parseArtifactGate(report({
+    warning: 1,
+    findings: [{
+      id: 'DOC-A1',
+      severity: 'warning',
+      stage: 'advisory',
+      acceptance_evidence: ['explain why this observation is advisory'],
+    }],
+  })), /advisory.*info|info.*advisory/);
+});
+
+test('pre-2.3 schema-1.0 sealed Warning/advisory receipt verifies and derives APPROVE', async () => {
+  const {
+    createDocumentReadinessReceipt,
+    verifyReadinessReceipt,
+  } = await import(readinessUrl);
+  const fixture = historicalV22Fixture();
+  assert.throws(() => createDocumentReadinessReceipt({
+    repo: fixture.repo,
+    artifacts: [{ path: 'docs/implementation-plan.md', target_kind: 'implementation-plan' }],
+    reports: [{ path: fixture.reportPath, reviewer_id: 'claude-opus', provider_family: 'claude' }],
+    risk: 'low',
+  }), /advisory.*info|info.*advisory/);
+  const verified = verifyReadinessReceipt({ repo: fixture.repo, receiptPath: fixture.receiptPath });
+  assert.equal(verified.status, 'READY_FOR_IMPLEMENTATION');
+  assert.equal(verified.document_verdict, 'APPROVE');
+  assert.deepEqual(verified.deferred_findings, []);
+});
+
+test('document final verdict is derived from readiness stages and recomputed without a receipt field', async () => {
+  const {
+    createDocumentReadinessReceipt,
+    verifyReadinessReceipt,
+  } = await import(readinessUrl);
+  const cases = [
+    {
+      name: 'advisory only',
+      reportOptions: {
+        verdict: 'APPROVE',
+        warning: 0,
+        info: 1,
+        findings: [{
+          id: 'DOC-I1',
+          severity: 'info',
+          stage: 'advisory',
+          acceptance_evidence: [],
+        }],
+      },
+      status: 'READY_FOR_IMPLEMENTATION',
+      verdict: 'APPROVE',
+    },
+    {
+      name: 'deferred implementation verification',
+      reportOptions: {},
+      status: 'READY_FOR_IMPLEMENTATION',
+      verdict: 'CONCERN',
+    },
+    {
+      name: 'pre-implementation blocker',
+      reportOptions: {
+        verdict: 'REQUEST_CHANGES',
+        warning: 1,
+        findings: [{
+          id: 'DOC-B1',
+          severity: 'warning',
+          stage: 'pre_implementation',
+          acceptance_evidence: ['resolve the concrete rollback contradiction'],
+        }],
+      },
+      status: 'DOCUMENT_BLOCKED',
+      verdict: 'REQUEST_CHANGES',
+    },
+  ];
+
+  for (const current of cases) {
+    const repo = repoFixture();
+    const reviewPath = writeReport(repo, `${current.name.replaceAll(' ', '-')}-review.md`, report(current.reportOptions));
+    const created = createDocumentReadinessReceipt({
+      repo,
+      artifacts: [{ path: 'docs/계획 Ω.md', target_kind: 'implementation-plan' }],
+      reports: [{ path: reviewPath, reviewer_id: 'claude-opus', provider_family: 'claude' }],
+      risk: 'low',
+    });
+    assert.equal(created.status, current.status, current.name);
+    assert.equal(created.document_verdict, current.verdict, current.name);
+    if (created.receipt_path) {
+      const onDisk = JSON.parse(fs.readFileSync(created.receipt_path, 'utf8'));
+      assert.equal(Object.hasOwn(onDisk, 'document_verdict'), false, current.name);
+      const verified = verifyReadinessReceipt({ repo, receiptPath: created.receipt_path });
+      assert.equal(verified.document_verdict, current.verdict, current.name);
+    }
+  }
 });
 
 test('low-risk warning-only plan becomes READY and emits a sealed content-addressed receipt', async () => {

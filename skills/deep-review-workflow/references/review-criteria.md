@@ -86,3 +86,22 @@ rules.yaml이 있으면 해당 규칙 기준, 없으면 일반 원칙:
 <!-- fp-doctrine:end -->
 
 > ⚠️ ultracode VOICE-6(refute된 finding은 무음 삭제 금지, confidence=low로 강등·보존)과는 **층위가 다름**: anti-criteria = "올리기 전 억제", VOICE-6 = "올라온 finding의 verify 후 처리".
+
+## PRACTICAL DOCUMENT POLICY
+
+For a validated protocol 3 document phase, document blockers are limited to a
+concrete repository/artifact-grounded functional contradiction; implementation
+infeasibility or a missing decision that prevents execution; reachable
+safety/security/compatibility/rollback harm; or acceptance criteria incapable
+of objective verification.
+
+Style, readability, naming, preference, and ungrounded speculation are
+advisory/info or suppressed, not Warning/Critical pre-implementation blockers.
+Missing future implementation/tests are implementation_verification evidence
+with objective acceptance evidence, not document blockers. The policy is
+role- and provider-independent; it does not apply to implementation phase.
+
+Artifact Gate readiness owns the final document verdict:
+`DOCUMENT_BLOCKED` => `REQUEST_CHANGES`; `READY_FOR_IMPLEMENTATION` with
+deferred findings => `CONCERN`; and `READY_FOR_IMPLEMENTATION` with no deferred
+findings => `APPROVE`.

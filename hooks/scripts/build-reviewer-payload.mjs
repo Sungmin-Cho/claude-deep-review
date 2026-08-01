@@ -12,7 +12,10 @@ import {
   resolvePluginRoot,
 } from './lib/runtime-context.mjs';
 import { loadExecutionPlan } from './lib/execution-plan.mjs';
-import { rubricTextForRole } from './lib/assignment-rubrics.mjs';
+import {
+  documentReviewPolicyText,
+  rubricTextForRole,
+} from './lib/assignment-rubrics.mjs';
 import { verifyReadinessReceipt } from './document-readiness.mjs';
 
 const DOCTRINE_WARNING = 'fp-doctrine extraction failed (injection skipped)';
@@ -41,8 +44,17 @@ function trustedAssignmentSection(options) {
     `rubric_id: ${executionPlan.rubricId}`,
     `wave: ${executionPlan.wave}`,
     `required: ${executionPlan.required}`,
+    ...(executionPlan.artifactPhase
+      ? [
+          `artifact_phase: ${executionPlan.artifactPhase}`,
+          `risk: ${executionPlan.risk}`,
+        ]
+      : []),
     '',
     rubricTextForRole(executionPlan.assignmentRole),
+    ...(executionPlan.artifactPhase === 'document'
+      ? ['', documentReviewPolicyText()]
+      : []),
   ];
   return { content: lines.join('\n'), executionPlan };
 }
