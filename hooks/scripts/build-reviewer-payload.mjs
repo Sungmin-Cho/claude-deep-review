@@ -11,7 +11,7 @@ import {
   makeSecureTempPath,
   resolvePluginRoot,
 } from './lib/runtime-context.mjs';
-import { loadExecutionPlan } from './lib/execution-plan.mjs';
+import { loadExecutionPlan, parseExecutionRouteJson } from './lib/execution-plan.mjs';
 import {
   documentReviewPolicyText,
   rubricTextForRole,
@@ -33,11 +33,16 @@ const SECTION_ORDER = [
 ];
 
 function trustedAssignmentSection(options) {
-  if (Boolean(options.routingPlan) !== Boolean(options.reviewerId)) {
-    throw new Error('routingPlan and reviewerId must be provided together');
+  const source = options.executionRouteJson ?? options.routingPlan;
+  if (Boolean(source) !== Boolean(options.reviewerId)) {
+    throw new Error('an execution route and reviewerId must be provided together');
   }
-  if (!options.routingPlan) return { content: '', executionPlan: null };
-  const executionPlan = loadExecutionPlan(options.routingPlan, options.reviewerId);
+  if (!source) return { content: '', executionPlan: null };
+  // Inline route is the supported transport; the plan-file path is retained
+  // only for callers that have not migrated yet.
+  const executionPlan = options.executionRouteJson
+    ? parseExecutionRouteJson(options.executionRouteJson, options.reviewerId)
+    : loadExecutionPlan(options.routingPlan, options.reviewerId);
   const lines = [
     `reviewer_id: ${options.reviewerId}`,
     `assignment_role: ${executionPlan.assignmentRole}`,
@@ -293,6 +298,7 @@ function parseArguments(argv) {
     ['--prior-rounds-file', 'priorRoundsFile'],
     ['--prior-base', 'priorBase'],
     ['--routing-plan', 'routingPlan'],
+    ['--execution-route-json', 'executionRouteJson'],
     ['--reviewer-id', 'reviewerId'],
     ['--readiness-receipt', 'readinessReceipt'],
     ['--max-entries', 'maxEntries'],

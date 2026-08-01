@@ -185,8 +185,8 @@ Immediately before §3.1 and Stage 4, invoke the reviewer-free preflight
 with argv-array transport:
 
 ```text
-node {plugin_root}/hooks/scripts/classify-artifacts.mjs --repo PROJECT_ROOT --emit-routing-plan --routing-plan-out .deep-review/tmp/routing-plan.json --host-assertions-json '{"claudeNativeAgent":true,"codexExecReviewer":true,"codexNativeGeneric":false}'
-node {plugin_root}/hooks/scripts/classify-artifacts.mjs --repo PROJECT_ROOT --emit-routing-plan --routing-plan-out .deep-review/tmp/routing-plan.json --host-assertions-json '{"claudeNativeAgent":false,"codexExecReviewer":false,"codexNativeGeneric":true}'
+node {plugin_root}/hooks/scripts/classify-artifacts.mjs --repo PROJECT_ROOT --emit-routing-plan --format json --routing-plan-out .deep-review/tmp/routing-plan.json --host-assertions-json '{"claudeNativeAgent":true,"codexExecReviewer":true,"codexNativeGeneric":false}'
+node {plugin_root}/hooks/scripts/classify-artifacts.mjs --repo PROJECT_ROOT --emit-routing-plan --format json --routing-plan-out .deep-review/tmp/routing-plan.json --host-assertions-json '{"claudeNativeAgent":false,"codexExecReviewer":false,"codexNativeGeneric":true}'
 ```
 
 Because this subprocess cannot observe the orchestrating host directly, always
@@ -226,14 +226,17 @@ validated protocol `3.0` route per selected canonical reviewer, plus the full
 candidate set, assignment role/rubric/wave/required fields, reviewer floors,
 risk, phase, progress, requested/resolved/applied/fallback, and semantic
 provenance. Protocol `2.0` plans remain readable. Stage 4 leaf adapters consume
-only their own route by path and reviewer id; they do not reinterpret provider
-or reviewer flags.
+only their own route, passed inline as `--execution-route-json` together with
+its reviewer id; they do not read the plan file and do not reinterpret provider
+or reviewer flags. Take each route verbatim from `routing_plan.routes` in the
+preflight's JSON result. The emitted `.deep-review/tmp/routing-plan.json` is an
+audit copy that no adapter reads.
 
 After the plan exists, invoke `{plugin_root}/hooks/scripts/build-reviewer-payload.mjs` once per selected
 route:
 
 ```text
-node {plugin_root}/hooks/scripts/build-reviewer-payload.mjs --plugin-root PLUGIN_ROOT_ABS --repo PROJECT_ROOT --change-state CHANGE_STATE --review-base REVIEW_BASE --context-file CONTEXT_FILE --diff-file DIFF_FILE --routing-plan ROUTING_PLAN --reviewer-id REVIEWER_ID
+node {plugin_root}/hooks/scripts/build-reviewer-payload.mjs --plugin-root PLUGIN_ROOT_ABS --repo PROJECT_ROOT --change-state CHANGE_STATE --review-base REVIEW_BASE --context-file CONTEXT_FILE --diff-file DIFF_FILE --execution-route-json EXECUTION_ROUTE_JSON --reviewer-id REVIEWER_ID
 ```
 
 Append the same explicit prior-context and readiness inputs described in Stage
@@ -276,7 +279,7 @@ node {plugin_root}/hooks/scripts/run-claude-reviewer.mjs --project-root PROJECT_
 ```
 
 When the emitted plan is applicable — the v2.0 default — append
-`--routing-plan .deep-review/tmp/routing-plan.json --reviewer-id claude-opus`.
+`--execution-route-json EXECUTION_ROUTE_JSON --reviewer-id claude-opus`.
 With a shadow-only plan, preserve the command above byte-for-byte.
 
 Do not replace a requested Claude role with a Codex identity. Record timeout,
@@ -317,8 +320,8 @@ authorization, timeout, empty-output, and generic failures never retry.
 On Claude Code, invoke the generic Codex exec bridge once per role:
 
 ```text
-node {plugin_root}/hooks/scripts/run-codex-reviewer.mjs --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PROMPT_FILE --routing-plan ROUTING_PLAN --reviewer-id codex-review --output OUTPUT_FILE --timeout-seconds 900
-node {plugin_root}/hooks/scripts/run-codex-reviewer.mjs --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PROMPT_FILE --routing-plan ROUTING_PLAN --reviewer-id codex-adversarial --output OUTPUT_FILE --timeout-seconds 900
+node {plugin_root}/hooks/scripts/run-codex-reviewer.mjs --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PROMPT_FILE --execution-route-json EXECUTION_ROUTE_JSON --reviewer-id codex-review --output OUTPUT_FILE --timeout-seconds 900
+node {plugin_root}/hooks/scripts/run-codex-reviewer.mjs --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PROMPT_FILE --execution-route-json EXECUTION_ROUTE_JSON --reviewer-id codex-adversarial --output OUTPUT_FILE --timeout-seconds 900
 ```
 
 The bridge reads each route's resolved model/effort and applies the same
@@ -333,7 +336,7 @@ node {plugin_root}/hooks/scripts/run-agy-reviewer.mjs --binary AGY_FILE --projec
 ```
 
 When the emitted plan is applicable — the v2.0 default — append
-`--routing-plan .deep-review/tmp/routing-plan.json --reviewer-id agy`. With a
+`--execution-route-json EXECUTION_ROUTE_JSON --reviewer-id agy`. With a
 shadow-only plan, preserve the command above byte-for-byte.
 
 The bridge revalidates privacy and fingerprint state. A `mutated` result is
@@ -377,10 +380,10 @@ exactly its one unused wave-2 route against the same original evidence and
 independent rubric, then re-run synthesis once with all trusted attempts. Never
 expand twice and never publish a provisional verdict. Stop when it returns
 `operational_failure`; no later response or Phase 6 commit may proceed. When
-the provisional result requests expansion, atomically persist its
-`expanded_routing_plan` and use that file for the added reviewer's leaf adapter;
-the added protocol-3 route already contains the trusted rubric and resolved
-model/effort. A
+the provisional result requests expansion, pass its `next_assignment` verbatim
+as the added reviewer's `--execution-route-json`; that protocol-3 route already
+contains the trusted rubric and resolved model/effort, so no plan file is
+written or re-read. A
 missing, invalid, or count-inconsistent materialized consensus for two or more
 trusted roles fails closed with `consensus_required`.
 

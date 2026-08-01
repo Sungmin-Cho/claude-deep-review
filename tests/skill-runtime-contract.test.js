@@ -256,7 +256,7 @@ test('Codex bridge and host assertions route both roles without companion fallba
     assert.match(
       combined,
       new RegExp(
-        `run-codex-reviewer\\.mjs[^\\n]*--prompt-file PROMPT_FILE[^\\n]*--routing-plan ROUTING_PLAN[^\\n]*--reviewer-id ${reviewerId}`,
+        `run-codex-reviewer\\.mjs[^\\n]*--prompt-file PROMPT_FILE[^\\n]*--execution-route-json EXECUTION_ROUTE_JSON[^\\n]*--reviewer-id ${reviewerId}`,
         'u',
       ),
       `${reviewerId} must use the generic Codex exec bridge`,

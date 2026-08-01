@@ -4,6 +4,13 @@
 
 deep-review의 모든 주요 변경 사항을 이 파일에 기록합니다. [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)와 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)을 따릅니다.
 
+## [Unreleased]
+
+### 보안
+
+- **리뷰어 leaf 어댑터가 라우팅 플랜을 파일에서 읽지 않습니다.** 네 소비자(payload builder + 리뷰어 브리지 3개)는 애초에 플랜을 자기 route 하나로 축약해 쓰고 있었으므로, 그 route 를 `--execution-route-json` 으로 인라인 전달합니다. 플랜 파일은 분석 대상 저장소가 커밋할 수 있는 저장소 내부 경로(`.deep-review/tmp/routing-plan.json`)였고 `loadExecutionPlan` 은 출처 검증 없이 그것을 읽었습니다. 이제 어떤 어댑터도 읽지 않는 감사 사본입니다. 인라인 진입점은 `protocol_version` 을 `3.0` 으로 **고정**합니다 — 분기하면 `2.0` route 가 오류 없이 `assignment_role: standard` 로 떨어지고 rubric 검증을 건너뛰어 잘못된 rubric 텍스트가 신뢰 할당 헤더에 실립니다.
+- 소비자 경계의 검증은 의도적으로 축소됩니다: 후보 집합 소속, provider/adapter 일치, `max_expansion_waves` 게이트, wave/required 교차검사, `maximum_reviewers` 상한은 단독 route 로 검사할 수 없어 synthesis 경계에서 계속 강제됩니다. synthesis 경계 자체는 여전히 오케스트레이터가 직렬화한 플랜 객체를 신뢰하며, 이는 변경되지 않았고 이 변경의 범위 밖입니다.
+
 ## [2.3.0] — 2026-08-01
 
 ### 변경

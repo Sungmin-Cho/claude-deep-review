@@ -18,7 +18,7 @@ import {
 } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { loadExecutionPlan } from './lib/execution-plan.mjs';
+import { loadExecutionPlan, parseExecutionRouteJson } from './lib/execution-plan.mjs';
 import { resolveExecutable, runProcess } from './lib/process.mjs';
 import {
   createContainedWriteSession,
@@ -417,10 +417,12 @@ export async function runCodexReviewer(options = {}) {
   const reviewerId = requiredReviewerId(options.reviewerId);
   const timeoutSeconds = positiveSeconds(options.timeoutSeconds ?? 900);
   const executionPlan = options.executionPlan
-    ?? (options.routingPlan
-      ? loadExecutionPlan(requiredString(options.routingPlan, 'routingPlan'), reviewerId)
-      : null);
-  if (!executionPlan) throw new TypeError('executionPlan or routingPlan is required');
+    ?? (options.executionRouteJson
+      ? parseExecutionRouteJson(requiredString(options.executionRouteJson, 'executionRouteJson'), reviewerId)
+      : options.routingPlan
+        ? loadExecutionPlan(requiredString(options.routingPlan, 'routingPlan'), reviewerId)
+        : null);
+  if (!executionPlan) throw new TypeError('executionPlan or an execution route is required');
   if (!existsSync(projectRoot)) throw new Error(`projectRoot does not exist: ${projectRoot}`);
   if (!options.nonGit && !existsSync(join(projectRoot, '.git'))) {
     throw new Error('projectRoot is not a Git repository; pass --non-git to review it explicitly');
@@ -564,6 +566,7 @@ export function parseCli(argv) {
       '--prompt-file': 'promptFile',
       '--output': 'outputFile',
       '--routing-plan': 'routingPlan',
+      '--execution-route-json': 'executionRouteJson',
       '--reviewer-id': 'reviewerId',
       '--timeout-seconds': 'timeoutSeconds',
       '--binary': 'binary',

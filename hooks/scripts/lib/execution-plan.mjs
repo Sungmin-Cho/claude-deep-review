@@ -200,6 +200,83 @@ export function parseExecutionPlanDocument(document, reviewerId) {
   };
 }
 
+// Consumers never need the whole plan — each one reduces it to its own route.
+// Carrying that route inline through argv removes the plan file from the
+// consumer path entirely, so a repository-placed plan has nothing to hijack.
+//
+// Only the route-level checks can run here. The document-coupled ones
+// (candidate-set membership, provider/adapter agreement, the max_expansion_waves
+// gate, the wave/required cross-checks against the initial and hard-required
+// sets, and the maximum_reviewers cap) have no single-route analogue; those
+// invariants stay enforced at the synthesis boundary, which still receives the
+// whole plan.
+export function parseExecutionRoute(route, reviewerId) {
+  requiredReviewerId(reviewerId);
+  if (!route || typeof route !== 'object' || Array.isArray(route)) {
+    throw new Error('execution route must be a JSON object');
+  }
+  // Pinned, not branched. A route arriving as "2.0" would otherwise derive
+  // assignment_role 'standard' and rubric_id 'standard-v1' with no error and
+  // skip validateRubricAssignment entirely, putting the wrong rubric text into
+  // the trusted assignment header.
+  if (route.protocol_version !== '3.0') {
+    throw new Error('execution route protocol_version must be "3.0"');
+  }
+  requiredReviewerId(route.reviewer_id);
+  if (route.reviewer_id !== reviewerId) {
+    throw new Error(`execution route reviewer_id ${route.reviewer_id} does not match requested ${reviewerId}`);
+  }
+  if (route.provider !== REVIEWER_PROVIDERS[route.reviewer_id]) {
+    throw new Error(`execution route provider mismatch for ${route.reviewer_id}`);
+  }
+  requiredNonEmptyString(route.adapter_id, `adapter_id for ${route.reviewer_id}`);
+  validateRubricAssignment(route.assignment_role, route.rubric_id);
+  if (!Number.isInteger(route.wave) || route.wave < 1 || route.wave > 2) {
+    throw new Error(`execution route wave is invalid for ${route.reviewer_id}`);
+  }
+  if (typeof route.required !== 'boolean') {
+    throw new Error(`execution route required flag is invalid for ${route.reviewer_id}`);
+  }
+  requiredNonEmptyString(route.selection_reason, `selection_reason for ${route.reviewer_id}`);
+  if (!route.resolved || typeof route.resolved !== 'object' || Array.isArray(route.resolved)
+      || !Object.hasOwn(route.resolved, 'model') || !Object.hasOwn(route.resolved, 'effort')) {
+    throw new Error(`execution route resolved model/effort is invalid for ${route.reviewer_id}`);
+  }
+  const requested = route.requested || route;
+  const resolved = route.resolved;
+  const source = requested.source || route.source || 'auto';
+  return {
+    model: resolved.model ?? null,
+    effort: resolved.effort ?? null,
+    requestedModel: requested.model ?? null,
+    requestedEffort: requested.effort ?? null,
+    source,
+    modelSource: requested.model_source || source,
+    effortSource: requested.effort_source || source,
+    allowFallback: Boolean(route.fallback?.allowed ?? route.allow_fallback),
+    modelTransport: route.transports?.model || route.model_transport,
+    effortTransport: route.transports?.effort || route.effort_transport,
+    routingFallback: route.fallback || null,
+    assignmentRole: route.assignment_role,
+    rubricId: route.rubric_id,
+    wave: route.wave,
+    required: route.required,
+    // Document-level context by definition: an inline route carries neither.
+    artifactPhase: null,
+    risk: null,
+  };
+}
+
+export function parseExecutionRouteJson(value, reviewerId) {
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch (error) {
+    throw new Error(`--execution-route-json must be valid JSON: ${error.message}`);
+  }
+  return parseExecutionRoute(parsed, reviewerId);
+}
+
 export function loadExecutionPlan(filePath, reviewerId) {
   let document;
   try { document = JSON.parse(readFileSync(resolve(filePath), 'utf8')); }

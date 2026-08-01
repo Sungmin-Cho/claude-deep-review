@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 import { resolveExecutable, runProcess } from './lib/process.mjs';
 import { atomicWriteFile, resolvePluginRoot } from './lib/runtime-context.mjs';
-import { loadExecutionPlan } from './lib/execution-plan.mjs';
+import { loadExecutionPlan, parseExecutionRouteJson } from './lib/execution-plan.mjs';
 
 const AUTH_PATTERN = /Reauthentication required|do not currently have an active account|OAuth token expired|Please run.*claude.*login|Not signed in|Authentication failed/iu;
 // J4: mirrors run-agy-reviewer.mjs's UNSUPPORTED_MODEL_PATTERN so an explicit
@@ -217,6 +217,7 @@ export function parseCli(argv) {
       '--timeout': 'timeoutSeconds',
       '--binary': 'binary',
       '--routing-plan': 'routingPlan',
+      '--execution-route-json': 'executionRouteJson',
       '--reviewer-id': 'reviewerId',
     }[flag];
     if (!key || index + 1 >= argv.length) throw new Error(`unknown or incomplete argument: ${flag}`);
@@ -236,7 +237,11 @@ async function main() {
     return;
   }
   options.pluginRoot ??= resolvePluginRoot();
-  if (options.routingPlan) options.executionPlan = loadExecutionPlan(options.routingPlan, options.reviewerId);
+  if (options.executionRouteJson) {
+    options.executionPlan = parseExecutionRouteJson(options.executionRouteJson, options.reviewerId);
+  } else if (options.routingPlan) {
+    options.executionPlan = loadExecutionPlan(options.routingPlan, options.reviewerId);
+  }
   const result = await runClaudeReviewer(options);
   process.exitCode = result.code;
 }

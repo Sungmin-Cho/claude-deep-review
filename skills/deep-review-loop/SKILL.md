@@ -137,10 +137,9 @@ Apply reviewer-count rules before Respond:
 
 Review synthesis is two-wave at most. First produce a provisional result with
 `review-synthesis.mjs`. When it reports `needs_expansion`, dispatch exactly one
-unused reviewer from wave 2. Atomically save the returned
-`expanded_routing_plan`, then build the added reviewer's payload from that plan;
-this binds the returned model/effort and trusted rubric without hand-editing
-the plan. Use the same original evidence and never reveal another reviewer's
+unused reviewer from wave 2. Pass the returned `next_assignment` verbatim as the
+added reviewer's `--execution-route-json`; this binds the returned model/effort
+and trusted rubric without hand-editing or re-persisting a plan. Use the same original evidence and never reveal another reviewer's
 conclusion. Re-synthesize all trusted attempts once and emit one final verdict.
 Critical implementation scope requires at least three trusted reviewers across
 two provider families; a shortage is an operational failure without a verdict.
