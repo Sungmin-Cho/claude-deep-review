@@ -4,6 +4,14 @@
 
 All notable changes to deep-review are documented here. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] — 2026-08-01
+
+### Changed
+
+- **Practical document policy** — trusted protocol 3 document assignments now include artifact phase and risk plus one role/provider-independent policy. Concrete repository/artifact-grounded contradictions, blocked implementation decisions, reachable safety/security/compatibility/rollback harm, and objectively unverifiable acceptance criteria remain blockers; style, readability, naming, preference, speculation, and future implementation/tests are advisory or deferred implementation-verification evidence.
+- **Readiness-owned document verdict** — `DOCUMENT_BLOCKED` maps to `REQUEST_CHANGES`, ready documents with deferred evidence map to `CONCERN`, and ready documents without deferred findings map to `APPROVE`. The verdict is recomputed from sealed Artifact Gate evidence and is not added to the receipt schema.
+- **Document convergence** — finding-only same-round disagreement no longer expands a pure document review; reviewer minimum/floor and readiness-mismatch expansion remain fail-closed, and implementation behavior is unchanged.
+
 ## [2.2.0] — 2026-07-28
 
 ### Changed

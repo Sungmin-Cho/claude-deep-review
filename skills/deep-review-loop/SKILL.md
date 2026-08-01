@@ -305,6 +305,26 @@ or `stalled=false`), and the resolved round cap is not reached. In a gray area,
 stop on external dependency or repeatedly failing dispatch rather than
 cycling without evidence.
 
+## PRACTICAL DOCUMENT POLICY
+
+For a trusted `artifact_phase: document` loop, document blockers are limited to
+a concrete repository/artifact-grounded functional contradiction;
+implementation infeasibility or a missing decision that prevents execution;
+reachable safety/security/compatibility/rollback harm; or acceptance criteria
+incapable of objective verification.
+
+Style, readability, naming, preference, and ungrounded speculation are
+advisory/info or suppressed, not Warning/Critical pre-implementation blockers.
+Missing future implementation/tests are implementation_verification evidence
+with objective acceptance evidence, not document blockers. Finding-only
+document disagreement does not cause same-round expansion; reviewer
+minimum/floor and readiness mismatch remain fail-closed.
+
+Artifact Gate readiness owns the final document verdict:
+`DOCUMENT_BLOCKED` => `REQUEST_CHANGES`; `READY_FOR_IMPLEMENTATION` with
+deferred findings => `CONCERN`; and `READY_FOR_IMPLEMENTATION` with no deferred
+findings => `APPROVE`.
+
 After each round, report verdict, issue counts, change summary, and the decision
 in one paragraph.
 

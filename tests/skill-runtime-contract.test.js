@@ -735,3 +735,49 @@ test('review-execution Stage 2 forwards --prior-rounds-file to build-reviewer-pa
   assert.match(review, /--prior-rounds-file.{0,120}--prior-base/is);
   assert.match(review, /existence alone.{0,80}never trigger.{0,80}automatic consumption/is);
 });
+
+test('document instructions use practical blockers and readiness-owned final verdicts', () => {
+  const english = [
+    read('skills/deep-review-workflow/references/review-criteria.md'),
+    read('agents/code-reviewer.md'),
+    read('skills/deep-review-workflow/references/report-format.md'),
+    read('skills/deep-review-workflow/references/review-execution.md'),
+    read('skills/deep-review-loop/SKILL.md'),
+    read('README.md'),
+  ];
+  const korean = [read('README.ko.md')];
+  const practicalBlocker = /concrete repository\/artifact-grounded functional contradiction/i;
+  const deferredEvidence = /implementation_verification.*objective acceptance evidence/is;
+  const nonBlockers = /style.*readability.*naming.*preference.*ungrounded speculation/is;
+
+  for (const source of english) {
+    const normalized = source.replace(/\s+/gu, ' ');
+    assert.match(normalized, /PRACTICAL DOCUMENT POLICY/u);
+    assert.match(normalized, practicalBlocker);
+    assert.match(normalized, /implementation infeasibility.*missing decision.*prevents execution/is);
+    assert.match(normalized, /reachable safety\/security\/compatibility\/rollback harm/is);
+    assert.match(normalized, /acceptance criteria.*objective(?:ly verified| verification)/is);
+    assert.match(normalized, nonBlockers);
+    assert.match(normalized, deferredEvidence);
+    assert.match(normalized, /DOCUMENT_BLOCKED.*REQUEST_CHANGES.*READY_FOR_IMPLEMENTATION.*APPROVE/is);
+  }
+  for (const source of korean) {
+    const normalized = source.replace(/\s+/gu, ' ');
+    assert.match(normalized, /실용적 문서 정책/u);
+    assert.match(normalized, /구체적.*기능 모순.*실행을 막는 결정 누락/is);
+    assert.match(normalized, /안전.*보안.*호환성.*롤백/is);
+    assert.match(normalized, /스타일.*가독성.*명명.*취향.*근거 없는 추측/is);
+    assert.match(normalized, /구현 검증.*객관적으로/is);
+    assert.match(normalized, /DOCUMENT_BLOCKED.*REQUEST_CHANGES.*READY_FOR_IMPLEMENTATION.*APPROVE/is);
+  }
+
+  for (const relativePath of ['package.json', '.claude-plugin/plugin.json', '.codex-plugin/plugin.json']) {
+    assert.equal(JSON.parse(read(relativePath)).version, '2.3.0', relativePath);
+  }
+
+  const changelog = read('CHANGELOG.md');
+  const koreanChangelog = read('CHANGELOG.ko.md');
+  assert.match(changelog, /## \[2\.3\.0\][\s\S]*Practical document policy[\s\S]*Readiness-owned document verdict[\s\S]*Document convergence/u);
+  assert.match(koreanChangelog, /## \[2\.3\.0\][\s\S]*실용적 문서 정책[\s\S]*Readiness 소유 문서 판정[\s\S]*문서 수렴/u);
+  assert.doesNotMatch(changelog, /\n## PRACTICAL DOCUMENT POLICY\n/u);
+});

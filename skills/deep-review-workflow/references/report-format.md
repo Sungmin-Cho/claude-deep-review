@@ -132,6 +132,25 @@ Summary.degraded: opus_failed_low_confidence
 
 This is deterministic (no AskUserQuestion at synthesis) — see spec §4.3.1 for the rationale.
 
+## PRACTICAL DOCUMENT POLICY
+
+For a trusted `artifact_phase: document` assignment, document blockers are
+limited to a concrete repository/artifact-grounded functional contradiction;
+implementation infeasibility or a missing decision that prevents execution;
+reachable safety/security/compatibility/rollback harm; or acceptance criteria
+incapable of objective verification.
+
+Style, readability, naming, preference, and ungrounded speculation are
+advisory/info or suppressed, not Warning/Critical pre-implementation blockers.
+Missing future implementation/tests are implementation_verification evidence
+with objective acceptance evidence, not document blockers. This policy is
+independent of reviewer role and provider.
+
+Artifact Gate readiness owns the final document verdict:
+`DOCUMENT_BLOCKED` => `REQUEST_CHANGES`; `READY_FOR_IMPLEMENTATION` with
+deferred findings => `CONCERN`; and `READY_FOR_IMPLEMENTATION` with no deferred
+findings => `APPROVE`.
+
 ### `opus_status` under ultracode fan-out (CONS-10)
 
 ultracode 모드에서 "opus"는 6샤드이므로 degraded 마커가 키로 쓰는 단일 `opus_status` 를 샤드 성공 수 K 의 **disjoint quorum 밴드**(우선순위 failed→partial→success)로 collapse 한다: **`failed` iff K=0; `partial` iff 1 ≤ K < 쿼럼(=4); `success` iff K ≥ 쿼럼(=4).** degraded 마커(`opus_status != success AND N_actual_external ≤ 1`)는 이 collapse 값(K<4 이면 success 아님)으로 평가되어 결정성을 유지한다. 정의 단일 출처는 [`{plugin_root}/skills/deep-review-workflow/references/ultracode-integration.md`](./ultracode-integration.md) §2(B).
