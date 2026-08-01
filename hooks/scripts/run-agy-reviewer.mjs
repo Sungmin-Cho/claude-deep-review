@@ -12,7 +12,7 @@ import {
   runProcess,
 } from './lib/process.mjs';
 import { atomicWriteFile, resolvePluginRoot } from './lib/runtime-context.mjs';
-import { loadExecutionPlan } from './lib/execution-plan.mjs';
+import { loadExecutionPlan, parseExecutionRouteJson } from './lib/execution-plan.mjs';
 
 const BODY_LIMIT = 198_000;
 const WINDOWS_CREATE_PROCESS_LIMIT = 32_767;
@@ -466,6 +466,7 @@ export function parseCli(argv) {
       '--approval': 'approval',
       '--timeout-seconds': 'timeoutSeconds',
       '--routing-plan': 'routingPlan',
+      '--execution-route-json': 'executionRouteJson',
       '--reviewer-id': 'reviewerId',
     }[flag];
     if (!key || index + 1 >= argv.length) throw new Error(`unknown or incomplete argument: ${flag}`);
@@ -485,7 +486,11 @@ async function main() {
     return;
   }
   options.pluginRoot ??= resolvePluginRoot();
-  if (options.routingPlan) options.executionPlan = loadExecutionPlan(options.routingPlan, options.reviewerId);
+  if (options.executionRouteJson) {
+    options.executionPlan = parseExecutionRouteJson(options.executionRouteJson, options.reviewerId);
+  } else if (options.routingPlan) {
+    options.executionPlan = loadExecutionPlan(options.routingPlan, options.reviewerId);
+  }
   const result = await runAgyReviewer(options);
   process.stdout.write(`${JSON.stringify(result)}\n`);
   if (result.attempted && result.code !== 0) process.exitCode = result.code;

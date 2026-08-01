@@ -51,7 +51,7 @@ does not create an additional `N_actual` voice.
   `claude-opus` role. A named Claude agent fills the same role when available.
 - On a Claude capability profile, the generic Codex exec bridge fills both
   `codex-review` and `codex-adversarial`. Each invocation consumes its own
-  routing-plan route and payload, so every canonical assignment rubric and the
+  inline route and payload, so every canonical assignment rubric and the
   selected model/effort reach the leaf transport.
 - `--no-codex` disables both the standard and adversarial Codex roles. It does
   not affect `claude-opus` or `agy`.

@@ -4,6 +4,13 @@
 
 All notable changes to deep-review are documented here. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **Reviewer leaf adapters no longer read the routing plan from a file.** Each of the four consumers — the payload builder and the three reviewer bridges — only ever reduced the plan to its own route, so that route now travels inline as `--execution-route-json`. The plan file was a repository-internal path (`.deep-review/tmp/routing-plan.json`) that a repository under analysis could commit, and `loadExecutionPlan` read it with no provenance check; it is now an audit copy that no adapter reads. The inline entry point pins `protocol_version` to `3.0` rather than branching on it, because a `2.0` route would otherwise derive `assignment_role: standard` with no error and skip rubric validation, putting the wrong rubric text into the trusted assignment header.
+- Consumer-boundary validation shrinks deliberately: candidate-set membership, provider/adapter agreement, the `max_expansion_waves` gate, the wave/required cross-checks, and the `maximum_reviewers` cap have no single-route analogue and stay enforced at the synthesis boundary, which still receives the whole plan. The synthesis boundary itself still trusts the plan object the orchestrator serializes — that is unchanged and out of scope here.
+
 ## [2.3.0] — 2026-08-01
 
 ### Changed

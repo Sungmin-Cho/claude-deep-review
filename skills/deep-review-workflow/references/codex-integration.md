@@ -65,8 +65,8 @@ Claude Code routes both roles through the generic Codex exec adapter with
 separate payloads and the same routing plan:
 
 ```text
-node {plugin_root}/hooks/scripts/run-codex-reviewer.mjs --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PROMPT_FILE --routing-plan ROUTING_PLAN --reviewer-id codex-review --output OUTPUT_FILE --timeout-seconds 900
-node {plugin_root}/hooks/scripts/run-codex-reviewer.mjs --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PROMPT_FILE --routing-plan ROUTING_PLAN --reviewer-id codex-adversarial --output OUTPUT_FILE --timeout-seconds 900
+node {plugin_root}/hooks/scripts/run-codex-reviewer.mjs --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PROMPT_FILE --execution-route-json EXECUTION_ROUTE_JSON --reviewer-id codex-review --output OUTPUT_FILE --timeout-seconds 900
+node {plugin_root}/hooks/scripts/run-codex-reviewer.mjs --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PROMPT_FILE --execution-route-json EXECUTION_ROUTE_JSON --reviewer-id codex-adversarial --output OUTPUT_FILE --timeout-seconds 900
 ```
 
 The bridge applies the same model/effort, fallback, report-sidecar, and

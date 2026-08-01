@@ -522,7 +522,7 @@ test('payload builder fails closed on a forged, duplicate, unsupported, or misma
   }), /does not match assignment role/);
   assert.throws(
     () => buildReviewerPayload({ pluginRoot, routingPlan: planFile, diff: 'DIFF' }),
-    /routingPlan and reviewerId must be provided together/,
+    /an execution route and reviewerId must be provided together/,
   );
 });
 
@@ -750,4 +750,81 @@ test('change-file enrichment failure is fail-soft while the final payload still 
   const prompt = readFileSync(result.promptFile, 'utf8');
   assert.doesNotMatch(prompt, /CHANGED FILES/);
   assert.equal(prompt.trimEnd().endsWith('CORE DIFF'), true);
+});
+
+// Inline execution routes are the supported leaf transport: each consumer only
+// ever reduced the plan to its own route, so carrying that route through argv
+// removes the plan file — and anything a repository could plant at its path —
+// from the consumer path entirely.
+test('an inline execution route produces the same trusted assignment as a plan file', async () => {
+  const { buildReviewerPayload } = await import(pathToFileURL(modulePath).href);
+  const repo = createGitFixture('inline-route');
+  const route = {
+    protocol_version: '3.0',
+    reviewer_id: 'claude-opus',
+    provider: 'claude',
+    adapter_id: 'claude-native-agent',
+    assignment_role: 'feasibility',
+    rubric_id: 'feasibility-v1',
+    wave: 1,
+    required: false,
+    selection_reason: 'role fit feasibility',
+    transports: { model: 'agent-parameter', effort: 'none' },
+    requested: { model: 'opus', effort: 'high', source: 'auto' },
+    resolved: { model: 'opus', effort: null },
+    fallback: { allowed: false, occurred: false },
+  };
+
+  const result = await buildReviewerPayload({
+    pluginRoot,
+    repo,
+    changeState: 'non-git',
+    executionRouteJson: JSON.stringify(route),
+    reviewerId: 'claude-opus',
+  });
+
+  assert.equal(result.assignmentRole, 'feasibility');
+  assert.equal(result.rubricId, 'feasibility-v1');
+  assert.equal(result.wave, 1);
+  const payload = readFileSync(result.promptFile, 'utf8');
+  assert.match(payload, /assignment_role: feasibility/u);
+  assert.match(payload, /rubric_id: feasibility-v1/u);
+});
+
+test('an inline execution route fails closed on protocol, identity, and rubric drift', async () => {
+  const { parseExecutionRoute } = await import(
+    pathToFileURL(join(pluginRoot, 'hooks', 'scripts', 'lib', 'execution-plan.mjs')).href
+  );
+  const base = {
+    protocol_version: '3.0',
+    reviewer_id: 'codex-review',
+    provider: 'codex',
+    adapter_id: 'codex-exec',
+    assignment_role: 'security',
+    rubric_id: 'security-v1',
+    wave: 2,
+    required: false,
+    selection_reason: 'same-round expansion',
+    resolved: { model: null, effort: 'xhigh' },
+  };
+  assert.equal(parseExecutionRoute(base, 'codex-review').rubricId, 'security-v1');
+
+  for (const [label, mutated, pattern] of [
+    // A "2.0" route would otherwise derive assignment_role 'standard' with no
+    // error and skip rubric validation, putting the wrong rubric text into the
+    // trusted assignment header.
+    ['protocol downgrade', { ...base, protocol_version: '2.0' }, /protocol_version must be "3\.0"/u],
+    ['reviewer identity', { ...base, reviewer_id: 'codex-adversarial' }, /does not match requested/u],
+    ['provider mismatch', { ...base, provider: 'claude' }, /provider mismatch/u],
+    ['rubric mismatch', { ...base, rubric_id: 'standard-v1' }, /does not match assignment role/u],
+    ['wave range', { ...base, wave: 3 }, /wave is invalid/u],
+    ['required flag', { ...base, required: 'no' }, /required flag is invalid/u],
+    ['resolved shape', { ...base, resolved: { model: null } }, /resolved model\/effort is invalid/u],
+  ]) {
+    assert.throws(
+      () => parseExecutionRoute(mutated, 'codex-review'),
+      pattern,
+      `${label} must fail closed`,
+    );
+  }
 });

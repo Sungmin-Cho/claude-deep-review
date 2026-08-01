@@ -385,7 +385,7 @@ test('workflow/report contracts wire adaptive-default routing and assignment/rea
   const legacyClaude = 'run-claude-reviewer.mjs --project-root PROJECT_ROOT --plugin-root PLUGIN_ROOT_ABS --prompt-file PAYLOAD_FILE --output OUTPUT_FILE --model REVIEW_MODEL --agent code-reviewer --timeout-seconds 1200';
   assert.ok(execution.includes(legacyClaude), 'Claude leaf invocation is missing');
   assert.match(execution, /--emit-routing-plan/);
-  assert.match(execution, /--routing-plan \.deep-review\/tmp\/routing-plan\.json --reviewer-id/);
+  assert.match(execution, /--execution-route-json EXECUTION_ROUTE_JSON --reviewer-id/);
   assert.match(execution, /v2\.0 default/u);
   assert.match(execution, /protocol `3\.0`/u);
   assert.match(execution, /needs_expansion/u);
